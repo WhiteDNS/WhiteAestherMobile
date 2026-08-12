@@ -84,8 +84,11 @@ jobs:
       - name: Test the native bridge
         run: cargo test --manifest-path native/android-bridge/Cargo.toml --locked
 
+      # AGP only generates unit-test tasks for the testBuildType, which is
+      # debug, so there is no testStableReleaseUnitTest to run. The sources
+      # under test are the same; lint is what runs against the release variant.
       - name: Test and lint Android
-        run: ./gradlew testStableReleaseUnitTest lintStableRelease
+        run: ./gradlew testStableDebugUnitTest lintStableRelease
 
       - name: Resolve the version
         id: version
