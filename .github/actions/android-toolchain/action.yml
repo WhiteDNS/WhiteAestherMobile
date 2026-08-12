@@ -1,0 +1,56 @@
+name: Android and Rust toolchain
+description: >-
+  Installs the Java, Android SDK/NDK and Rust toolchain both the CI and release
+  workflows need. Kept in one place so the two cannot drift apart and produce
+  builds from different compilers.
+
+inputs:
+  rust-components:
+    description: Extra Rust components, for example "rustfmt, clippy"
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install Java
+      uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: "21"
+
+    - name: Configure Gradle
+      uses: gradle/actions/setup-gradle@v6
+
+    - name: Install Android SDK tools
+      uses: android-actions/setup-android@v4
+
+    - name: Install Android platform, NDK and CMake
+      shell: bash
+      run: |
+        set +o pipefail
+        yes | sdkmanager --licenses >/dev/null
+        set -o pipefail
+        sdkmanager \
+          "platforms;android-36" \
+          "build-tools;36.0.0" \
+          "platform-tools" \
+          "ndk;29.0.14206865" \
+          "cmake;3.22.1"
+
+    - name: Install native host dependencies
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y clang libclang-dev ninja-build cmake
+
+    # The tag is the compiler version. dependabot is configured to leave it
+    # alone, because bumping it here silently changes what the release is
+    # built with.
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@1.88.0
+      with:
+        components: ${{ inputs.rust-components }}
+        targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+    - name: Install cargo-ndk
+      shell: bash
+      run: cargo install cargo-ndk --version 4.1.2 --locked

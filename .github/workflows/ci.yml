@@ -1,0 +1,116 @@
+name: CI
+
+# Verification only. Nothing here signs anything or publishes a release --
+# that is release.yml, and it runs on tags alone. A push to main used to
+# trigger a full signed build and a rolling prerelease, which is why every
+# commit produced two long runs and a new release.
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".gitattributes"
+      - ".github/dependabot.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ANDROID_BUILD_TOOLS: "36.0.0"
+
+jobs:
+  android:
+    name: Test and build preview APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/android-toolchain
+        with:
+          rust-components: rustfmt, clippy
+
+      - name: Check Rust formatting
+        run: |
+          cargo fmt --manifest-path native/aether/aether/Cargo.toml --check
+          cargo fmt --manifest-path native/android-bridge/Cargo.toml --check
+
+      - name: Test and lint the native bridge
+        run: |
+          cargo test --manifest-path native/android-bridge/Cargo.toml --locked
+          cargo clippy --manifest-path native/android-bridge/Cargo.toml --locked --all-targets -- -D warnings
+
+      - name: Test, lint and package Android
+        run: >-
+          ./gradlew
+          testPreviewDebugUnitTest
+          lintPreviewDebug
+          assemblePreviewDebug
+          assemblePreviewDebugAndroidTest
+
+      - name: Verify split APKs, universal APK and VPN manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk_dir="app/build/outputs/apk/preview/debug"
+          for abi in armeabi-v7a arm64-v8a x86_64; do
+            apk="${apk_dir}/app-preview-${abi}-debug.apk"
+            test -f "$apk"
+            jar tf "$apk" | grep -F "lib/${abi}/libwhiteaesther_core.so"
+            test "$(jar tf "$apk" | grep -c '^lib/.*/libwhiteaesther_core\.so$')" -eq 1
+            ! jar tf "$apk" | grep -E 'lib(quiche|boringtun.*)\.so'
+            "${ANDROID_HOME}/build-tools/${ANDROID_BUILD_TOOLS}/aapt2" \
+              dump xmltree --file AndroidManifest.xml "$apk" | grep -F 'AetherVpnService'
+          done
+
+          universal="${apk_dir}/app-preview-universal-debug.apk"
+          test -f "$universal"
+          for abi in armeabi-v7a arm64-v8a x86_64; do
+            jar tf "$universal" | grep -F "lib/${abi}/libwhiteaesther_core.so"
+          done
+          test "$(jar tf "$universal" | grep -c '^lib/.*/libwhiteaesther_core\.so$')" -eq 3
+          ! jar tf "$universal" | grep -E 'lib(quiche|boringtun.*)\.so'
+
+      - name: Upload preview APK and reports
+        uses: actions/upload-artifact@v7
+        with:
+          name: whiteaesther-preview
+          path: |
+            app/build/outputs/apk/preview/debug/*.apk
+            app/build/reports/tests/
+            app/build/reports/lint-results-previewDebug.html
+          if-no-files-found: error
+          retention-days: 14
+
+  design:
+    name: Verify design prototype
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: design/package-lock.json
+
+      - run: npm --prefix design ci
+
+      - name: Source must stay pure ASCII
+        # The published page cannot declare a charset, so a multi-byte
+        # character renders as mojibake rather than the glyph intended.
+        run: |
+          node -e "const n=[...require('fs').readFileSync('design/src.html','utf8')].filter(c=>c.codePointAt(0)>127).length; if (n) { console.error('design/src.html has ' + n + ' non-ASCII characters'); process.exit(1) }"
+
+      - name: Committed prototype must match its source
+        run: |
+          node design/build.mjs
+          git diff --exit-code -- design/index.html

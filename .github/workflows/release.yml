@@ -1,0 +1,153 @@
+name: Release
+
+# Tags only. Cutting a release is `git tag v1.2.3 && git push origin v1.2.3`
+# and nothing else; pushing to main never publishes anything.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build, for example v1.0.0
+        required: true
+
+permissions:
+  contents: read
+
+# Deliberately no cancel-in-progress: cancelling half way through leaves a
+# release with some assets uploaded and others missing.
+concurrency:
+  group: release-${{ github.ref }}
+
+env:
+  ANDROID_BUILD_TOOLS: "36.0.0"
+
+jobs:
+  publish:
+    name: Build signed APKs and publish the release
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: ./.github/actions/android-toolchain
+
+      - name: Restore the signing key
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Secret ANDROID_${name} is not set on this repository."
+              exit 1
+            fi
+          done
+
+          # A secret pasted or scripted from Windows can arrive with a trailing
+          # carriage return. One stray byte makes base64 reject the keystore,
+          # and in a password it surfaces much later as an unexplained signing
+          # failure. Base64 holds no whitespace, so strip all of it; passwords
+          # may legitimately contain spaces, so strip control characters only.
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode \
+            > "$RUNNER_TEMP/release.jks" 2>/dev/null || {
+              echo "::error::ANDROID_KEYSTORE_BASE64 is not valid base64. Re-set it from the .jks file."
+              exit 1
+            }
+
+          store_password="$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d '[:cntrl:]')"
+          {
+            echo "STORE_PASSWORD=${store_password}"
+            echo "KEY_ALIAS_CLEAN=$(printf '%s' "$KEY_ALIAS" | tr -d '[:cntrl:]')"
+            echo "KEY_PASSWORD_CLEAN=$(printf '%s' "$KEY_PASSWORD" | tr -d '[:cntrl:]')"
+          } >> "$GITHUB_ENV"
+
+          # Prove the keystore and password agree now, with a readable message,
+          # rather than failing deep inside the signing task.
+          if ! keytool -list -keystore "$RUNNER_TEMP/release.jks" \
+                 -storepass "$store_password" >/dev/null 2>&1; then
+            echo "::error::The keystore did not open. Check ANDROID_KEYSTORE_PASSWORD."
+            exit 1
+          fi
+
+      - name: Resolve the version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::Tag '$tag' is not vMAJOR.MINOR.PATCH."
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "name=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "code=$((100000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_OUTPUT"
+
+      - name: Build signed APKs and bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            "-PWHITEAESTHER_VERSION_NAME=${{ steps.version.outputs.name }}"
+            "-PWHITEAESTHER_VERSION_CODE=${{ steps.version.outputs.code }}"
+            "-PWHITEAESTHER_KEYSTORE_PATH=$RUNNER_TEMP/release.jks"
+            "-PWHITEAESTHER_KEYSTORE_PASSWORD=$STORE_PASSWORD"
+            "-PWHITEAESTHER_KEY_ALIAS=$KEY_ALIAS_CLEAN"
+            "-PWHITEAESTHER_KEY_PASSWORD=$KEY_PASSWORD_CLEAN"
+          )
+          ./gradlew assembleStableRelease "${args[@]}"
+          ./gradlew bundleStableRelease -PWHITEAESTHER_DISABLE_ABI_SPLITS=true "${args[@]}"
+
+      - name: Verify signatures and collect assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          base="WhiteAestherMobile-${{ steps.version.outputs.name }}"
+          apk_dir="app/build/outputs/apk/stable/release"
+          signer="${ANDROID_HOME}/build-tools/${ANDROID_BUILD_TOOLS}/apksigner"
+
+          for abi in armeabi-v7a arm64-v8a x86_64; do
+            apk="${apk_dir}/app-stable-${abi}-release.apk"
+            test -f "$apk"
+            "$signer" verify --verbose "$apk"
+            jar tf "$apk" | grep -F "lib/${abi}/libwhiteaesther_core.so"
+            test "$(jar tf "$apk" | grep -c '^lib/.*/libwhiteaesther_core\.so$')" -eq 1
+            cp "$apk" "release-assets/${base}-${abi}.apk"
+          done
+
+          universal="${apk_dir}/app-stable-universal-release.apk"
+          test -f "$universal"
+          "$signer" verify --verbose "$universal"
+          test "$(jar tf "$universal" | grep -c '^lib/.*/libwhiteaesther_core\.so$')" -eq 3
+          cp "$universal" "release-assets/${base}-universal.apk"
+
+          aab="app/build/outputs/bundle/stableRelease/app-stable-release.aab"
+          test -f "$aab"
+          jarsigner -verify "$aab"
+          cp "$aab" "release-assets/${base}-bundle.aab"
+
+          cd release-assets && sha256sum ./*.apk ./*.aab > SHA256SUMS
+
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" release-assets/* --clobber
+          else
+            gh release create "$tag" release-assets/* \
+              --verify-tag --generate-notes --title "WhiteAestherMobile $tag"
+          fi
