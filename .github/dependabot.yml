@@ -1,22 +1,61 @@
 version: 2
 updates:
+  # One pull request per ecosystem per week rather than one per dependency.
+  # The androidx artefacts move as a family, and splitting them produced four
+  # separate pull requests that each failed on a version mismatch.
   - package-ecosystem: gradle
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    groups:
+      androidx:
+        patterns:
+          - "androidx.*"
+      kotlin-and-compose:
+        patterns:
+          - "org.jetbrains.*"
+          - "com.android.*"
+
   - package-ecosystem: cargo
     directory: /native/android-bridge
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    groups:
+      rust:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # jni is the FFI boundary with the Aether bridge; a major bump changes
+      # signatures and needs the bridge rewritten, not a dependency bump.
+      - dependency-name: jni
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: npm
     directory: /design
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
+    groups:
+      fonts:
+        patterns:
+          - "*"
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns:
+          - "*"
+    ignore:
+      # The tag on this action is the Rust toolchain version, which the
+      # workflow pins deliberately through RUST_VERSION. Bumping the tag
+      # silently changes the compiler.
+      - dependency-name: dtolnay/rust-toolchain
