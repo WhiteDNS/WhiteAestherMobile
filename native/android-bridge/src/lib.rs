@@ -51,6 +51,16 @@ struct BridgeConfig {
     noize: String,
     #[serde(default = "default_true")]
     validation_enabled: bool,
+    /// Split the TLS ClientHello across several small writes on the HTTP/2
+    /// transport. Deep packet inspection that blocks on the SNI generally reads
+    /// only the first segment, so splitting it is what gets a handshake through
+    /// networks that filter by hostname.
+    #[serde(default)]
+    fragment_tls: bool,
+    /// Encrypted Client Hello. Hides the SNI outright where the upstream
+    /// supports it.
+    #[serde(default)]
+    encrypted_hello: bool,
 }
 
 fn default_proxy_port() -> u16 {
@@ -136,6 +146,16 @@ impl BridgeConfig {
             std::env::remove_var("AETHER_MASQUE_HTTP2");
         }
         std::env::set_var("AETHER_QUICK_RECONNECT", "1");
+        if self.fragment_tls {
+            std::env::set_var("AETHER_MASQUE_H2_FRAGMENT", "1");
+        } else {
+            std::env::remove_var("AETHER_MASQUE_H2_FRAGMENT");
+        }
+        if self.encrypted_hello {
+            std::env::set_var("AETHER_ECH", "auto");
+        } else {
+            std::env::remove_var("AETHER_ECH");
+        }
         if self.validation_enabled {
             std::env::remove_var("AETHER_MASQUE_NO_DATA_CHECK");
         } else {

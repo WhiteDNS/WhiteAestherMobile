@@ -744,7 +744,7 @@ fun TrafficScreen(
         Spacer(Modifier.height(12.dp))
         AetherCard {
             AdvancedSection(
-                badge = "Obfuscation · Port · DNS",
+                badge = "Obfuscation · Blocking · Port",
                 expanded = advanced,
                 onToggle = { advanced = !advanced },
             ) {
@@ -806,6 +806,32 @@ fun TrafficScreen(
                         checked = settings.validationEnabled,
                         onCheckedChange = { onSettingsChange(settings.copy(validationEnabled = it)) },
                         modifier = Modifier.testTag("validation-switch"),
+                    )
+                }
+
+                Divider()
+                SettingRow(
+                    title = "Split the TLS handshake",
+                    subtitle = "Sends the first packet in pieces so filtering that reads the " +
+                        "site name cannot see it. Turn this on where connections are blocked.",
+                ) {
+                    AetherSwitch(
+                        checked = settings.fragmentTls,
+                        onCheckedChange = { onSettingsChange(settings.copy(fragmentTls = it)) },
+                        modifier = Modifier.testTag("fragment-tls-switch"),
+                    )
+                }
+
+                Divider()
+                SettingRow(
+                    title = "Encrypted Client Hello",
+                    subtitle = "Hides which site is being reached. Only works where the network " +
+                        "on the other end supports it.",
+                ) {
+                    AetherSwitch(
+                        checked = settings.encryptedHello,
+                        onCheckedChange = { onSettingsChange(settings.copy(encryptedHello = it)) },
+                        modifier = Modifier.testTag("ech-switch"),
                     )
                 }
 

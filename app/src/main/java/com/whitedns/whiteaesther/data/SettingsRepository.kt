@@ -25,6 +25,8 @@ class SettingsRepository(private val context: Context) {
             customEndpoint = preferences[CUSTOM_ENDPOINT].orEmpty(),
             themeMode = enumValueOrDefault(preferences[THEME_MODE], ThemeMode.SYSTEM),
             showAdvanced = preferences[SHOW_ADVANCED] ?: false,
+            fragmentTls = preferences[FRAGMENT_TLS] ?: false,
+            encryptedHello = preferences[ENCRYPTED_HELLO] ?: false,
         )
     }
 
@@ -41,6 +43,8 @@ class SettingsRepository(private val context: Context) {
             preferences[CUSTOM_ENDPOINT] = settings.customEndpoint
             preferences[THEME_MODE] = settings.themeMode.name
             preferences[SHOW_ADVANCED] = settings.showAdvanced
+            preferences[FRAGMENT_TLS] = settings.fragmentTls
+            preferences[ENCRYPTED_HELLO] = settings.encryptedHello
         }
     }
 
@@ -59,5 +63,7 @@ class SettingsRepository(private val context: Context) {
         val CUSTOM_ENDPOINT = stringPreferencesKey("custom_endpoint")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val SHOW_ADVANCED = booleanPreferencesKey("show_advanced")
+        val FRAGMENT_TLS = booleanPreferencesKey("fragment_tls")
+        val ENCRYPTED_HELLO = booleanPreferencesKey("encrypted_hello")
     }
 }

@@ -76,6 +76,10 @@ data class AppSettings(
     val noizeProfile: String = "firewall",
     val endpointMode: EndpointMode = EndpointMode.AUTOMATIC,
     val customEndpoint: String = "",
+    // Anti-inspection measures for the HTTP/2 transport. Off by default: both
+    // cost a little on a healthy network and only matter on a filtered one.
+    val fragmentTls: Boolean = false,
+    val encryptedHello: Boolean = false,
     // Presentation only -- deliberately absent from toNativeJson.
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val showAdvanced: Boolean = false,
@@ -98,6 +102,8 @@ data class AppSettings(
             .put("noize", noizeProfile)
             .put("validationEnabled", validationEnabled)
             .put("peerFallback", endpointMode == EndpointMode.CUSTOM_FIRST)
+            .put("fragmentTls", fragmentTls)
+            .put("encryptedHello", encryptedHello)
         if (endpointMode != EndpointMode.AUTOMATIC) {
             EndpointAddress.normalize(customEndpoint)?.let { json.put("peer", it) }
         }
