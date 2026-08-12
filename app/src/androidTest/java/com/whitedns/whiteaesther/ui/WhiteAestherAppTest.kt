@@ -5,7 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsOn
-import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -67,9 +67,11 @@ class WhiteAestherAppTest {
         setApp(AppSettings(endpointMode = EndpointMode.CUSTOM_FIRST))
 
         compose.onNodeWithTag("tab-routes").performClick()
-        compose.onNodeWithText("Endpoint").performClick()
-        compose.onNodeWithTag("custom-endpoint-field").performTextInput("162.159.197.3:443")
-        compose.onNodeWithTag("custom-endpoint-field").assertTextEquals("162.159.197.3:443")
+        compose.onNodeWithText("Endpoint").performScrollTo().performClick()
+        compose.onNodeWithTag("custom-endpoint-field").performScrollTo().performTextInput("162.159.197.3:443")
+        compose.onNodeWithTag("custom-endpoint-field").assertTextContains("162.159.197.3:443")
+        // The field reports its own validation, which is the point of typing a valid one.
+        compose.onNodeWithText("Valid address").assertExists()
     }
 
     @Test
@@ -78,8 +80,8 @@ class WhiteAestherAppTest {
         setApp(onScan = { scanRequested = true })
 
         compose.onNodeWithTag("tab-routes").performClick()
-        compose.onNodeWithText("Endpoint").performClick()
-        compose.onNodeWithTag("scan-endpoints-button").performClick()
+        compose.onNodeWithText("Endpoint").performScrollTo().performClick()
+        compose.onNodeWithTag("scan-endpoints-button").performScrollTo().performClick()
         compose.runOnIdle { assertTrue(scanRequested) }
     }
 
