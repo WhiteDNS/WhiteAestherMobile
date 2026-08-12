@@ -23,6 +23,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -227,17 +228,28 @@ class AetherVpnService : VpnService() {
         EngineStatusStore.update(
             EngineStatus(EngineStage.STOPPING, EngineStatusStore.status.value.mode, message = message),
         )
+        // Invalidate and signal immediately, outside commandMutex. A session
+        // wedged in a native call may be holding that lock, and waiting for it
+        // is what left the service unstoppable.
+        generation += 1
+        runCatching { NativeAetherBridge.cancelScan() }
+        runCatching { NativeAetherBridge.stop() }
+
         serviceScope.launch {
-            commandMutex.withLock {
-                generation += 1
-                NativeAetherBridge.stop()
+            // prepare() and run() are blocking JNI calls. On a network that
+            // hangs connections rather than refusing them they can sit for
+            // minutes, and nativeStop cannot always interrupt a blocked socket
+            // read. Give the session a moment to unwind, then tear down
+            // regardless -- the user asked it to stop, and the process is going
+            // away. Anything still running dies with it.
+            withTimeoutOrNull(STOP_GRACE_MS) {
                 listOfNotNull(sessionJob).joinAll()
-                sessionJob = null
-                runCatching { NativeAetherBridge.setSocketProtector(null) }
-                EngineStatusStore.update(EngineStatus())
-                ServiceCompat.stopForeground(this@AetherVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
-                stopSelf()
             }
+            sessionJob = null
+            runCatching { NativeAetherBridge.setSocketProtector(null) }
+            EngineStatusStore.update(EngineStatus())
+            ServiceCompat.stopForeground(this@AetherVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            stopSelf()
         }
     }
 
@@ -351,6 +363,9 @@ class AetherVpnService : VpnService() {
         private const val ACTION_STOP = "com.whitedns.whiteaesther.STOP"
         private const val EXTRA_CONFIG = "config"
         private const val LAST_TUN_CONFIG = "last_tun_config"
+        // Long enough for a healthy session to unwind, short enough that a
+        // wedged one never leaves the user with only force-stop.
+        private const val STOP_GRACE_MS = 4_000L
         private const val RECONNECT_DELAY_MS = 3_000L
         private const val MAX_RECONNECT_DELAY_MS = 60_000L
         private const val MAX_RECONNECT_ATTEMPTS = 8
