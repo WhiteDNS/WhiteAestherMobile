@@ -15,3 +15,6 @@ design/frames/
 
 # Local working notes: records the signing-key backup path, never publish
 memory.md
+
+# Local helper: references the signing-key backup path, never publish
+set-signing-secrets.ps1
