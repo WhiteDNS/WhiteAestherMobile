@@ -16,6 +16,13 @@ updates:
         patterns:
           - "org.jetbrains.*"
           - "com.android.*"
+    ignore:
+      # These lines require compileSdk 37 and the project targets 36. Merging
+      # them broke main once already. Lift this when compileSdk moves.
+      - dependency-name: androidx.core:core-ktx
+        versions: [">=1.19.0"]
+      - dependency-name: androidx.lifecycle:*
+        versions: [">=2.11.0"]
 
   - package-ecosystem: cargo
     directory: /native/android-bridge
