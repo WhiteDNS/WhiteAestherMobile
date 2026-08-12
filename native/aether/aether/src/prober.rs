@@ -30,6 +30,31 @@ pub const MASQUE_CIDRS_V4: &[&str] = &[
     "162.159.46.0/24",
 ];
 
+/// The dedicated WARP ranges above are where an endpoint is most likely to be,
+/// but they are not the only place one lives: Cloudflare anycasts the MASQUE
+/// endpoint across its edge, and 104.25.202.52 -- squarely in the CDN range and
+/// in none of the ranges above -- was confirmed working from an Iranian network
+/// the scan had reported as empty. These are searched after the dedicated
+/// ranges, on 443 only, since that is the port the edge serves.
+pub const MASQUE_CDN_CIDRS_V4: &[&str] = &[
+    "104.16.0.0/16",
+    "104.17.0.0/16",
+    "104.18.0.0/16",
+    "104.19.0.0/16",
+    "104.24.0.0/16",
+    "104.25.0.0/16",
+    "104.26.0.0/16",
+    "104.27.0.0/16",
+    "172.64.0.0/16",
+    "172.66.0.0/16",
+    "172.67.0.0/16",
+    "103.21.244.0/22",
+    "103.22.200.0/22",
+    "141.101.64.0/18",
+    "190.93.240.0/20",
+    "198.41.128.0/17",
+];
+
 pub const MASQUE_SEEDS: &[&str] = &[
     "162.159.197.3",
     "162.159.197.1",
@@ -559,6 +584,28 @@ fn build_candidates(st: &Strategy, ports: &[u16], ip: IpScan) -> Vec<(IpAddr, u1
                 if let Some(a) = hosts.get(i) {
                     if seen.insert((IpAddr::V4(*a), primary)) {
                         out.push((IpAddr::V4(*a), primary));
+                    }
+                }
+            }
+        }
+
+        // Edge ranges last, so a network where the dedicated ranges answer is
+        // unaffected and only one that finds nothing there pays for the wider
+        // sweep. Sampled more thinly, because they are far larger and a smaller
+        // share of them terminates MASQUE.
+        if st.sample_per_cidr > 0 {
+            let per = (st.sample_per_cidr / 4).max(8);
+            let cdn: Vec<Vec<Ipv4Addr>> = MASQUE_CDN_CIDRS_V4
+                .iter()
+                .map(|c| sample_cidr_v4(c, per))
+                .collect();
+            let cdn_max = cdn.iter().map(|v| v.len()).max().unwrap_or(0);
+            for i in 0..cdn_max {
+                for hosts in &cdn {
+                    if let Some(a) = hosts.get(i) {
+                        if seen.insert((IpAddr::V4(*a), 443)) {
+                            out.push((IpAddr::V4(*a), 443));
+                        }
                     }
                 }
             }
