@@ -60,7 +60,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang libclang-dev ninja-build cmake
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.88.0
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: rustfmt, clippy
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
@@ -181,7 +181,7 @@ jobs:
           sudo apt-get install -y clang libclang-dev ninja-build cmake
 
       - name: Install Rust and cargo-ndk
-        uses: dtolnay/rust-toolchain@1.88.0
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
