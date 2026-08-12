@@ -2,6 +2,7 @@ package com.whitedns.whiteaesther.service
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -37,19 +38,20 @@ object EngineLog {
     private val mutableEntries = MutableStateFlow<List<LogEntry>>(emptyList())
     val entries = mutableEntries.asStateFlow()
 
+    /**
+     * Safe to call from any thread. The engine reports through a native
+     * callback while the service writes from its own scope, and a plain
+     * read-modify-write on [MutableStateFlow.value] loses entries when those
+     * two land together -- exactly when a connection is failing and the log
+     * matters most.
+     */
     fun record(level: LogLevel, tag: String, message: String) {
         if (message.isBlank()) return
         val entry = LogEntry(System.currentTimeMillis(), level, tag, message)
-        mutableEntries.value = (mutableEntries.value + entry).takeLast(CAPACITY)
+        mutableEntries.update { (it + entry).takeLast(CAPACITY) }
     }
 
     fun clear() {
         mutableEntries.value = emptyList()
-    }
-
-    /** Debug entries are only kept when the user asked for verbose detail. */
-    fun record(level: LogLevel, tag: String, message: String, verboseOnly: Boolean, verbose: Boolean) {
-        if (verboseOnly && !verbose) return
-        record(level, tag, message)
     }
 }

@@ -181,7 +181,13 @@ class AetherVpnService : VpnService() {
                 "up on ${transportOf(configJson).uppercase()}",
             )
             EngineStatusStore.update(
-                EngineStatus(EngineStage.CONNECTED, mode, prepared.peer, connectedMessage(mode, configJson)),
+                EngineStatus(
+                    EngineStage.CONNECTED,
+                    mode,
+                    prepared.peer,
+                    connectedMessage(mode, configJson),
+                    connectedAtMillis = System.currentTimeMillis(),
+                ),
             )
             updateNotification(mode, connectedMessage(mode, configJson))
         }

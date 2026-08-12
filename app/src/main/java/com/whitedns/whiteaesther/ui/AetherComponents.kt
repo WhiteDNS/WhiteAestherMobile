@@ -145,11 +145,32 @@ object AetherIcons {
     val Key = strokeIcon("key", "M8.5 4.5a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z", "m11.5 11.5 8 8M17 17l2-2M14.5 14.5l2-2")
     val Send = strokeIcon("send", "M21 3 10.5 13.5M21 3l-6.8 18-3.7-7.5L3 9.8 21 3Z")
     val Copy = strokeIcon("copy", "M9 9h12v12H9zM5 15V5a2 2 0 0 1 2-2h10")
-    val Globe = strokeIcon(
-        "globe",
-        "M12 2.4a9.6 9.6 0 1 0 0 19.2 9.6 9.6 0 0 0 0-19.2Z",
-        "M2.4 12h19.2M12 2.4v19.2",
-        "M12 2.4C9.4 5 8.2 8.4 8.2 12s1.2 7 3.8 9.6M12 2.4c2.6 2.6 3.8 6 3.8 9.6s-1.2 7-3.8 9.6",
+    /** The launcher globe, scaled to the 24 grid. Ring heavier than the grid. */
+    val Globe = ImageVector.Builder(
+        name = "globe",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        fun stroke(width: Float, data: String) = addPath(
+            pathData = PathParser().parsePathString(data).toNodes(),
+            fill = null,
+            stroke = SolidColor(Color.Black),
+            strokeLineWidth = width,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round,
+        )
+        stroke(1.85f, "M12 4.67a7.33 7.33 0 1 0 0 14.66 7.33 7.33 0 1 0 0-14.66Z")
+        stroke(1.45f, "M4.67 12h14.66M12 4.67v14.66")
+        stroke(1.45f, "M12 4.67c-2.07 2.07-3.07 4.67-3.07 7.33s1 5.26 3.07 7.33")
+        stroke(1.45f, "M12 4.67c2.07 2.07 3.07 4.67 3.07 7.33s-1 5.26-3.07 7.33")
+    }.build()
+
+    val Telegram = strokeIcon(
+        "telegram",
+        "M21.5 4.3 2.9 11.4a.6.6 0 0 0 .05 1.13l4.6 1.44 1.77 5.3a.6.6 0 0 0 1 .24l2.5-2.5 4.6 3.4a.6.6 0 0 0 .95-.36l3.1-15a.6.6 0 0 0-.82-.68Z",
+        "m7.55 13.97 11.2-7.4-7.9 8.5",
     )
 }
 

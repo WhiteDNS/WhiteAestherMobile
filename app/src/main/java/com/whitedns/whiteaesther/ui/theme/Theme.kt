@@ -45,9 +45,9 @@ private val DarkAether = AetherColors(
     ink1 = Color(0xFF0A100E),
     ink2 = Color(0xFF101715),
     ink3 = Color(0xFF161F1C),
-    line = Color(0xFF2C3B36),
-    lineSoft = Color(0xFF202C28),
-    lineStrong = Color(0xFF3A4D47),
+    line = Color(0xFF3A4C45),
+    lineSoft = Color(0xFF2A3833),
+    lineStrong = Color(0xFF4C6259),
     text = Color(0xFFEAF2EF),
     text2 = Color(0xFF93A29E),
     text3 = Color(0xFF657570),
@@ -58,7 +58,7 @@ private val DarkAether = AetherColors(
     signalLive = Color(0xFF34D1A6),
     signalFailed = Color(0xFFFF7068),
     cyan = Color(0xFF5EC8E5),
-    track = Color(0xFF2C3B36),
+    track = Color(0xFF3A4C45),
     isDark = true,
 )
 
@@ -67,9 +67,9 @@ private val LightAether = AetherColors(
     ink1 = Color(0xFFF6FAF8),
     ink2 = Color(0xFFFFFFFF),
     ink3 = Color(0xFFEFF5F2),
-    line = Color(0xFFC6D4CF),
-    lineSoft = Color(0xFFDDE7E3),
-    lineStrong = Color(0xFFA8BCB6),
+    line = Color(0xFFD2DEDA),
+    lineSoft = Color(0xFFE5EDEA),
+    lineStrong = Color(0xFFB6C7C1),
     text = Color(0xFF0B1513),
     text2 = Color(0xFF4C5E59),
     text3 = Color(0xFF74847E),
@@ -80,7 +80,7 @@ private val LightAether = AetherColors(
     signalLive = Color(0xFF0B8F6C),
     signalFailed = Color(0xFFC2372F),
     cyan = Color(0xFF0F7793),
-    track = Color(0xFFC6D4CF),
+    track = Color(0xFFD2DEDA),
     isDark = false,
 )
 

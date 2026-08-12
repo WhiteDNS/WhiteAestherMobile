@@ -34,6 +34,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -203,14 +205,17 @@ private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit) {
                 .padding(horizontal = 10.dp),
         ) {
             val cellWidth = maxWidth / Tab.entries.size
+            // The lambda overload of offset defers the read to the draw phase, so
+            // an animating indicator does not recompose the bar every frame.
             val indicatorOffset by animateDpAsState(
                 targetValue = cellWidth * Tab.entries.indexOf(selected) + 4.dp,
                 animationSpec = tween(320),
                 label = "tab-indicator",
             )
+            val density = LocalDensity.current
             Box(
                 Modifier
-                    .offset(x = indicatorOffset)
+                    .offset { IntOffset(with(density) { indicatorOffset.roundToPx() }, 0) }
                     .width(cellWidth - 8.dp)
                     .fillMaxSize()
                     .padding(vertical = 6.dp)

@@ -39,11 +39,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.whitedns.whiteaesther.EndpointOperation
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.data.AppSettings
@@ -142,17 +144,19 @@ fun HomeScreen(
     val colors = AetherTheme.colors
     val state = status.stage.toConnectState()
 
-    var connectedSince by remember { mutableLongStateOf(0L) }
+    // Measured from the moment the service recorded, not from when this screen
+    // first saw it, so rotating the device or returning to a recreated activity
+    // does not restart a tunnel that has been up for an hour.
     var elapsed by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(status.stage) {
-        if (status.stage == EngineStage.CONNECTED) {
-            connectedSince = System.currentTimeMillis()
-            while (true) {
-                elapsed = (System.currentTimeMillis() - connectedSince) / 1000
-                delay(1000)
-            }
-        } else {
+    LaunchedEffect(status.connectedAtMillis) {
+        val since = status.connectedAtMillis
+        if (since == null) {
             elapsed = 0
+            return@LaunchedEffect
+        }
+        while (true) {
+            elapsed = ((System.currentTimeMillis() - since) / 1000).coerceAtLeast(0)
+            delay(1000)
         }
     }
 
@@ -940,6 +944,58 @@ fun SettingsScreen(
                 onClick = onGoToAbout,
             )
         }
+
+        Spacer(Modifier.height(20.dp))
+        CommunityFooter()
+    }
+}
+
+/**
+ * Closes the settings list rather than sitting in it as one more row: this is
+ * where to go for help or news, not a preference to change.
+ */
+@Composable
+private fun CommunityFooter() {
+    val colors = AetherTheme.colors
+    val uriHandler = LocalUriHandler.current
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(colors.cyan.copy(alpha = 0.10f))
+                .border(1.dp, colors.cyan.copy(alpha = 0.34f), CircleShape)
+                .clickable { uriHandler.openUri("https://t.me/whitedns") }
+                .testTag("telegram-link")
+                .padding(start = 16.dp, end = 20.dp, top = 11.dp, bottom = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(AetherIcons.Telegram, null, Modifier.size(19.dp), colors.cyan)
+            Text("Join us on Telegram", style = AetherType.RowTitle, color = colors.cyan)
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "t.me/whitedns",
+            style = AetherType.Data.copy(fontSize = 12.5f.sp),
+            color = colors.text3,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "News, releases and help",
+            style = AetherType.Small,
+            color = colors.text3,
+        )
+        Spacer(Modifier.height(18.dp))
+        Icon(AetherIcons.Globe, null, Modifier.size(22.dp), colors.text3.copy(alpha = 0.5f))
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "WhiteAesther ${com.whitedns.whiteaesther.BuildConfig.VERSION_NAME}",
+            style = AetherType.Small.copy(fontSize = 12.sp),
+            color = colors.text3,
+        )
     }
 }
 

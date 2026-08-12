@@ -18,6 +18,8 @@ data class EngineStatus(
     val mode: EngineMode? = null,
     val peer: String? = null,
     val message: String = "Ready",
+    /** When the tunnel came up, so elapsed time survives the UI being recreated. */
+    val connectedAtMillis: Long? = null,
 )
 
 object EngineStatusStore {
