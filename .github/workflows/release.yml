@@ -78,6 +78,14 @@ jobs:
             exit 1
           fi
 
+      # A tag build verifies itself rather than trusting that main was green.
+      # Nothing is published unless these pass.
+      - name: Test the native bridge
+        run: cargo test --manifest-path native/android-bridge/Cargo.toml --locked
+
+      - name: Test and lint Android
+        run: ./gradlew testStableReleaseUnitTest lintStableRelease
+
       - name: Resolve the version
         id: version
         shell: bash
