@@ -7,6 +7,7 @@ import com.whitedns.whiteaesther.core.EndpointScanResult
 import com.whitedns.whiteaesther.core.NativeAetherBridge
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EndpointMode
+import com.whitedns.whiteaesther.data.MasqueTransport
 import com.whitedns.whiteaesther.data.SettingsRepository
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatusStore
@@ -57,11 +58,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 results = mutableEndpointScannerState.value.results,
                 message = "Scanning validated MASQUE routes…",
             )
-            val config = settings.copy(
-                endpointMode = EndpointMode.AUTOMATIC,
-                customEndpoint = "",
-            ).toNativeJson(getApplication())
-            val result = withContext(Dispatchers.IO) { NativeAetherBridge.scan(config) }
+            // The prober picks TCP or UDP from the transport it is handed: H2
+            // probes over TCP, anything else over QUIC. Scanning with the
+            // configured transport therefore searches UDP only on the default
+            // profile, and a network that blocks UDP returns nothing at all --
+            // which is what Iranian mobile users were seeing. Sweep the other
+            // transport too rather than reporting an empty network.
+            val base = settings.copy(endpointMode = EndpointMode.AUTOMATIC, customEndpoint = "")
+            val other = if (base.transport == MasqueTransport.H3) MasqueTransport.H2 else MasqueTransport.H3
+            var result = withContext(Dispatchers.IO) {
+                NativeAetherBridge.scan(base.toNativeJson(getApplication()))
+            }
+            if (result.getOrNull()?.isEmpty() != false &&
+                mutableEndpointScannerState.value.operation == EndpointOperation.SCANNING
+            ) {
+                mutableEndpointScannerState.value = mutableEndpointScannerState.value.copy(
+                    message = "Nothing over ${base.transport.label}, trying ${other.label}…",
+                )
+                result = withContext(Dispatchers.IO) {
+                    NativeAetherBridge.scan(base.copy(transport = other).toNativeJson(getApplication()))
+                }
+            }
             result.fold(
                 onSuccess = { endpoints ->
                     if (mutableEndpointScannerState.value.operation == EndpointOperation.CANCELLING) {
