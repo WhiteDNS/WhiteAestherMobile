@@ -11,7 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 aether = { path = "../aether/aether" }
-jni = "0.21.1"
+jni = "0.22.4"
 libc = "0.2.175"
 log = "0.4.27"
 once_cell = "1.21.3"
