@@ -36,6 +36,9 @@ class AetherVpnService : VpnService() {
     private var sessionJob: Job? = null
     private var generation: Long = 0
     private var reconnectAttempt = 0
+    // The configuration the user asked for, before any per-attempt
+    // transport substitution, so retries never compound.
+    private var baseConfigJson: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -95,6 +98,7 @@ class AetherVpnService : VpnService() {
             commandMutex.withLock {
                 generation += 1
                 reconnectAttempt = 0
+                baseConfigJson = configJson
                 NativeAetherBridge.stop()
                 sessionJob?.join()
                 val sessionGeneration = generation
@@ -281,7 +285,10 @@ class AetherVpnService : VpnService() {
         }
 
         val delayMs = reconnectDelayMs(reconnectAttempt)
-        val message = "$reason · retry $reconnectAttempt of $MAX_RECONNECT_ATTEMPTS in ${delayMs / 1_000}s"
+        val nextConfig = configForAttempt(baseConfigJson ?: configJson, reconnectAttempt)
+        val transport = transportOf(nextConfig).uppercase()
+        val message =
+            "$reason · retry $reconnectAttempt of $MAX_RECONNECT_ATTEMPTS on $transport in ${delayMs / 1_000}s"
         EngineStatusStore.update(
             EngineStatus(EngineStage.CONNECTING, mode, message = message),
         )
@@ -290,10 +297,30 @@ class AetherVpnService : VpnService() {
             delay(delayMs)
             if (sessionGeneration == generation) {
                 sessionJob = serviceScope.launch {
-                    runSession(configJson, sessionGeneration)
+                    runSession(nextConfig, sessionGeneration)
                 }
             }
         }
+    }
+
+    private fun transportOf(configJson: String): String =
+        runCatching { JSONObject(configJson).optString("transport", "h3") }.getOrDefault("h3")
+
+    /**
+     * The engine takes one transport and never falls back between them. H3 rides
+     * QUIC, and a network that blocks UDP kills it outright -- reported from MCI
+     * in Iran, where QUIC has been down for weeks while H2 over TCP still works.
+     * Retrying the same dead transport eight times is eight guaranteed failures,
+     * so alternate: the configured one on odd attempts, the other on even.
+     */
+    private fun configForAttempt(configJson: String, attempt: Int): String {
+        if (attempt <= 1) return configJson
+        return runCatching {
+            val json = JSONObject(configJson)
+            val configured = json.optString("transport", "h3")
+            val other = if (configured == "h3") "h2" else "h3"
+            json.put("transport", if (attempt % 2 == 0) other else configured).toString()
+        }.getOrDefault(configJson)
     }
 
     /** 3s, 6s, 12s, 24s, 48s, then a minute between attempts. */
