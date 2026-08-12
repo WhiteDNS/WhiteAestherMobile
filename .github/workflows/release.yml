@@ -1,4 +1,5 @@
 name: Release
+run-name: Release ${{ inputs.tag || github.ref_name }}
 
 # Tags only. Cutting a release is `git tag v1.2.3 && git push origin v1.2.3`
 # and nothing else; pushing to main never publishes anything.

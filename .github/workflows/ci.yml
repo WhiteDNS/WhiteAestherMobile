@@ -1,4 +1,5 @@
 name: CI
+run-name: CI on ${{ github.head_ref || github.ref_name }}
 
 # Verification only. Nothing here signs anything or publishes a release --
 # that is release.yml, and it runs on tags alone. A push to main used to
