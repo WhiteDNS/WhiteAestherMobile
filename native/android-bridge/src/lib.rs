@@ -1,0 +1,530 @@
+mod tun;
+
+use std::net::SocketAddr;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
+use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
+use jni::sys::{jboolean, jint, jstring, JNI_FALSE, JNI_TRUE};
+use jni::{JNIEnv, JavaVM};
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
+use serde::Deserialize;
+use tokio::sync::{mpsc, oneshot};
+
+const BRIDGE_VERSION: &str = "0.2.0";
+const PACKET_QUEUE: usize = 1_024;
+const SCAN_RESULT_LIMIT: usize = 6;
+
+static STOP_SENDER: Lazy<Mutex<Option<oneshot::Sender<()>>>> = Lazy::new(|| Mutex::new(None));
+static SCAN_RUNNING: AtomicBool = AtomicBool::new(false);
+static SCAN_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+struct ScanRunningGuard;
+
+impl Drop for ScanRunningGuard {
+    fn drop(&mut self) {
+        SCAN_RUNNING.store(false, Ordering::SeqCst);
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BridgeConfig {
+    mode: String,
+    config_path: String,
+    #[serde(default = "default_proxy_port")]
+    listen_port: u16,
+    peer: Option<String>,
+    #[serde(default)]
+    peer_fallback: bool,
+    #[serde(default = "default_scan_mode")]
+    scan_mode: String,
+    #[serde(default = "default_ip_scan")]
+    ip_scan: String,
+    #[serde(default = "default_transport")]
+    transport: String,
+    #[serde(default = "default_noize")]
+    noize: String,
+    #[serde(default = "default_true")]
+    validation_enabled: bool,
+}
+
+fn default_proxy_port() -> u16 {
+    1819
+}
+
+fn default_scan_mode() -> String {
+    "balanced".into()
+}
+
+fn default_ip_scan() -> String {
+    "both".into()
+}
+
+fn default_transport() -> String {
+    "h3".into()
+}
+
+fn default_noize() -> String {
+    "firewall".into()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl BridgeConfig {
+    fn parse(raw: &str) -> Result<Self, String> {
+        let config: Self = serde_json::from_str(raw).map_err(|error| error.to_string())?;
+        if !matches!(config.mode.as_str(), "proxy" | "tun") {
+            return Err("mode must be proxy or tun".into());
+        }
+        if config.config_path.trim().is_empty() {
+            return Err("configPath is required".into());
+        }
+        if !(1_024..=65_535).contains(&config.listen_port) {
+            return Err("listenPort must be between 1024 and 65535".into());
+        }
+        if !matches!(config.transport.as_str(), "h3" | "h2") {
+            return Err("transport must be h3 or h2".into());
+        }
+        if let Some(peer) = config.peer.as_deref() {
+            let address = peer
+                .parse::<SocketAddr>()
+                .map_err(|_| "peer must be an IP:port address".to_string())?;
+            if address.port() == 0 {
+                return Err("peer port must be between 1 and 65535".into());
+            }
+        } else if config.peer_fallback {
+            return Err("peerFallback requires a custom peer".into());
+        }
+        Ok(config)
+    }
+
+    fn embedded(
+        &self,
+        prepared_peer: Option<SocketAddr>,
+    ) -> Result<aether::EmbeddedConfig, String> {
+        let peer = match prepared_peer {
+            Some(peer) => Some(peer),
+            None => self
+                .peer
+                .as_deref()
+                .map(str::parse)
+                .transpose()
+                .map_err(|_| "peer must be an IP:port address".to_string())?,
+        };
+        Ok(aether::EmbeddedConfig {
+            config_path: self.config_path.clone(),
+            listen: SocketAddr::from(([127, 0, 0, 1], self.listen_port)),
+            peer,
+            peer_fallback: self.peer_fallback,
+            scan_mode: self.scan_mode.clone(),
+            ip_scan: self.ip_scan.clone(),
+        })
+    }
+
+    fn apply_environment(&self) {
+        std::env::set_var("AETHER_NOIZE", &self.noize);
+        if self.transport == "h2" {
+            std::env::set_var("AETHER_MASQUE_HTTP2", "1");
+        } else {
+            std::env::remove_var("AETHER_MASQUE_HTTP2");
+        }
+        std::env::set_var("AETHER_QUICK_RECONNECT", "1");
+        if self.validation_enabled {
+            std::env::remove_var("AETHER_MASQUE_NO_DATA_CHECK");
+        } else {
+            std::env::set_var("AETHER_MASQUE_NO_DATA_CHECK", "1");
+        }
+    }
+}
+
+fn java_string(mut env: JNIEnv<'_>, value: &str) -> jstring {
+    match env.new_string(value) {
+        Ok(output) => output.into_raw(),
+        Err(error) => {
+            let _ = env.throw_new(
+                "java/lang/IllegalStateException",
+                format!("failed to create native string: {error}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+fn read_java_string(env: &mut JNIEnv<'_>, value: &JString<'_>) -> Result<String, String> {
+    env.get_string(value)
+        .map(Into::into)
+        .map_err(|error| format!("invalid JNI string: {error}"))
+}
+
+fn response(ok: bool, fields: serde_json::Value) -> String {
+    let mut object = fields.as_object().cloned().unwrap_or_default();
+    object.insert("ok".into(), serde_json::Value::Bool(ok));
+    serde_json::Value::Object(object).to_string()
+}
+
+fn error_response(error: impl std::fmt::Display) -> String {
+    response(false, serde_json::json!({"error": error.to_string()}))
+}
+
+fn runtime() -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("whiteaesther-core")
+        .build()
+        .map_err(|error| format!("failed to start native runtime: {error}"))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeVersion(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+) -> jstring {
+    catch_unwind(AssertUnwindSafe(|| {
+        java_string(
+            env,
+            &format!("{}+android.{BRIDGE_VERSION}", aether::version()),
+        )
+    }))
+    .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_validateConfig(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    config: JString<'_>,
+) -> jstring {
+    catch_unwind(AssertUnwindSafe(|| {
+        let result = read_java_string(&mut env, &config)
+            .and_then(|raw| BridgeConfig::parse(&raw).map(|_| ()))
+            .map(|_| {
+                response(
+                    true,
+                    serde_json::json!({
+                        "coreVersion": aether::version(),
+                        "bridgeVersion": BRIDGE_VERSION,
+                    }),
+                )
+            })
+            .unwrap_or_else(error_response);
+        java_string(env, &result)
+    }))
+    .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativePrepare(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    config: JString<'_>,
+) -> jstring {
+    catch_unwind(AssertUnwindSafe(|| {
+        let result = (|| -> Result<String, String> {
+            if STOP_SENDER.lock().is_some() {
+                return Err("engine is already running".into());
+            }
+            if SCAN_RUNNING.load(Ordering::SeqCst) {
+                return Err("endpoint scan is already running".into());
+            }
+            let raw = read_java_string(&mut env, &config)?;
+            let config = BridgeConfig::parse(&raw)?;
+            config.apply_environment();
+            let embedded = config.embedded(None)?;
+            let prepared = runtime()?
+                .block_on(aether::prepare_embedded(&embedded))
+                .map_err(|error| error.to_string())?;
+            Ok(response(
+                true,
+                serde_json::json!({
+                    "ipv4": prepared.ipv4,
+                    "ipv6": prepared.ipv6,
+                    "peer": prepared.peer.to_string(),
+                }),
+            ))
+        })()
+        .unwrap_or_else(error_response);
+        java_string(env, &result)
+    }))
+    .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeScan(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    config: JString<'_>,
+) -> jstring {
+    catch_unwind(AssertUnwindSafe(|| {
+        let result = (|| -> Result<String, String> {
+            if STOP_SENDER.lock().is_some() {
+                return Err("disconnect before scanning endpoints".into());
+            }
+            if SCAN_RUNNING.swap(true, Ordering::SeqCst) {
+                return Err("endpoint scan is already running".into());
+            }
+            let _guard = ScanRunningGuard;
+            SCAN_CANCELLED.store(false, Ordering::SeqCst);
+            let raw = read_java_string(&mut env, &config)?;
+            let config = BridgeConfig::parse(&raw)?;
+            config.apply_environment();
+            let embedded = config.embedded(None)?;
+            let results = runtime()?
+                .block_on(aether::scan_embedded(
+                    &embedded,
+                    SCAN_RESULT_LIMIT,
+                    &SCAN_CANCELLED,
+                ))
+                .map_err(|error| error.to_string())?;
+            Ok(response(
+                true,
+                serde_json::json!({
+                    "results": results.into_iter().map(|result| serde_json::json!({
+                        "peer": result.peer.to_string(),
+                        "rttMs": result.rtt.as_millis().min(u64::MAX as u128) as u64,
+                    })).collect::<Vec<_>>(),
+                }),
+            ))
+        })()
+        .unwrap_or_else(error_response);
+        java_string(env, &result)
+    }))
+    .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeTestEndpoint(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    config: JString<'_>,
+) -> jstring {
+    catch_unwind(AssertUnwindSafe(|| {
+        let result = (|| -> Result<String, String> {
+            if STOP_SENDER.lock().is_some() || SCAN_RUNNING.load(Ordering::SeqCst) {
+                return Err("disconnect and stop scanning before testing an endpoint".into());
+            }
+            let raw = read_java_string(&mut env, &config)?;
+            let config = BridgeConfig::parse(&raw)?;
+            config.apply_environment();
+            let embedded = config.embedded(None)?;
+            let result = runtime()?
+                .block_on(aether::test_embedded_peer(&embedded))
+                .map_err(|error| error.to_string())?;
+            Ok(response(
+                true,
+                serde_json::json!({
+                    "peer": result.peer.to_string(),
+                    "rttMs": result.rtt.as_millis().min(u64::MAX as u128) as u64,
+                }),
+            ))
+        })()
+        .unwrap_or_else(error_response);
+        java_string(env, &result)
+    }))
+    .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeCancelScan(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+) -> jboolean {
+    if SCAN_RUNNING.load(Ordering::SeqCst) {
+        SCAN_CANCELLED.store(true, Ordering::SeqCst);
+        JNI_TRUE
+    } else {
+        JNI_FALSE
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeRun(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    config: JString<'_>,
+    prepared_peer: JString<'_>,
+    tun_fd: jint,
+    listener: JObject<'_>,
+) -> jstring {
+    catch_unwind(AssertUnwindSafe(|| {
+        let result = (|| -> Result<String, String> {
+            let raw = read_java_string(&mut env, &config)?;
+            let peer: SocketAddr = read_java_string(&mut env, &prepared_peer)?
+                .parse()
+                .map_err(|_| "prepared peer is invalid".to_string())?;
+            let config = BridgeConfig::parse(&raw)?;
+            config.apply_environment();
+            let embedded = config.embedded(Some(peer))?;
+            let vm = Arc::new(env.get_java_vm().map_err(|error| error.to_string())?);
+            let listener = Arc::new(
+                env.new_global_ref(listener)
+                    .map_err(|error| error.to_string())?,
+            );
+            let runtime = runtime()?;
+            let (stop_tx, stop_rx) = oneshot::channel();
+            {
+                let mut sender = STOP_SENDER.lock();
+                if sender.is_some() {
+                    return Err("engine is already running".into());
+                }
+                *sender = Some(stop_tx);
+            }
+
+            let (endpoint, pump) = if config.mode == "tun" {
+                if tun_fd < 0 {
+                    STOP_SENDER.lock().take();
+                    return Err("TUN mode requires a valid file descriptor".into());
+                }
+                let (device_tx, device_rx) = mpsc::channel(PACKET_QUEUE);
+                let (tunnel_tx, tunnel_rx) = mpsc::channel(PACKET_QUEUE);
+                let pump = tun::TunPump::start(tun_fd, device_tx, tunnel_rx)
+                    .map_err(|error| format!("failed to start TUN pump: {error}"))?;
+                (
+                    aether::EmbeddedEndpoint::Tun {
+                        device_to_tunnel: device_rx,
+                        tunnel_to_device: tunnel_tx,
+                    },
+                    Some(pump),
+                )
+            } else {
+                if tun_fd >= 0 {
+                    unsafe { libc::close(tun_fd) };
+                }
+                (aether::EmbeddedEndpoint::Socks, None)
+            };
+
+            let (ready_tx, mut ready_rx) = oneshot::channel();
+            let outcome = runtime.block_on(async {
+                let mut engine = Box::pin(aether::run_embedded(embedded, endpoint, Some(ready_tx)));
+                let mut stop_rx = Box::pin(stop_rx);
+                tokio::select! {
+                    result = &mut engine => result.map_err(|error| error.to_string()),
+                    _ = &mut stop_rx => Ok(()),
+                    ready = &mut ready_rx => {
+                        if ready.is_ok() {
+                            call_engine_ready(&vm, &listener)
+                                .map_err(|error| error.to_string())?;
+                        }
+                        tokio::select! {
+                            result = &mut engine => result.map_err(|error| error.to_string()),
+                            _ = &mut stop_rx => Ok(()),
+                        }
+                    }
+                }
+            });
+            STOP_SENDER.lock().take();
+            drop(runtime);
+            if let Some(pump) = pump {
+                pump.stop();
+            }
+            outcome?;
+            Ok(response(true, serde_json::json!({"stopped": true})))
+        })()
+        .unwrap_or_else(|error| {
+            STOP_SENDER.lock().take();
+            error_response(error)
+        });
+        java_string(env, &result)
+    }))
+    .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeStop(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+) -> jboolean {
+    STOP_SENDER
+        .lock()
+        .take()
+        .map(|sender| {
+            let _ = sender.send(());
+            JNI_TRUE
+        })
+        .unwrap_or(JNI_FALSE)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeSetSocketProtector(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    protector: JObject<'_>,
+) {
+    let result = (|| -> jni::errors::Result<()> {
+        if protector.is_null() {
+            aether::set_socket_protector(None);
+            return Ok(());
+        }
+
+        let vm = Arc::new(env.get_java_vm()?);
+        let listener = Arc::new(env.new_global_ref(protector)?);
+        aether::set_socket_protector(Some(Arc::new(move |fd| {
+            call_socket_protector(&vm, &listener, fd).unwrap_or(false)
+        })));
+        Ok(())
+    })();
+
+    if let Err(error) = result {
+        let _ = env.throw_new(
+            "java/lang/IllegalStateException",
+            format!("failed to register socket protector: {error}"),
+        );
+    }
+}
+
+fn call_socket_protector(vm: &JavaVM, listener: &GlobalRef, fd: i32) -> jni::errors::Result<bool> {
+    let mut env = vm.attach_current_thread()?;
+    env.call_method(
+        listener.as_obj(),
+        "protectSocket",
+        "(I)Z",
+        &[JValue::Int(fd)],
+    )?
+    .z()
+}
+
+fn call_engine_ready(vm: &JavaVM, listener: &GlobalRef) -> jni::errors::Result<()> {
+    let mut env = vm.attach_current_thread()?;
+    env.call_method(listener.as_obj(), "onNativeReady", "()V", &[])?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_proxy_port_and_mode() {
+        let valid = r#"{"mode":"proxy","configPath":"aether.toml","listenPort":1819}"#;
+        assert!(BridgeConfig::parse(valid).is_ok());
+        assert!(BridgeConfig::parse(r#"{"mode":"bad","configPath":"aether.toml"}"#).is_err());
+        assert!(BridgeConfig::parse(
+            r#"{"mode":"proxy","configPath":"aether.toml","listenPort":80}"#
+        )
+        .is_err());
+        assert!(BridgeConfig::parse(
+            r#"{"mode":"proxy","configPath":"aether.toml","peer":"162.159.197.3:443"}"#
+        )
+        .is_ok());
+        assert!(BridgeConfig::parse(
+            r#"{"mode":"proxy","configPath":"aether.toml","peer":"cloudflare.example:443"}"#
+        )
+        .is_err());
+        assert!(BridgeConfig::parse(
+            r#"{"mode":"proxy","configPath":"aether.toml","peerFallback":true}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn reports_core_version() {
+        assert_eq!(BRIDGE_VERSION.split('.').count(), 3);
+        assert_eq!(aether::version(), "1.5.0");
+    }
+}

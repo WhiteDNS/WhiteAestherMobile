@@ -1,0 +1,17 @@
+.gradle/
+.idea/
+build/
+**/build/
+!native/third-party/boring-sys/build/
+!native/third-party/boring-sys/build/**
+**/target/
+local.properties
+*.iml
+.DS_Store
+Thumbs.db
+.preview-server.pid
+design/node_modules/
+design/frames/
+
+# Local working notes: records the signing-key backup path, never publish
+memory.md

@@ -1,0 +1,25 @@
+target/
+**/target/
+*.zip
+*.tar.gz
+.DS_Store
+.idea/
+.vscode/
+
+# Aether identity / credential files: contain the WireGuard private key,
+# MASQUE client certificate + key, and Cloudflare API access token.
+# Never commit these.
+aether.toml
+aether-*.toml
+aether-masque.toml
+aether-lastconn.toml
+aether-masque-lastconn.toml
+*-secondary.toml
+*-lastconn.toml
+*.toml.corrupt
+*.pem
+*.key
+
+# Zero Trust routing rule files may name internal hosts.
+routes.conf
+routes-*.conf

@@ -1,0 +1,1857 @@
+<title>WhiteAesther &mdash; UI direction v2</title>
+
+<style>
+/* -- Faces ----------------------------------------------------------------
+   Inter is the UI face professional network tools converge on --  Proton VPN,
+   Tailscale and Mullvad all ship it. Plus Jakarta Sans and Geist are kept as
+   switchable alternates. IBM Plex Mono stays, but only for data that has to
+   line up: addresses, ports, round-trips, log columns.                      */
+@font-face{font-family:"Inter";src:url(/*INTER*/) format("woff2");font-weight:100 900;font-style:normal;font-display:block}
+@font-face{font-family:"Jakarta";src:url(/*JAKARTA*/) format("woff2");font-weight:200 800;font-style:normal;font-display:block}
+@font-face{font-family:"Geist";src:url(/*GEIST*/) format("woff2");font-weight:100 900;font-style:normal;font-display:block}
+@font-face{font-family:"Plex Mono";src:url(/*PLEX_400*/) format("woff2");font-weight:400;font-style:normal;font-display:block}
+@font-face{font-family:"Plex Mono";src:url(/*PLEX_500*/) format("woff2");font-weight:500;font-style:normal;font-display:block}
+
+:root{
+  --font-ui:"Inter",ui-sans-serif,system-ui,sans-serif;
+  --font-data:"Plex Mono",ui-monospace,monospace;
+  --r-sm:10px; --r-md:14px; --r-lg:20px; --r-xl:26px;
+  --shell-w:390px; --shell-h:844px;
+}
+html[data-face="jakarta"]{--font-ui:"Jakarta",ui-sans-serif,system-ui,sans-serif}
+html[data-face="geist"]{--font-ui:"Geist",ui-sans-serif,system-ui,sans-serif}
+
+/* -- Palette --------------------------------------------------------------
+   Neutrals carry a green-cyan bias so the emerald identity sits in the ground
+   rather than on top of it. Signal hues (idle / working / live / failed) are
+   separate from the brand accent. Both themes are authored, not inverted.   */
+[data-ui="dark"]{
+  color-scheme:dark;
+  --ink-0:#050908; --ink-1:#0a100e; --ink-2:#101715; --ink-3:#161f1c;
+  /* Borders carry the same green bias as the ground and sit well clear of it,
+     so every surface has a readable edge instead of a suggestion of one. */
+  --line:#2c3b36; --line-soft:#202c28; --line-strong:#3a4d47;
+  --edge:inset 0 1px 0 rgb(255 255 255 / 4%);
+  --text:#eaf2ef; --text-2:#93a29e; --text-3:#657570;
+  --brand:#34d1a6; --on-brand:#052018;
+  --sig-idle:#7a8d88; --sig-work:#f2b544; --sig-live:#34d1a6; --sig-fail:#ff7068;
+  --cyan:#5ec8e5;
+  --track:#2c3b36;
+  --shadow-card:0 18px 40px -18px #000;
+  --shadow-device:0 40px 90px -30px #000, 0 0 0 9px #0b100f, 0 0 0 10px #22302b;
+  --thumb:#7f8f8a;
+  --page-bg:radial-gradient(1100px 620px at 80% -10%,#0d1a17 0%,transparent 60%),
+            radial-gradient(900px 500px at 5% 110%,#0b1614 0%,transparent 62%),#050908;
+}
+[data-ui="light"]{
+  color-scheme:light;
+  --ink-0:#e7edeb; --ink-1:#f6faf8; --ink-2:#ffffff; --ink-3:#eff5f2;
+  --line:#c6d4cf; --line-soft:#dde7e3; --line-strong:#a8bcb6;
+  --edge:inset 0 1px 0 rgb(255 255 255 / 70%);
+  --text:#0b1513; --text-2:#4c5e59; --text-3:#74847e;
+  --brand:#0b8f6c; --on-brand:#ffffff;
+  --sig-idle:#7c8d88; --sig-work:#a06a08; --sig-live:#0b8f6c; --sig-fail:#c2372f;
+  --cyan:#0f7793;
+  --track:#c6d4cf;
+  --shadow-card:0 12px 28px -16px rgb(11 40 33 / 22%);
+  --shadow-device:0 30px 70px -30px rgb(11 40 33 / 38%), 0 0 0 9px #dfe7e4, 0 0 0 10px #b6c7c2;
+  --thumb:#ffffff;
+  --page-bg:radial-gradient(1100px 620px at 80% -10%,#dbe9e4 0%,transparent 60%),
+            radial-gradient(900px 500px at 5% 110%,#dfeae7 0%,transparent 62%),#e7edeb;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html{background:var(--ink-0)}
+
+body{
+  margin:0;
+  padding:36px 20px 72px;
+  background:var(--page-bg);
+  color:var(--text);
+  font-family:var(--font-ui);
+  font-size:15px;
+  line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+
+button{font:inherit}
+button:not(:disabled),[role="button"]:not(:disabled){cursor:pointer}
+:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+
+/* === Pitch page ========================================================= */
+.stage{max-width:1180px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:56px;align-items:start}
+.notes{padding-top:8px;min-width:0}
+
+.eyebrow{
+  margin:0 0 14px;font-family:var(--font-data);font-size:11px;font-weight:500;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--brand);
+}
+.notes h1{margin:0 0 14px;font-size:40px;line-height:1.06;font-weight:680;letter-spacing:-.032em;text-wrap:balance}
+.lede{margin:0 0 30px;max-width:58ch;color:var(--text-2);font-size:16px;line-height:1.62}
+.notes h2{
+  margin:34px 0 14px;font-size:12px;font-family:var(--font-data);font-weight:500;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);
+}
+
+.ia{display:grid;gap:2px;border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden;max-width:62ch}
+.ia-row{display:grid;grid-template-columns:104px minmax(0,1fr);gap:16px;padding:14px 16px;background:var(--ink-2)}
+.ia-tab{font-weight:640;font-size:14px;letter-spacing:-.01em}
+.ia-desc{color:var(--text-2);font-size:13.5px;line-height:1.5}
+.ia-desc b{color:var(--text);font-weight:560}
+
+.changes{margin:0;padding:0;list-style:none;display:grid;gap:11px;max-width:60ch}
+.changes li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;color:var(--text-2);font-size:14.5px;line-height:1.55}
+.changes b{color:var(--text);font-weight:600}
+.tick{
+  width:19px;height:19px;margin-top:3px;border-radius:6px;flex:none;
+  background:color-mix(in srgb,var(--brand) 14%,transparent);
+  border:1px solid color-mix(in srgb,var(--brand) 36%,transparent);
+  display:grid;place-items:center;
+}
+.tick svg{width:11px;height:11px;stroke:var(--brand);stroke-width:2.6;fill:none;stroke-linecap:round;stroke-linejoin:round}
+code{font-family:var(--font-data);font-size:.9em;color:var(--text)}
+
+/* === Device ============================================================= */
+.device-col{display:grid;gap:14px;justify-items:center;position:sticky;top:36px}
+
+.device{
+  position:relative;width:var(--shell-w);height:var(--shell-h);
+  border-radius:38px;background:var(--ink-1);color:var(--text);
+  overflow:hidden;isolation:isolate;
+  box-shadow:var(--shadow-device);
+  display:grid;grid-template-rows:auto minmax(0,1fr) auto;
+}
+
+.aurora{
+  position:absolute;inset:-20% -30% auto;height:70%;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(46% 42% at 50% 38%, color-mix(in srgb,var(--sig) 26%,transparent) 0%, transparent 70%),
+    radial-gradient(34% 30% at 22% 55%, color-mix(in srgb,var(--cyan) 12%,transparent) 0%, transparent 70%);
+  filter:blur(38px);opacity:.5;transition:opacity .8s ease;animation:drift 14s ease-in-out infinite;
+}
+.device[data-conn="idle"] .aurora{opacity:.26}
+.device[data-conn="live"] .aurora{opacity:.66}
+@keyframes drift{0%,100%{transform:translate3d(0,0,0) scale(1)}50%{transform:translate3d(-3%,2%,0) scale(1.07)}}
+
+.statusbar{
+  position:relative;z-index:2;height:30px;padding:0 22px;
+  display:flex;align-items:center;justify-content:space-between;
+  font-family:var(--font-data);font-size:11px;font-weight:500;color:var(--text-2);
+}
+.statusbar svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.sb-right{display:flex;align-items:center;gap:7px}
+
+.viewport{position:relative;z-index:1;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;overscroll-behavior:contain}
+.viewport::-webkit-scrollbar{display:none}
+
+.screen{display:none;padding:0 18px 26px}
+.screen.is-on{display:block;animation:enter .32s cubic-bezier(.22,.9,.3,1) both}
+@keyframes enter{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+.appbar{height:60px;display:flex;align-items:center;gap:11px}
+.mark{width:30px;height:30px;flex:none;color:var(--brand)}
+.mark svg{width:100%;height:100%;display:block}
+.wordmark{font-size:16.5px;font-weight:660;letter-spacing:-.018em}
+.crumb{font-size:14px;font-weight:560;color:var(--text-3);letter-spacing:-.005em}
+.spacer{flex:1}
+
+.icon-btn,.back-btn{
+  width:38px;height:38px;flex:none;display:grid;place-items:center;
+  border:1px solid var(--line);border-radius:12px;background:var(--ink-2);color:var(--text-2);
+  transition:border-color .2s,color .2s;
+}
+.icon-btn:hover,.back-btn:hover{color:var(--text);border-color:color-mix(in srgb,var(--text-3) 40%,var(--line))}
+.icon-btn svg,.back-btn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+.page-title{margin:2px 0 5px;font-size:24px;line-height:1.16;font-weight:680;letter-spacing:-.024em;text-wrap:balance}
+.page-sub{margin:0 0 16px;color:var(--text-2);font-size:14px;line-height:1.5;max-width:36ch}
+
+/* === The orb ============================================================ */
+.hero{display:grid;justify-items:center;padding:10px 0 4px}
+.orb{
+  position:relative;width:262px;height:262px;display:grid;place-items:center;
+  border:0;padding:0;margin:0;background:none;-webkit-tap-highlight-color:transparent;
+  transition:transform .32s cubic-bezier(.22,.9,.3,1);
+}
+.orb:active{transform:scale(.965)}
+.orb:focus-visible{outline:none}
+.orb:focus-visible .orb-core{box-shadow:0 0 0 3px var(--ink-1),0 0 0 5px var(--sig)}
+
+.orb-bloom{
+  position:absolute;inset:14px;border-radius:50%;
+  background:radial-gradient(circle at 50% 50%, color-mix(in srgb,var(--sig) 34%,transparent) 0%, transparent 68%);
+  filter:blur(20px);opacity:.5;transition:opacity .6s ease;
+}
+.device[data-conn="idle"] .orb-bloom{opacity:.22}
+.device[data-conn="live"] .orb-bloom{opacity:.85;animation:breathe 4.2s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:.62;transform:scale(1)}50%{opacity:.95;transform:scale(1.05)}}
+
+.ripple{position:absolute;inset:26px;border-radius:50%;border:1px solid var(--sig);opacity:0;pointer-events:none}
+.device[data-conn="live"] .ripple{animation:ripple 3.4s cubic-bezier(.2,.6,.3,1) infinite}
+.device[data-conn="live"] .ripple:nth-child(2){animation-delay:1.13s}
+.device[data-conn="live"] .ripple:nth-child(3){animation-delay:2.26s}
+.device[data-conn="work"] .ripple{animation:ripple 1.7s cubic-bezier(.2,.6,.3,1) infinite}
+.device[data-conn="work"] .ripple:nth-child(2){animation-delay:.57s}
+.device[data-conn="work"] .ripple:nth-child(3){animation-delay:1.14s}
+@keyframes ripple{0%{transform:scale(.86);opacity:.42}100%{transform:scale(1.32);opacity:0}}
+
+.orb-svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.ring-halo{fill:none;stroke:color-mix(in srgb,var(--sig) 16%,transparent);stroke-width:1;transition:stroke .5s ease}
+.ring-track{fill:none;stroke:var(--track);stroke-width:2.5}
+.ring-prog{
+  fill:none;stroke:var(--sig);stroke-width:3.5;stroke-linecap:round;
+  transform:rotate(-90deg);transform-origin:120px 120px;
+  transition:stroke-dashoffset .7s cubic-bezier(.3,.8,.35,1), stroke .5s ease, opacity .4s;
+}
+.ring-dash{
+  fill:none;stroke:color-mix(in srgb,var(--sig) 34%,transparent);
+  stroke-width:1.5;stroke-dasharray:1 9;stroke-linecap:round;opacity:0;
+  transition:opacity .5s ease;transform-box:view-box;transform-origin:120px 120px;
+}
+.device[data-conn="live"] .ring-dash{opacity:1;animation:orbit 26s linear infinite}
+.device[data-conn="idle"] .ring-dash{opacity:.5}
+.comet{opacity:0;transform-box:view-box;transform-origin:120px 120px;transition:opacity .3s ease}
+.device[data-conn="work"] .comet{opacity:1;animation:orbit 1.15s linear infinite}
+.comet-arc{fill:none;stroke:url(#cometFade);stroke-width:2.5;stroke-linecap:round}
+.comet-head{fill:var(--sig)}
+@keyframes orbit{to{transform:rotate(360deg)}}
+
+.orb-core{
+  position:relative;width:150px;height:150px;border-radius:50%;display:grid;place-items:center;
+  background:radial-gradient(120% 120% at 50% 8%, color-mix(in srgb,var(--sig) 15%,var(--ink-3)) 0%, var(--ink-2) 62%);
+  border:1px solid color-mix(in srgb,var(--sig) 30%,var(--line));
+  box-shadow:inset 0 1px 0 color-mix(in srgb,var(--sig) 22%,transparent), var(--shadow-card);
+  transition:border-color .5s ease,background .5s ease,box-shadow .3s ease;
+}
+.orb-icon{width:44px;height:44px;color:var(--sig);transition:color .5s ease}
+.orb-icon svg{width:100%;height:100%;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.device[data-conn="work"] .orb-icon{animation:pulseIcon 1.15s ease-in-out infinite}
+@keyframes pulseIcon{0%,100%{opacity:.55}50%{opacity:1}}
+.orb-cta{
+  margin-top:7px;font-family:var(--font-data);font-size:10.5px;font-weight:500;
+  letter-spacing:.15em;text-transform:uppercase;color:var(--text-3);transition:color .4s ease;
+}
+.device[data-conn="live"] .orb-cta,.device[data-conn="fail"] .orb-cta{color:color-mix(in srgb,var(--sig) 72%,var(--text-3))}
+
+.status{display:grid;justify-items:center;gap:8px;margin-top:18px;text-align:center}
+.status-pill{
+  display:inline-flex;align-items:center;gap:8px;padding:5px 13px 5px 10px;border-radius:999px;
+  border:1px solid color-mix(in srgb,var(--sig) 34%,var(--line));
+  background:color-mix(in srgb,var(--sig) 9%,transparent);
+  font-family:var(--font-data);font-size:11px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;
+  color:color-mix(in srgb,var(--sig) 78%,var(--text));
+  transition:border-color .5s,background .5s,color .5s;
+}
+.status-pill i{width:7px;height:7px;border-radius:50%;background:var(--sig);flex:none}
+.device[data-conn="work"] .status-pill i,.device[data-conn="live"] .status-pill i{animation:blip 1.6s ease-in-out infinite}
+@keyframes blip{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}}
+.status-head{margin:0;font-size:26px;line-height:1.15;font-weight:680;letter-spacing:-.028em;text-wrap:balance;max-width:300px}
+.status-line{margin:0;font-size:14px;color:var(--text-2);min-height:20px;line-height:1.4;max-width:300px}
+.status-line b{font-family:var(--font-data);font-weight:500;color:var(--text);font-size:13px}
+
+/* === Shared surfaces ==================================================== */
+.card{
+  margin-top:12px;border:1px solid var(--line);border-radius:var(--r-lg);
+  background:var(--ink-2);overflow:hidden;box-shadow:var(--edge);
+}
+.card-head{padding:14px 15px 2px}
+.card-title{font-size:15.5px;font-weight:640;letter-spacing:-.015em}
+.card-sub{margin:2px 0 0;font-size:13px;color:var(--text-2);line-height:1.45}
+.label{
+  font-family:var(--font-data);font-size:10.5px;font-weight:500;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);
+}
+
+.row-card{
+  display:flex;align-items:center;gap:13px;width:100%;padding:14px 15px;
+  border:1px solid var(--line);border-radius:var(--r-lg);background:var(--ink-2);
+  box-shadow:var(--edge);
+  text-align:left;color:inherit;transition:border-color .2s,background .2s;
+}
+.row-card:hover{background:var(--ink-3);border-color:var(--line-strong)}
+.row-icon{
+  width:38px;height:38px;flex:none;display:grid;place-items:center;
+  border:1px solid var(--line);border-radius:11px;background:var(--ink-3);color:var(--text-2);
+}
+.row-icon svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.row-body{flex:1;min-width:0;display:grid;gap:1px}
+.row-title{font-size:14.5px;font-weight:580;letter-spacing:-.01em}
+.row-sub{font-size:13px;color:var(--text-2);line-height:1.4}
+.row-chev{width:17px;height:17px;flex:none;stroke:var(--text-3);fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+
+.list{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--ink-2);overflow:hidden;box-shadow:var(--edge)}
+.list .row-card{border:0;border-radius:0;background:none;box-shadow:none}
+.list .row-card:hover{border-color:transparent}
+.list .row-card + .row-card{border-top:1px solid var(--line-soft)}
+.note{margin:12px 2px 0;color:var(--text-3);font-size:12.5px;line-height:1.5}
+
+/* Plain-language option card --  the control a first-time user reaches for */
+.choice-grid{display:grid;gap:8px;padding:11px}
+.choice-grid[data-cols="2"]{grid-template-columns:1fr 1fr}
+.choice{
+  position:relative;display:grid;gap:4px;align-content:start;
+  padding:14px 13px;border:1px solid var(--line);border-radius:var(--r-md);
+  background:var(--ink-2);text-align:left;color:inherit;
+  transition:border-color .24s,background .24s;
+}
+.choice:hover{border-color:color-mix(in srgb,var(--text-3) 40%,var(--line))}
+.choice[aria-pressed="true"]{
+  border-color:color-mix(in srgb,var(--brand) 55%,transparent);
+  background:color-mix(in srgb,var(--brand) 8%,var(--ink-2));
+}
+.choice-icon{width:20px;height:20px;stroke:var(--text-3);fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;transition:stroke .24s}
+.choice[aria-pressed="true"] .choice-icon{stroke:var(--brand)}
+.choice-name{margin-top:4px;font-size:14.5px;font-weight:620;letter-spacing:-.012em}
+.choice-desc{font-size:12.5px;line-height:1.45;color:var(--text-2)}
+.choice-tag{margin-top:4px;font-family:var(--font-data);font-size:9.5px;font-weight:500;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3)}
+.choice[aria-pressed="true"] .choice-tag{color:var(--brand)}
+.choice-check{position:absolute;top:13px;right:13px;width:18px;height:18px;opacity:0;transform:scale(.6);transition:opacity .24s,transform .24s cubic-bezier(.3,1.4,.5,1)}
+.choice[aria-pressed="true"] .choice-check{opacity:1;transform:none}
+.choice-check svg{width:100%;height:100%;stroke:var(--brand);fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+
+/* Radio list --  advanced pickers */
+.opt-list{display:grid;padding:11px;gap:2px}
+.opt{
+  display:grid;grid-template-columns:auto minmax(0,1fr) 20px;align-items:center;gap:12px;
+  padding:11px 10px;border-radius:var(--r-md);border:1px solid transparent;
+  text-align:left;background:none;color:inherit;
+  transition:border-color .22s,background .22s;
+}
+.opt[aria-pressed="true"]{border-color:color-mix(in srgb,var(--brand) 44%,transparent);background:color-mix(in srgb,var(--brand) 7%,transparent)}
+.opt-code{
+  min-width:38px;height:30px;padding:0 8px;display:grid;place-items:center;border-radius:9px;
+  border:1px solid var(--line);background:var(--ink-3);
+  font-family:var(--font-data);font-size:11px;font-weight:500;color:var(--text-2);
+  transition:color .3s,border-color .3s;
+}
+.opt[aria-pressed="true"] .opt-code{color:var(--brand);border-color:color-mix(in srgb,var(--brand) 46%,transparent)}
+.opt-radio{width:19px;height:19px;border-radius:50%;border:1.8px solid var(--line);position:relative;justify-self:end;transition:border-color .22s}
+.opt[aria-pressed="true"] .opt-radio{border-color:var(--brand)}
+.opt-radio::after{content:"";position:absolute;inset:4px;border-radius:50%;background:var(--brand);transform:scale(0);transition:transform .25s cubic-bezier(.3,1.5,.5,1)}
+.opt[aria-pressed="true"] .opt-radio::after{transform:scale(1)}
+
+/* Advanced disclosure --  collapsed for newcomers, opened globally by experts */
+.adv{border-top:1px solid var(--line-soft)}
+.adv-trigger{
+  width:100%;display:flex;align-items:center;gap:9px;padding:12px 15px;
+  background:none;border:0;color:var(--text-2);text-align:left;
+  font-size:13.5px;font-weight:560;transition:color .2s;
+}
+.adv-trigger:hover{color:var(--text)}
+.adv-badge{
+  margin-left:auto;font-family:var(--font-data);font-size:10px;font-weight:500;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);
+}
+.adv-chev{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;transition:transform .3s cubic-bezier(.22,.9,.3,1)}
+.adv[data-open="true"] .adv-chev{transform:rotate(180deg)}
+.adv-panel{display:grid;grid-template-rows:0fr;transition:grid-template-rows .34s cubic-bezier(.22,.9,.3,1)}
+.adv[data-open="true"] .adv-panel{grid-template-rows:1fr}
+.adv-panel > div{overflow:hidden}
+
+/* Value aligns with the title, not the middle of a wrapped description. */
+.setting{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:13px 15px;border-top:1px solid var(--line-soft)}
+.setting:first-child{border-top:0}
+.setting-value{margin-top:1px;font-family:var(--font-data);font-size:13px;font-weight:500;color:var(--text);white-space:nowrap}
+.setting .switch{margin-top:2px}
+
+.switch{
+  width:46px;height:27px;flex:none;padding:0;border:0;border-radius:999px;
+  background:var(--ink-3);box-shadow:inset 0 0 0 1px var(--line);position:relative;
+  transition:background .26s ease,box-shadow .26s ease;
+}
+.switch[aria-checked="true"]{background:var(--brand);box-shadow:none}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:21px;height:21px;border-radius:50%;background:var(--thumb);transition:transform .26s cubic-bezier(.3,1.2,.5,1)}
+.switch[aria-checked="true"]::after{transform:translateX(19px);background:var(--on-brand)}
+
+.seg-group{display:grid;gap:4px;padding:4px;border:1px solid var(--line);border-radius:13px;background:var(--ink-3)}
+.seg-group[data-cols="2"]{grid-template-columns:1fr 1fr}
+.seg-group[data-cols="3"]{grid-template-columns:repeat(3,1fr)}
+.seg-item{
+  height:36px;border:0;border-radius:10px;background:none;
+  font-size:13.5px;font-weight:560;color:var(--text-2);
+  transition:background .24s ease,color .24s ease,box-shadow .24s ease;
+}
+.seg-item[aria-pressed="true"]{
+  background:var(--ink-2);color:var(--brand);
+  box-shadow:0 1px 3px rgb(0 0 0 / 12%),inset 0 0 0 1px color-mix(in srgb,var(--brand) 26%,transparent);
+}
+
+.btn{
+  width:100%;height:50px;display:flex;align-items:center;justify-content:center;gap:9px;
+  border:0;border-radius:var(--r-md);background:var(--brand);color:var(--on-brand);
+  font-size:15px;font-weight:640;letter-spacing:-.01em;transition:filter .2s,transform .2s;
+}
+.btn:hover:not(:disabled){filter:brightness(1.07)}
+.btn:active:not(:disabled){transform:scale(.985)}
+.btn-outline{
+  height:50px;display:flex;align-items:center;justify-content:center;gap:8px;
+  border:1px solid var(--line);border-radius:var(--r-md);background:var(--ink-2);color:var(--text);
+  font-size:14.5px;font-weight:580;transition:border-color .2s,background .2s;
+}
+.btn-outline:hover:not(:disabled){background:var(--ink-3)}
+.btn:disabled,.btn-outline:disabled{opacity:.42;cursor:not-allowed}
+.btn svg,.btn-outline svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.btn-row{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:12px}
+.btn-row .btn,.btn-row .btn-outline{height:48px;font-size:14.5px}
+.spin{width:15px;height:15px;flex:none;animation:orbit .9s linear infinite}
+.spin circle{fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-dasharray:34 18}
+
+/* === Home: acknowledgement + live facts ================================= */
+.attention{
+  display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;
+  margin-top:14px;padding:14px 15px;border-radius:var(--r-lg);
+  border:1px solid color-mix(in srgb,var(--att) 38%,var(--line));
+  background:color-mix(in srgb,var(--att) 9%,var(--ink-2));
+  animation:enter .34s cubic-bezier(.22,.9,.3,1) both;
+}
+.attention[hidden]{display:none}
+.attention-icon{width:20px;height:20px;margin-top:1px;stroke:var(--att);fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.attention-title{font-size:14px;font-weight:620;letter-spacing:-.01em}
+.attention-body{margin:2px 0 0;font-size:13px;line-height:1.45;color:var(--text-2)}
+.attention-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px}
+.chip-btn{
+  padding:7px 13px;border-radius:999px;border:1px solid color-mix(in srgb,var(--att) 40%,var(--line));
+  background:transparent;color:var(--att);font-size:13px;font-weight:580;
+  transition:background .2s;
+}
+.chip-btn:hover{background:color-mix(in srgb,var(--att) 12%,transparent)}
+
+/* While connecting, the path race is the story. Once connected, the live
+   figures are, so the race drops below them. */
+.home-stack{display:flex;flex-direction:column}
+.home-stack > .attention{order:0}
+.home-stack > .probe{order:1}
+.home-stack > .rail{order:2}
+.home-stack > .facts{order:3}
+.home-stack > .note{order:4}
+.device[data-conn="live"] .home-stack > .probe{order:5}
+
+.probe{margin-top:16px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--ink-2);overflow:hidden;box-shadow:var(--edge)}
+.probe[hidden]{display:none}
+.probe-head{padding:13px 15px 11px}
+.probe-row{
+  position:relative;display:grid;grid-template-columns:38px minmax(0,1fr) auto;align-items:center;gap:12px;
+  padding:11px 15px;border-top:1px solid var(--line-soft);transition:background .35s ease;
+}
+.probe-row::after{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--brand);transform:scaleY(0);transition:transform .35s cubic-bezier(.22,.9,.3,1)}
+.probe-row[data-state="win"]{background:color-mix(in srgb,var(--brand) 7%,transparent)}
+.probe-row[data-state="win"]::after{transform:scaleY(1)}
+.probe-code{
+  height:30px;display:grid;place-items:center;border-radius:9px;border:1px solid var(--line);
+  background:var(--ink-3);font-family:var(--font-data);font-size:11px;font-weight:500;color:var(--text-2);
+  transition:color .35s,border-color .35s;
+}
+.probe-row[data-state="win"] .probe-code{color:var(--brand);border-color:color-mix(in srgb,var(--brand) 46%,transparent)}
+.probe-name{display:block;font-size:13.5px;font-weight:520;letter-spacing:-.008em}
+.probe-bar{display:block;margin-top:6px;height:3px;border-radius:2px;background:var(--line-soft);overflow:hidden;opacity:1;transition:opacity .3s ease}
+.probe-row[data-state="idle"] .probe-bar{opacity:0}
+.probe-fill{display:block;height:100%;width:0;border-radius:2px;background:var(--sig-work);transition:width .55s cubic-bezier(.3,.8,.35,1),background .35s}
+.probe-row[data-state="win"] .probe-fill{background:var(--brand)}
+.probe-row[data-state="fail"] .probe-fill{background:var(--sig-fail);opacity:.55}
+.probe-val{font-family:var(--font-data);font-size:12px;font-variant-numeric:tabular-nums;color:var(--text-3);min-width:56px;text-align:right;transition:color .35s}
+.probe-row[data-state="win"] .probe-val{color:var(--brand)}
+.probe-row[data-state="test"] .probe-val{color:var(--sig-work)}
+
+.rail{margin-top:12px;display:grid;grid-template-columns:1.35fr 1fr;gap:8px}
+.tile{padding:12px 13px 11px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--ink-2);box-shadow:var(--edge);display:grid;gap:2px;align-content:start;min-height:92px}
+.tile-label{font-family:var(--font-data);font-size:10px;font-weight:500;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3)}
+.tile-val{font-family:var(--font-data);font-size:19px;font-weight:500;font-variant-numeric:tabular-nums;letter-spacing:-.01em;color:var(--text)}
+.tile-val small{font-size:11px;color:var(--text-3);margin-left:2px}
+.tile-foot{margin-top:auto;font-size:11.5px;color:var(--text-3)}
+.spark{margin-top:4px;width:100%;height:26px;display:block;overflow:visible}
+.spark-line{fill:none;stroke:var(--brand);stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.spark-area{fill:url(#sparkFill);stroke:none}
+.spark-dot{fill:var(--brand)}
+.spark.is-off .spark-line,.spark.is-off .spark-area,.spark.is-off .spark-dot{opacity:.16;filter:grayscale(1)}
+
+/* Read-only facts --  information, never a control */
+.facts{margin-top:12px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--ink-2);overflow:hidden;box-shadow:var(--edge)}
+.fact{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 15px;border-top:1px solid var(--line-soft);font-size:13.5px}
+.fact:first-of-type{border-top:0}
+.fact-k{color:var(--text-2);flex:none}
+.fact-v{font-size:13.5px;font-weight:560;color:var(--text);text-align:right;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fact-v[data-mono]{font-family:var(--font-data);font-size:12.5px;font-weight:500}
+.rail[hidden]{display:none}
+
+/* === Endpoint =========================================================== */
+.reveal{display:grid;grid-template-rows:0fr;transition:grid-template-rows .34s cubic-bezier(.22,.9,.3,1)}
+.reveal[data-open="true"]{grid-template-rows:1fr}
+.reveal > div{overflow:hidden}
+
+.field{padding:14px 15px 0}
+.field-label{display:block;margin-bottom:7px;font-family:var(--font-data);font-size:10.5px;font-weight:500;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3)}
+.field-input{
+  width:100%;height:50px;padding:0 14px;border:1px solid var(--line);border-radius:var(--r-md);
+  background:var(--ink-1);color:var(--text);font-family:var(--font-data);font-size:15px;
+  transition:border-color .22s ease,box-shadow .22s ease;
+}
+.field-input::placeholder{color:var(--text-3)}
+.field-input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 16%,transparent)}
+.field[data-valid="false"] .field-input{border-color:var(--sig-fail)}
+.field-msg{display:flex;align-items:center;gap:7px;margin:8px 0 0;font-size:12.5px;color:var(--text-3)}
+.field[data-valid="true"] .field-msg{color:var(--brand)}
+.field[data-valid="false"] .field-msg{color:var(--sig-fail)}
+.field-msg svg{width:13px;height:13px;flex:none;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+
+.scan{margin-top:12px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--ink-2);overflow:hidden;position:relative;box-shadow:var(--edge)}
+.scan-head{display:grid;gap:4px;padding:13px 15px}
+.scan-status{font-size:12.5px;color:var(--text-2);font-family:var(--font-data)}
+.scan[data-busy="true"]::before{
+  content:"";position:absolute;top:0;left:0;right:0;height:2px;
+  background:linear-gradient(90deg,transparent,var(--brand),transparent);
+  animation:sweep 1.5s ease-in-out infinite;
+}
+@keyframes sweep{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+.result{
+  width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:center;
+  padding:12px 15px;border:0;border-top:1px solid var(--line-soft);background:none;
+  text-align:left;color:inherit;transition:background .2s ease;
+  animation:pop .34s cubic-bezier(.22,.9,.3,1) both;
+}
+.result:hover{background:var(--ink-3)}
+@keyframes pop{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+.result-peer{font-family:var(--font-data);font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.result-rtt{font-family:var(--font-data);font-size:12.5px;font-weight:500;color:var(--brand);font-variant-numeric:tabular-nums}
+.result-note{grid-column:1;font-size:12px;color:var(--text-3)}
+.result-bar{grid-column:1/-1;height:3px;border-radius:2px;background:var(--line-soft);overflow:hidden;margin-top:3px}
+.result-bar i{display:block;height:100%;border-radius:2px;background:color-mix(in srgb,var(--brand) 55%,transparent)}
+.result[aria-pressed="true"]{background:color-mix(in srgb,var(--brand) 8%,transparent)}
+.result[aria-pressed="true"] .result-peer{color:var(--brand)}
+/* The space after \00b7 terminates the escape, so a literal one needs a second. */
+.result[aria-pressed="true"] .result-note::after{content:" \00b7  pinned";color:var(--brand)}
+
+/* === Diagnostics & log sharing ========================================== */
+.log{
+  margin-top:12px;border:1px solid var(--line);border-radius:var(--r-lg);
+  background:var(--ink-2);overflow:hidden;box-shadow:var(--edge);
+}
+/* Log lines wrap rather than scroll sideways --  a 390px screen has no room
+   for a horizontal scroller, and these are meant to be read. */
+.log-scroll{max-height:264px;overflow-y:auto;scrollbar-width:thin}
+.log-line{
+  display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:4px 9px;
+  padding:8px 15px;border-top:1px solid var(--line-soft);
+  font-family:var(--font-data);font-size:11.5px;line-height:1.5;
+}
+.log-time{color:var(--text-3);font-variant-numeric:tabular-nums}
+.log-lvl{font-weight:500}
+.log-msg{grid-column:1/-1;color:var(--text-2);word-break:break-word}
+.log-line[data-lvl="INFO"] .log-lvl{color:var(--brand)}
+.log-line[data-lvl="WARN"] .log-lvl{color:var(--sig-work)}
+.log-line[data-lvl="ERROR"] .log-lvl{color:var(--sig-fail)}
+.log-line[data-lvl="DEBUG"] .log-lvl,.log-line[data-lvl="TRACE"] .log-lvl{color:var(--text-3)}
+.log-tag{color:var(--cyan)}
+
+.check{
+  display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:start;
+  width:100%;padding:12px 15px;border:0;border-top:1px solid var(--line-soft);
+  background:none;text-align:left;color:inherit;transition:background .2s;
+}
+.check:hover{background:var(--ink-3)}
+.check-box{
+  width:20px;height:20px;margin-top:1px;border-radius:6px;border:1.8px solid var(--line);
+  display:grid;place-items:center;transition:background .2s,border-color .2s;
+}
+.check[aria-pressed="true"] .check-box{background:var(--brand);border-color:var(--brand)}
+.check-box svg{width:12px;height:12px;stroke:var(--on-brand);fill:none;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;opacity:0;transition:opacity .2s}
+.check[aria-pressed="true"] .check-box svg{opacity:1}
+.check-title{display:block;font-size:14px;font-weight:560}
+.check-sub{display:block;font-size:12.5px;color:var(--text-2);line-height:1.4}
+.check[data-locked="true"]{opacity:.6;pointer-events:none}
+
+.preview-box{
+  margin:12px 15px 15px;padding:12px;border:1px dashed var(--line);border-radius:var(--r-md);
+  background:var(--ink-1);font-family:var(--font-data);font-size:11.5px;line-height:1.6;
+  color:var(--text-2);white-space:pre-wrap;word-break:break-word;
+}
+.privacy{
+  display:grid;grid-template-columns:auto minmax(0,1fr);gap:11px;
+  margin-top:12px;padding:13px 15px;border-radius:var(--r-md);
+  border:1px solid color-mix(in srgb,var(--cyan) 32%,var(--line));
+  background:color-mix(in srgb,var(--cyan) 8%,transparent);
+  font-size:12.5px;line-height:1.5;color:var(--text-2);
+}
+.privacy svg{width:17px;height:17px;margin-top:1px;stroke:var(--cyan);fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+
+/* === Tab bar ============================================================ */
+.tabbar{
+  position:relative;z-index:3;height:74px;padding:8px 10px 14px;
+  display:grid;grid-template-columns:repeat(4,1fr);
+  border-top:1px solid var(--line);
+  background:color-mix(in srgb,var(--ink-1) 88%,transparent);
+  backdrop-filter:blur(20px);
+}
+/* Size and position both come from the measured tab cell, so the pill is
+   exactly concentric with the icon+label group it sits behind. */
+.tab-ind{
+  position:absolute;top:0;left:0;border-radius:14px;
+  background:color-mix(in srgb,var(--brand) 12%,transparent);
+  border:1px solid color-mix(in srgb,var(--brand) 26%,transparent);
+  transition:transform .38s cubic-bezier(.22,.9,.3,1),width .38s cubic-bezier(.22,.9,.3,1);
+  pointer-events:none;
+}
+/* Fixed icon and line-box heights so the icon+label group is exactly centred
+   in the 52px cell, and the indicator can be measured against the same box.
+   The selected state must not nudge the icon, or it sits off-centre in the
+   pill while its neighbours do not. */
+.tab{
+  position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  padding:0;border:0;background:none;
+  font-size:11px;font-weight:520;line-height:14px;color:var(--text-3);
+  transition:color .28s ease;
+}
+.tab svg{
+  display:block;width:22px;height:22px;
+  stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;
+}
+.tab span{display:block}
+.tab[aria-selected="true"]{color:var(--brand)}
+
+.toast{
+  position:absolute;z-index:5;left:18px;right:18px;bottom:88px;
+  display:flex;align-items:center;gap:11px;padding:12px 14px;
+  border:1px solid var(--line);border-radius:var(--r-md);
+  background:color-mix(in srgb,var(--ink-3) 96%,transparent);backdrop-filter:blur(14px);
+  box-shadow:var(--shadow-card);font-size:13.5px;
+  opacity:0;transform:translateY(14px);pointer-events:none;
+  transition:opacity .3s ease,transform .3s cubic-bezier(.22,.9,.3,1);
+}
+.toast.is-on{opacity:1;transform:none}
+.toast i{width:8px;height:8px;border-radius:50%;background:var(--brand);flex:none}
+
+/* === Review chrome ====================================================== */
+.controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center;padding:6px;border:1px solid var(--line);border-radius:999px;background:var(--ink-2)}
+.controls-label{padding-left:10px;font-family:var(--font-data);font-size:10px;font-weight:500;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3)}
+.seg{padding:7px 13px;border:0;border-radius:999px;background:none;font-size:13px;font-weight:540;color:var(--text-2);transition:background .2s,color .2s}
+.seg:hover{color:var(--text)}
+.seg[aria-pressed="true"]{background:var(--ink-3);color:var(--c,var(--brand));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c,var(--brand)) 32%,transparent)}
+
+@media (max-width:1100px){
+  .stage{grid-template-columns:minmax(0,1fr);gap:40px;justify-items:center}
+  .device-col{position:static;order:-1}
+  .notes{max-width:var(--shell-w)}
+  .notes h1{font-size:31px}
+}
+@media (max-width:430px){
+  body{padding:18px 12px 44px}
+  .device{width:100%;height:min(844px,calc(100svh - 200px));border-radius:28px;box-shadow:none;border:1px solid var(--line)}
+  .orb{width:238px;height:238px}
+}
+
+/* Frame mode (?frame=1): device only, fixed 390x844, motion frozen */
+html[data-frame] body{padding:0;display:grid;place-items:center;min-height:100svh}
+html[data-frame] .notes,html[data-frame] .controls{display:none}
+html[data-frame] .stage{grid-template-columns:auto;gap:0;max-width:none}
+html[data-frame] .device-col{position:static;gap:0}
+html[data-frame] .device{width:390px;height:844px;border:0;border-radius:0;box-shadow:none}
+html[data-frame] .comet{animation-play-state:paused !important;animation-delay:-.24s !important}
+html[data-frame] .ripple{animation-play-state:paused !important}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
+}
+</style>
+
+<div class="stage">
+
+  <div class="notes">
+    <p class="eyebrow">Direction v2 &middot; revision 3</p>
+    <h1>One control to connect. Everything else where you'd look for it.</h1>
+    <p class="lede">
+      Home now answers one question &mdash; what is my connection doing right now &mdash; and holds no settings
+      at all. Every control lives in exactly one place, grouped by what it affects rather than by
+      which engine flag it sets, and each screen opens with the plain-language choice a first-time
+      user needs. Expert controls are one tap away, or permanently open once you flip
+      <b>Show advanced controls</b>.
+    </p>
+
+    <h2>Where things live now</h2>
+    <div class="ia">
+      <div class="ia-row">
+        <span class="ia-tab">Home</span>
+        <span class="ia-desc"><b>Status only.</b> The orb, what it's doing, live figures, and anything you need to acknowledge. No settings, no links into settings.</span>
+      </div>
+      <div class="ia-row">
+        <span class="ia-tab">Routes</span>
+        <span class="ia-desc"><b>How it gets in.</b> Profile, endpoint and the scanner, preferred transport, discovery depth. The only home for Endpoint.</span>
+      </div>
+      <div class="ia-row">
+        <span class="ia-tab">Traffic</span>
+        <span class="ia-desc"><b>What happens to your data.</b> Whole-device vs proxy, DNS, IPv4/IPv6, obfuscation, validation, local port.</span>
+      </div>
+      <div class="ia-row">
+        <span class="ia-tab">Settings</span>
+        <span class="ia-desc"><b>The app itself.</b> Theme, advanced-controls switch, identity, diagnostics and log sharing, about.</span>
+      </div>
+    </div>
+
+    <h2>What changed in this revision</h2>
+    <ul class="changes">
+      <li><span class="tick"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>No control appears twice.</b> Endpoint was on Home and in Network; it now lives only under Routes. Home still <em>reports</em> the endpoint in use, as read-only text.</span></li>
+      <li><span class="tick"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>Settings regrouped by effect, not by flag.</b> "Lab" and "Network" were engineer's categories. Routes and Traffic say what the settings inside them do.</span></li>
+      <li><span class="tick"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>Two audiences, one screen.</b> Each section leads with one plain choice; the rest sits behind <em>Advanced</em>. Every control carries a line saying what it does and when to change it.</span></li>
+      <li><span class="tick"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>Diagnostics can be sent to you.</b> Verbose logging, a live stream, an explicit include-list, IP and network-name redaction on by default, and a preview of the exact report before anything leaves the phone.</span></li>
+      <li><span class="tick"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>Light, dark, or follow the system.</b> Both themes are authored rather than inverted &mdash; the light palette uses a darker emerald so text keeps its contrast on white.</span></li>
+      <li><span class="tick"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>New type.</b> Inter for the interface &mdash; what Proton VPN, Tailscale and Mullvad ship &mdash; and IBM Plex Mono kept strictly for data that lines up: addresses, ports, round-trips, log columns. Mono no longer sets running text, which is what made the old screens feel cramped. Compare the alternates below the phone.</span></li>
+      <li><span class="tick"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>Edges you can see.</b> Border tokens moved well clear of the surfaces they sit on and kept the same green bias as the ground, with a one-pixel top highlight on every card. Page titles came down a step so no heading takes three lines.</span></li>
+      <li><span class="tick"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>The mark is the real one.</b> Redrawn from the launcher globe &mdash; heavy outer ring, equator, two parallels, straight and elliptical meridians &mdash; instead of an approximation.</span></li>
+      <li><span class="tick"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>Tab bar measured, not eyeballed.</b> All four icons sit on one 24px box with matching optical mass, the icon and its label share an exact centre line, and the selected pill is derived from the tab's own rendered box &mdash; 5.5px of air above and below the group, zero offset on the pill.</span></li>
+    </ul>
+  </div>
+
+  <div class="device-col">
+    <div class="device" data-conn="idle" data-screen="home" data-ui="dark">
+      <div class="aurora"></div>
+
+      <div class="statusbar">
+        <span>9:41</span>
+        <span class="sb-right">
+          <svg viewBox="0 0 24 24"><path d="M12 20h.01M8.5 16.4a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 14 0"/></svg>
+          <svg viewBox="0 0 24 24"><rect x="2" y="7" width="17" height="10" rx="3"/><path d="M22 11v2"/><rect x="4.5" y="9.5" width="9" height="5" rx="1.5" fill="currentColor" stroke="none"/></svg>
+        </span>
+      </div>
+
+      <div class="viewport" id="viewport">
+
+        <!-- === HOME &mdash; status only === -->
+        <section class="screen is-on" data-screen="home">
+          <div class="appbar">
+            <span class="mark" aria-hidden="true">
+              <!-- The launcher globe: heavy outer ring, equator, two parallels,
+                   a straight meridian and two elliptical ones. -->
+              <svg viewBox="0 0 32 32">
+                <g fill="none" stroke="currentColor" stroke-linecap="round">
+                  <circle cx="16" cy="16" r="13.6" stroke-width="2.3"/>
+                  <path d="M2.4 16h27.2M16 2.4v27.2" stroke-width="1.5"/>
+                  <path d="M4.1 10.4h23.8M4.1 21.6h23.8" stroke-width="1.5"/>
+                  <ellipse cx="16" cy="16" rx="7" ry="13.6" stroke-width="1.5"/>
+                </g>
+              </svg>
+            </span>
+            <span class="wordmark">WhiteAesther</span>
+          </div>
+
+          <div class="hero">
+            <button class="orb" type="button" id="orb" aria-label="Toggle connection">
+              <span class="orb-bloom"></span>
+              <span class="ripple"></span><span class="ripple"></span><span class="ripple"></span>
+              <svg class="orb-svg" viewBox="0 0 240 240" aria-hidden="true">
+                <defs>
+                  <linearGradient id="cometFade" gradientUnits="userSpaceOnUse" x1="9" y1="160" x2="120" y2="2">
+                    <stop offset="0%" stop-color="var(--sig)" stop-opacity="0"/>
+                    <stop offset="55%" stop-color="var(--sig)" stop-opacity=".4"/>
+                    <stop offset="100%" stop-color="var(--sig)" stop-opacity="1"/>
+                  </linearGradient>
+                </defs>
+                <circle class="ring-halo" cx="120" cy="120" r="118"/>
+                <circle class="ring-track" cx="120" cy="120" r="104"/>
+                <circle class="ring-dash" cx="120" cy="120" r="90"/>
+                <circle class="ring-prog" id="ringProg" cx="120" cy="120" r="104" stroke-dasharray="653.5" stroke-dashoffset="653.5"/>
+                <g class="comet">
+                  <path class="comet-arc" d="M9.1 160.4 A118 118 0 0 1 120 2"/>
+                  <path class="comet-head" d="M117 -5.5 L133.5 2 L117 9.5 Z"/>
+                </g>
+              </svg>
+              <span class="orb-core">
+                <span class="orb-icon" id="orbIcon"></span>
+                <span class="orb-cta" id="orbCta">Tap to connect</span>
+              </span>
+            </button>
+
+            <div class="status">
+              <span class="status-pill"><i></i><span id="statusPill">Idle</span></span>
+              <h1 class="status-head" id="statusHead">Ready when you are</h1>
+              <p class="status-line" id="statusLine">Adaptive profile &middot; four paths available</p>
+            </div>
+          </div>
+
+          <div class="home-stack">
+          <div class="attention" id="attention" hidden style="--att:var(--sig-fail)">
+            <svg class="attention-icon" id="attIcon" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.5 17.4A2 2 0 0 0 4.2 20.4h15.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+            <div>
+              <div class="attention-title" id="attTitle">No route found on this network</div>
+              <p class="attention-body" id="attBody">Every transport timed out. This network may be blocking all of them.</p>
+              <div class="attention-actions" id="attActions"></div>
+            </div>
+          </div>
+
+          <div class="probe" id="probe" hidden>
+            <div class="probe-head"><span class="label" id="probeLabel">Testing paths</span></div>
+            <div id="probeList">
+              <div class="probe-row" data-probe="h2" data-state="idle">
+                <span class="probe-code">H2</span>
+                <span><span class="probe-name">MASQUE over HTTP/2</span><span class="probe-bar"><i class="probe-fill"></i></span></span>
+                <span class="probe-val">&mdash;</span>
+              </div>
+              <div class="probe-row" data-probe="h3" data-state="idle">
+                <span class="probe-code">H3</span>
+                <span><span class="probe-name">MASQUE over HTTP/3</span><span class="probe-bar"><i class="probe-fill"></i></span></span>
+                <span class="probe-val">&mdash;</span>
+              </div>
+              <div class="probe-row" data-probe="wg" data-state="idle">
+                <span class="probe-code">WG</span>
+                <span><span class="probe-name">WireGuard + Noize</span><span class="probe-bar"><i class="probe-fill"></i></span></span>
+                <span class="probe-val">&mdash;</span>
+              </div>
+              <div class="probe-row" data-probe="wiw" data-state="idle">
+                <span class="probe-code">WiW</span>
+                <span><span class="probe-name">WARP in WARP</span><span class="probe-bar"><i class="probe-fill"></i></span></span>
+                <span class="probe-val">&mdash;</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="rail" id="rail">
+            <div class="tile">
+              <span class="tile-label">Latency</span>
+              <span class="tile-val" id="mLatency">&mdash;<small>ms</small></span>
+              <svg class="spark is-off" id="spark" viewBox="0 0 120 26" preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="var(--brand)" stop-opacity=".3"/>
+                    <stop offset="100%" stop-color="var(--brand)" stop-opacity="0"/>
+                  </linearGradient>
+                </defs>
+                <path class="spark-area" id="sparkArea" d=""/>
+                <path class="spark-line" id="sparkLine" d=""/>
+                <circle class="spark-dot" id="sparkDot" r="0" cx="0" cy="0"/>
+              </svg>
+            </div>
+            <div class="tile">
+              <span class="tile-label">Connected for</span>
+              <span class="tile-val" id="mUptime">00:00</span>
+              <span class="tile-foot" id="mSince">since 09:41</span>
+            </div>
+          </div>
+
+          <div class="facts" id="facts"></div>
+          <p class="note" id="factsNote">Change any of this under Routes and Traffic.</p>
+          </div>
+        </section>
+
+        <!-- === ROUTES === -->
+        <section class="screen" data-screen="routes">
+          <div class="appbar"><span class="crumb">Routes</span></div>
+          <h1 class="page-title">How it connects</h1>
+          <p class="page-sub">Pick a profile and you're done. Everything below is optional.</p>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Profile</div>
+              <p class="card-sub">Describes your network. WhiteAesther picks the rest to match.</p>
+            </div>
+            <div class="choice-grid" data-cols="2" id="profileGrid">
+              <button class="choice" type="button" aria-pressed="true" data-profile="Adaptive" data-transport="h2">
+                <svg class="choice-icon" viewBox="0 0 24 24"><path d="m12 3 1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9L12 3Z"/><path d="M18.5 15.5 19.4 18l2.5.9-2.5.9-.9 2.5-.9-2.5-2.5-.9 2.5-.9.9-2.5Z"/></svg>
+                <span class="choice-check"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span>
+                <span class="choice-name">Adaptive</span>
+                <span class="choice-desc">Works on most networks. Start here.</span>
+                <span class="choice-tag">Recommended</span>
+              </button>
+              <button class="choice" type="button" aria-pressed="false" data-profile="Lossy mobile" data-transport="wg">
+                <svg class="choice-icon" viewBox="0 0 24 24"><path d="M3 12h3l2.5-6 4 13 3-9 2 2h3.5"/></svg>
+                <span class="choice-check"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span>
+                <span class="choice-name">Patchy signal</span>
+                <span class="choice-desc">For mobile data that keeps dropping.</span>
+              </button>
+              <button class="choice" type="button" aria-pressed="false" data-profile="UDP restricted" data-transport="h2">
+                <svg class="choice-icon" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                <span class="choice-check"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span>
+                <span class="choice-name">Strict network</span>
+                <span class="choice-desc">For office or campus Wi-Fi that blocks a lot.</span>
+              </button>
+              <button class="choice" type="button" aria-pressed="false" data-profile="Manual" data-transport="h3">
+                <svg class="choice-icon" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg>
+                <span class="choice-check"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span>
+                <span class="choice-name">Manual</span>
+                <span class="choice-desc">You choose every setting yourself.</span>
+              </button>
+            </div>
+          </div>
+
+          <button class="row-card" type="button" data-goto="endpoint" style="margin-top:12px">
+            <span class="row-icon" style="color:var(--cyan);border-color:color-mix(in srgb,var(--cyan) 28%,var(--line));background:color-mix(in srgb,var(--cyan) 8%,var(--ink-3))">
+              <svg viewBox="0 0 24 24"><path d="M12 21s7-5.4 7-11a7 7 0 1 0-14 0c0 5.6 7 11 7 11Z"/><circle cx="12" cy="10" r="2.6"/></svg>
+            </span>
+            <span class="row-body">
+              <span class="row-title">Endpoint</span>
+              <span class="row-sub" id="routesEndpointSub">Chosen automatically</span>
+            </span>
+            <svg class="row-chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+          </button>
+
+          <div class="card">
+            <div class="adv" data-adv data-open="false">
+              <button class="adv-trigger" type="button">
+                <svg class="adv-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+                Advanced
+                <span class="adv-badge">Transport &middot; Discovery</span>
+              </button>
+              <div class="adv-panel"><div>
+                <div class="card-head" style="padding-top:6px">
+                  <div class="card-title">Preferred transport</div>
+                  <p class="card-sub">Tried first on every connect. The profile already picks a sensible one.</p>
+                </div>
+                <div class="opt-list" id="optList">
+                  <button class="opt" type="button" aria-pressed="true" data-opt="h2">
+                    <span class="opt-code">H2</span>
+                    <span class="row-body"><span class="row-title">MASQUE over HTTP/2</span><span class="row-sub">Reliable where UDP is blocked</span></span>
+                    <span class="opt-radio"></span>
+                  </button>
+                  <button class="opt" type="button" aria-pressed="false" data-opt="h3">
+                    <span class="opt-code">H3</span>
+                    <span class="row-body"><span class="row-title">MASQUE over HTTP/3</span><span class="row-sub">Faster where QUIC is allowed</span></span>
+                    <span class="opt-radio"></span>
+                  </button>
+                  <button class="opt" type="button" aria-pressed="false" data-opt="wg">
+                    <span class="opt-code">WG</span>
+                    <span class="row-body"><span class="row-title">WireGuard + Noize</span><span class="row-sub">Best on stable UDP networks</span></span>
+                    <span class="opt-radio"></span>
+                  </button>
+                  <button class="opt" type="button" aria-pressed="false" data-opt="wiw">
+                    <span class="opt-code">WiW</span>
+                    <span class="row-body"><span class="row-title">WARP in WARP</span><span class="row-sub">Nested tunnel, slower but stubborn</span></span>
+                    <span class="opt-radio"></span>
+                  </button>
+                </div>
+                <div class="card-head" style="padding-top:4px">
+                  <div class="card-title">Discovery depth</div>
+                  <p class="card-sub">How hard to search for endpoints. Deeper takes longer and uses more data.</p>
+                </div>
+                <div class="opt-list" id="scanList">
+                  <button class="opt" type="button" aria-pressed="false" data-scan="turbo">
+                    <span class="opt-code">1</span>
+                    <span class="row-body"><span class="row-title">Turbo</span><span class="row-sub">Fastest, fewest endpoints tested</span></span>
+                    <span class="opt-radio"></span>
+                  </button>
+                  <button class="opt" type="button" aria-pressed="true" data-scan="balanced">
+                    <span class="opt-code">2</span>
+                    <span class="row-body"><span class="row-title">Balanced</span><span class="row-sub">Default. Good result in a few seconds</span></span>
+                    <span class="opt-radio"></span>
+                  </button>
+                  <button class="opt" type="button" aria-pressed="false" data-scan="thorough">
+                    <span class="opt-code">3</span>
+                    <span class="row-body"><span class="row-title">Thorough</span><span class="row-sub">Tests more endpoints before choosing</span></span>
+                    <span class="opt-radio"></span>
+                  </button>
+                  <button class="opt" type="button" aria-pressed="false" data-scan="stealth">
+                    <span class="opt-code">4</span>
+                    <span class="row-body"><span class="row-title">Stealth</span><span class="row-sub">Quieter probing on watchful networks</span></span>
+                    <span class="opt-radio"></span>
+                  </button>
+                  <button class="opt" type="button" aria-pressed="false" data-scan="ironclad">
+                    <span class="opt-code">5</span>
+                    <span class="row-body"><span class="row-title">Ironclad</span><span class="row-sub">Slowest and most stubborn</span></span>
+                    <span class="opt-radio"></span>
+                  </button>
+                </div>
+              </div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- === ENDPOINT (under Routes) === -->
+        <section class="screen" data-screen="endpoint">
+          <div class="appbar">
+            <button class="back-btn" type="button" data-goto="routes" aria-label="Back to Routes">
+              <svg viewBox="0 0 24 24"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
+            </button>
+            <span class="crumb">Routes &middot; Endpoint</span>
+          </div>
+          <h1 class="page-title">Where it connects to</h1>
+          <p class="page-sub">Leave this automatic unless someone gave you an address to use.</p>
+
+          <div class="card" style="margin-top:0">
+            <div style="padding:11px">
+              <div class="seg-group" data-cols="2" role="group" aria-label="Endpoint mode">
+                <button class="seg-item" type="button" data-mode="auto" aria-pressed="true">Automatic</button>
+                <button class="seg-item" type="button" data-mode="custom" aria-pressed="false">Specific address</button>
+              </div>
+            </div>
+
+            <div class="reveal" id="customReveal" data-open="false"><div>
+              <div class="field" id="epField" data-valid="">
+                <label class="field-label" for="epInput">Address</label>
+                <input class="field-input" id="epInput" type="text" inputmode="url" spellcheck="false"
+                       autocomplete="off" placeholder="162.159.197.3:443" maxlength="96">
+                <p class="field-msg" id="epMsg"></p>
+              </div>
+              <div class="setting" style="margin-top:14px">
+                <span class="row-body">
+                  <span class="row-title">Fall back automatically</span>
+                  <span class="row-sub">If this address stops working, search for another instead of failing.</span>
+                </span>
+                <button class="switch" type="button" id="fallbackSwitch" role="switch" aria-checked="true" aria-label="Fall back automatically"></button>
+              </div>
+            </div></div>
+          </div>
+
+          <div class="btn-row">
+            <button class="btn-outline" type="button" id="testBtn" disabled><span id="testLabel">Test this one</span></button>
+            <button class="btn" type="button" id="scanBtn"><span id="scanLabel">Find endpoints</span></button>
+          </div>
+
+          <div class="scan" id="scanPanel" data-busy="false">
+            <div class="scan-head">
+              <span class="label">Endpoints that worked</span>
+              <span class="scan-status" id="scanStatus">Not searched yet</span>
+            </div>
+            <div id="results"></div>
+          </div>
+
+          <p class="note">Only endpoints that finish the authenticated MASQUE check are listed. Tapping one pins it and turns fallback on.</p>
+        </section>
+
+        <!-- === TRAFFIC === -->
+        <section class="screen" data-screen="traffic">
+          <div class="appbar"><span class="crumb">Traffic</span></div>
+          <h1 class="page-title">What is protected</h1>
+          <p class="page-sub">Choose how much of the device is covered. The rest has safe defaults.</p>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Coverage</div>
+              <p class="card-sub">Android will ask permission the first time you pick whole-device.</p>
+            </div>
+            <div class="choice-grid" data-cols="2" id="modeGrid">
+              <button class="choice" type="button" aria-pressed="true" data-mode="tun">
+                <svg class="choice-icon" viewBox="0 0 24 24"><path d="M12 3 5 6v6c0 4.4 3 8.2 7 9 4-.8 7-4.6 7-9V6l-7-3Z"/></svg>
+                <span class="choice-check"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span>
+                <span class="choice-name">Whole device</span>
+                <span class="choice-desc">Every app is covered. What most people want.</span>
+                <span class="choice-tag">Recommended</span>
+              </button>
+              <button class="choice" type="button" aria-pressed="false" data-mode="proxy">
+                <svg class="choice-icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
+                <span class="choice-check"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span>
+                <span class="choice-name">Proxy only</span>
+                <span class="choice-desc">Just apps you point at the local proxy.</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Addresses</div>
+              <p class="card-sub">Turn off IPv6 if a network handles it badly.</p>
+            </div>
+            <div style="padding:11px 11px 14px">
+              <div class="seg-group" data-cols="2" id="familyGroup" role="group" aria-label="Address family">
+                <button class="seg-item" type="button" data-family="both" aria-pressed="true">IPv4 + IPv6</button>
+                <button class="seg-item" type="button" data-family="v4" aria-pressed="false">IPv4 only</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="adv" data-adv data-open="false" style="border-top:0">
+              <button class="adv-trigger" type="button">
+                <svg class="adv-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+                Advanced
+                <span class="adv-badge">DNS &middot; Obfuscation &middot; Port</span>
+              </button>
+              <div class="adv-panel"><div>
+                <div class="setting">
+                  <span class="row-body">
+                    <span class="row-title">DNS resolvers</span>
+                    <span class="row-sub">Who answers name lookups inside the tunnel.</span>
+                  </span>
+                  <span class="setting-value">1.1.1.1</span>
+                </div>
+                <div class="setting">
+                  <span class="row-body">
+                    <span class="row-title">Obfuscation</span>
+                    <span class="row-sub">Makes tunnel traffic harder to fingerprint. Costs a little speed.</span>
+                  </span>
+                  <span class="setting-value">Firewall</span>
+                </div>
+                <div class="setting">
+                  <span class="row-body">
+                    <span class="row-title">Local proxy port</span>
+                    <span class="row-sub">Where proxy-only mode listens on this device.</span>
+                  </span>
+                  <span class="setting-value">1819</span>
+                </div>
+                <div class="setting">
+                  <span class="row-body">
+                    <span class="row-title">Check the connection works</span>
+                    <span class="row-sub">Sends one test request after connecting. Leave this on.</span>
+                  </span>
+                  <button class="switch" type="button" role="switch" aria-checked="true" data-toggle aria-label="Check the connection works"></button>
+                </div>
+              </div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- === SETTINGS === -->
+        <section class="screen" data-screen="settings">
+          <div class="appbar"><span class="crumb">Settings</span></div>
+          <h1 class="page-title">Settings</h1>
+          <p class="page-sub">The app itself &mdash; nothing here changes how you connect.</p>
+
+          <div class="card" style="margin-top:0">
+            <div class="card-head">
+              <div class="card-title">Appearance</div>
+              <p class="card-sub">System follows your phone's light or dark setting.</p>
+            </div>
+            <div style="padding:11px 11px 14px">
+              <div class="seg-group" data-cols="3" id="themeGroup" role="group" aria-label="Theme">
+                <button class="seg-item" type="button" data-theme="system" aria-pressed="true">System</button>
+                <button class="seg-item" type="button" data-theme="light" aria-pressed="false">Light</button>
+                <button class="seg-item" type="button" data-theme="dark" aria-pressed="false">Dark</button>
+              </div>
+            </div>
+            <div class="setting">
+              <span class="row-body">
+                <span class="row-title">Show advanced controls</span>
+                <span class="row-sub">Opens every Advanced section by default across the app.</span>
+              </span>
+              <button class="switch" type="button" role="switch" aria-checked="false" id="advSwitch" aria-label="Show advanced controls"></button>
+            </div>
+          </div>
+
+          <div class="list" style="margin-top:12px">
+            <button class="row-card" type="button">
+              <span class="row-icon"><svg viewBox="0 0 24 24"><circle cx="8.5" cy="8.5" r="4"/><path d="m11.5 11.5 8 8M17 17l2-2M14.5 14.5l2-2"/></svg></span>
+              <span class="row-body"><span class="row-title">Identity &amp; access</span><span class="row-sub">Sign in if your organization gave you a team</span></span>
+              <svg class="row-chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+            <button class="row-card" type="button" data-goto="diagnostics">
+              <span class="row-icon"><svg viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg></span>
+              <span class="row-body"><span class="row-title">Diagnostics &amp; logs</span><span class="row-sub">See what happened, and send a report to the developer</span></span>
+              <svg class="row-chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+            <button class="row-card" type="button">
+              <span class="row-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></span>
+              <span class="row-body"><span class="row-title">About WhiteAesther</span><span class="row-sub">Version, engine build, and licenses</span></span>
+              <svg class="row-chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+          </div>
+        </section>
+
+        <!-- === DIAGNOSTICS === -->
+        <section class="screen" data-screen="diagnostics">
+          <div class="appbar">
+            <button class="back-btn" type="button" data-goto="settings" aria-label="Back to Settings">
+              <svg viewBox="0 0 24 24"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
+            </button>
+            <span class="crumb">Settings &middot; Diagnostics</span>
+          </div>
+          <h1 class="page-title">Diagnostics</h1>
+          <p class="page-sub">If something is broken, send this to the developer &mdash; it's how fixes get written.</p>
+
+          <div class="card" style="margin-top:0">
+            <div class="card-head">
+              <div class="card-title">Detail level</div>
+              <p class="card-sub">Turn Verbose on, reproduce the problem, then send the report.</p>
+            </div>
+            <div style="padding:11px 11px 14px">
+              <div class="seg-group" data-cols="3" id="logLevelGroup" role="group" aria-label="Log detail">
+                <button class="seg-item" type="button" data-loglevel="basic" aria-pressed="true">Basic</button>
+                <button class="seg-item" type="button" data-loglevel="verbose" aria-pressed="false">Verbose</button>
+                <button class="seg-item" type="button" data-loglevel="trace" aria-pressed="false">Trace</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="log">
+            <div class="scan-head">
+              <span class="label">Activity</span>
+              <span class="scan-status" id="logCount">7 events</span>
+            </div>
+            <div class="log-scroll" id="logScroll"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Send to the developer</div>
+              <p class="card-sub">Nothing leaves your phone until you tap Send. Choose what to include.</p>
+            </div>
+            <div id="includeList">
+              <button class="check" type="button" aria-pressed="true" data-locked="true" data-inc="app">
+                <span class="check-box"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span>
+                <span><span class="check-title">App and engine version</span><span class="check-sub">Always included &mdash; a report without it can't be read.</span></span>
+              </button>
+              <button class="check" type="button" aria-pressed="true" data-inc="device">
+                <span class="check-box"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span>
+                <span><span class="check-title">Phone model and Android version</span><span class="check-sub">Pixel 8, Android 15</span></span>
+              </button>
+              <button class="check" type="button" aria-pressed="true" data-inc="events">
+                <span class="check-box"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span>
+                <span><span class="check-title">Connection log</span><span class="check-sub">The events listed above.</span></span>
+              </button>
+              <button class="check" type="button" aria-pressed="false" data-inc="settings">
+                <span class="check-box"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span>
+                <span><span class="check-title">Your settings</span><span class="check-sub">Profile, transport, coverage and DNS choices.</span></span>
+              </button>
+            </div>
+            <div class="setting">
+              <span class="row-body">
+                <span class="row-title">Hide IP addresses and Wi-Fi names</span>
+                <span class="row-sub">Replaces them with placeholders. Most bugs can still be diagnosed.</span>
+              </span>
+              <button class="switch" type="button" role="switch" aria-checked="true" id="redactSwitch" aria-label="Hide IP addresses and Wi-Fi names"></button>
+            </div>
+            <div class="scan-head" style="padding-bottom:0"><span class="label">Exactly what will be sent</span></div>
+            <div class="preview-box" id="reportPreview"></div>
+          </div>
+
+          <div class="btn-row">
+            <button class="btn-outline" type="button" id="copyReport">
+              <svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+              Copy
+            </button>
+            <button class="btn" type="button" id="sendReport">
+              <svg viewBox="0 0 24 24"><path d="M21 3 10.5 13.5M21 3l-6.8 18-3.7-7.5L3 9.8 21 3Z"/></svg>
+              Send
+            </button>
+          </div>
+
+          <div class="privacy">
+            <svg viewBox="0 0 24 24"><path d="M12 3 5 6v6c0 4.4 3 8.2 7 9 4-.8 7-4.6 7-9V6l-7-3Z"/><path d="M12 11v3.5"/><path d="M12 8.5h.01"/></svg>
+            <span>Reports are used only to fix bugs. They are not linked to your account and are deleted after 90 days.</span>
+          </div>
+        </section>
+      </div>
+
+      <div class="toast" id="toast"><i></i><span id="toastText">Connected</span></div>
+
+      <nav class="tabbar" id="tabbar" aria-label="Primary">
+        <span class="tab-ind" id="tabInd"></span>
+        <!-- All four sit on the same 4-20 box so their optical mass matches. -->
+        <button class="tab" type="button" data-goto="home" aria-selected="true">
+          <svg viewBox="0 0 24 24"><path d="M3.5 10.4 12 3.6l8.5 6.8V19a1.6 1.6 0 0 1-1.6 1.6H5.1A1.6 1.6 0 0 1 3.5 19v-8.6Z"/><path d="M9.6 20.6v-6h4.8v6"/></svg>
+          <span>Home</span>
+        </button>
+        <button class="tab" type="button" data-goto="routes" aria-selected="false">
+          <svg viewBox="0 0 24 24"><circle cx="6" cy="5.8" r="2.4"/><circle cx="18" cy="12" r="2.4"/><circle cx="6" cy="18.2" r="2.4"/><path d="M8.1 6.9 15.9 10.9M15.9 13.1 8.1 17.1"/></svg>
+          <span>Routes</span>
+        </button>
+        <button class="tab" type="button" data-goto="traffic" aria-selected="false">
+          <svg viewBox="0 0 24 24"><path d="M8.5 20.4V4.2M8.5 4.2 4.9 7.8M8.5 4.2l3.6 3.6M15.5 3.6v16.2M15.5 19.8l3.6-3.6M15.5 19.8l-3.6-3.6"/></svg>
+          <span>Traffic</span>
+        </button>
+        <button class="tab" type="button" data-goto="settings" aria-selected="false">
+          <svg viewBox="0 0 24 24"><path d="M4 7.6h7.4M17 7.6h3M4 16.4h3M12.6 16.4h7.4"/><circle cx="14.2" cy="7.6" r="2.4"/><circle cx="9.8" cy="16.4" r="2.4"/></svg>
+          <span>Settings</span>
+        </button>
+      </nav>
+    </div>
+
+    <div class="controls" role="group" aria-label="Preview state">
+      <span class="controls-label">State</span>
+      <button class="seg" type="button" data-state="idle" aria-pressed="true" style="--c:var(--sig-idle)">Idle</button>
+      <button class="seg" type="button" data-state="work" aria-pressed="false" style="--c:var(--sig-work)">Connecting</button>
+      <button class="seg" type="button" data-state="live" aria-pressed="false" style="--c:var(--sig-live)">Connected</button>
+      <button class="seg" type="button" data-state="fail" aria-pressed="false" style="--c:var(--sig-fail)">Failed</button>
+    </div>
+
+    <div class="controls" role="group" aria-label="Typeface">
+      <span class="controls-label">Type</span>
+      <button class="seg" type="button" data-face="inter" aria-pressed="true">Inter</button>
+      <button class="seg" type="button" data-face="jakarta" aria-pressed="false">Jakarta</button>
+      <button class="seg" type="button" data-face="geist" aria-pressed="false">Geist</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict"
+
+  const $ = (id) => document.getElementById(id)
+  const device   = document.querySelector(".device")
+  const viewport = $("viewport")
+  const orb      = $("orb")
+  const orbIcon  = $("orbIcon")
+  const orbCta   = $("orbCta")
+  const ring     = $("ringProg")
+  const pill     = $("statusPill")
+  const head     = $("statusHead")
+  const line     = $("statusLine")
+  const toast    = $("toast")
+  const tabInd   = $("tabInd")
+
+  const CIRC = 2 * Math.PI * 104
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches
+
+  const ICONS = {
+    idle:'<svg viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M6.5 6.8a8 8 0 1 0 11 0"/></svg>',
+    work:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.4"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="7.5" opacity=".45"/></svg>',
+    live:'<svg viewBox="0 0 24 24"><path d="M12 3 5 6v6c0 4.4 3 8.2 7 9 4-.8 7-4.6 7-9V6l-7-3Z"/><path d="m9.4 12.1 1.9 1.9 3.5-3.7"/></svg>',
+    fail:'<svg viewBox="0 0 24 24"><path d="M12 3 5 6v6c0 4.4 3 8.2 7 9 4-.8 7-4.6 7-9V6l-7-3Z"/><path d="M12 8.5v4M12 16h.01"/></svg>',
+  }
+  const COPY = {
+    idle:{ pill:"Not connected", cta:"Tap to connect", head:"Ready when you are", line:"Adaptive profile \u00b7 four paths available" },
+    work:{ pill:"Connecting",    cta:"Tap to cancel",  head:"Finding a working route", line:"Starting\u2026" },
+    live:{ pill:"Connected",     cta:"Tap to stop",    head:"You're connected",   line:"Going through MASQUE over HTTP/2" },
+    fail:{ pill:"No route",      cta:"Tap to retry",   head:"No route came back", line:"All four transports timed out on this network" },
+  }
+  const PROBES = [
+    { id:"h2",  rtt:"42 ms",   fill:100, ok:true  },
+    { id:"h3",  rtt:"blocked", fill: 22, ok:false },
+    { id:"wg",  rtt:"88 ms",   fill: 62, ok:true  },
+    { id:"wiw", rtt:"140 ms",  fill: 38, ok:true  },
+  ]
+
+  let state = "idle", timers = [], uptimeT = null, sparkT = null, seconds = 0, series = []
+
+  const clear = () => { timers.forEach(clearTimeout); timers = [] }
+  const after = (ms, fn) => timers.push(setTimeout(fn, ms))
+
+  function setRing(pct){ ring.style.strokeDashoffset = String(CIRC * (1 - pct/100)); ring.style.opacity = pct === 0 ? "0" : "1" }
+
+  function showToast(text){
+    $("toastText").textContent = text
+    toast.classList.add("is-on")
+    setTimeout(() => toast.classList.remove("is-on"), 2600)
+  }
+
+  /* -- Theme: app setting is system | light | dark ------------------------- */
+  let themePref = "system"
+
+  function pageTheme(){
+    const stamped = document.documentElement.dataset.theme
+    if (stamped === "light" || stamped === "dark") return stamped
+    return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+  }
+  function applyTheme(){
+    const page = pageTheme()
+    document.documentElement.dataset.ui = page
+    device.dataset.ui = themePref === "system" ? page : themePref
+    document.querySelectorAll("[data-theme]").forEach((b) =>
+      b.setAttribute("aria-pressed", String(b.dataset.theme === themePref)))
+  }
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme)
+  new MutationObserver(applyTheme).observe(document.documentElement, { attributeFilter:["data-theme"] })
+  document.querySelectorAll("[data-theme]").forEach((b) =>
+    b.addEventListener("click", () => { themePref = b.dataset.theme; applyTheme() }))
+
+  /* -- Typeface comparison (review chrome only) --------------------------- */
+  document.querySelectorAll("[data-face]").forEach((b) =>
+    b.addEventListener("click", () => {
+      document.documentElement.dataset.face = b.dataset.face
+      document.querySelectorAll("[data-face]").forEach((o) =>
+        o.setAttribute("aria-pressed", String(o === b)))
+    }))
+
+  /* -- Latency sparkline -------------------------------------------------- */
+  function drawSpark(active){
+    const svg = $("spark"), lineEl = $("sparkLine"), areaEl = $("sparkArea"), dotEl = $("sparkDot")
+    svg.classList.toggle("is-off", !active)
+    if (!series.length){ lineEl.setAttribute("d",""); areaEl.setAttribute("d",""); dotEl.setAttribute("r","0"); return }
+    const min = Math.min(...series) - 6, max = Math.max(...series) + 6
+    const pts = series.map((v,i) => [ (i/(series.length-1||1))*120, 24 - ((v-min)/(max-min||1))*22 ])
+    const d = pts.map((p,i) => `${i?"L":"M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ")
+    lineEl.setAttribute("d", d)
+    areaEl.setAttribute("d", `${d} L120 26 L0 26 Z`)
+    const last = pts[pts.length-1]
+    dotEl.setAttribute("r","2"); dotEl.setAttribute("cx", last[0].toFixed(1)); dotEl.setAttribute("cy", last[1].toFixed(1))
+  }
+  function stopClocks(){ clearInterval(uptimeT); uptimeT = null; clearInterval(sparkT); sparkT = null }
+  function startClocks(){
+    seconds = 0
+    series = Array.from({length:24}, () => 38 + Math.random()*10)
+    drawSpark(true)
+    $("mLatency").innerHTML = `${Math.round(series.at(-1))}<small>ms</small>`
+    $("mUptime").textContent = "00:00"
+    if (reduced) return
+    uptimeT = setInterval(() => {
+      seconds += 1
+      $("mUptime").textContent =
+        `${String(Math.floor(seconds/60)).padStart(2,"0")}:${String(seconds%60).padStart(2,"0")}`
+    }, 1000)
+    sparkT = setInterval(() => {
+      const next = Math.min(72, Math.max(31, series.at(-1) + (Math.random()-0.5)*11))
+      series = [...series.slice(1), next]
+      drawSpark(true)
+      $("mLatency").innerHTML = `${Math.round(next)}<small>ms</small>`
+    }, 1400)
+  }
+
+  /* -- Home: things the user must acknowledge ----------------------------- */
+  function renderAttention(){
+    const box = $("attention")
+    const pinned = ep.mode === "custom" ? normalizeEndpoint(ep.address) : null
+    let item = null
+
+    if (state === "fail") {
+      item = {
+        tone:"var(--sig-fail)",
+        title:"No route found on this network",
+        body:"Every transport timed out. This network may be blocking all of them.",
+        actions:[["Try Strict network", () => { pickProfile("UDP restricted"); goTo("routes") }],
+                 ["Pin an endpoint", () => goTo("endpoint")]],
+      }
+    } else if (ep.mode === "custom" && !ep.fallback) {
+      item = {
+        tone:"var(--sig-work)",
+        title:"Fallback is off",
+        body:"WhiteAesther will only use the address you pinned. If it stops working, the connection fails instead of finding another.",
+        actions:[["Turn fallback on", () => { ep.fallback = true; renderEndpoint(); renderAttention() }]],
+      }
+    } else if (ep.mode === "custom" && !pinned) {
+      item = {
+        tone:"var(--sig-work)",
+        title:"Endpoint address is incomplete",
+        body:"You chose a specific address but it isn't a valid IP and port yet.",
+        actions:[["Finish setting it", () => goTo("endpoint")]],
+      }
+    }
+
+    box.hidden = !item
+    if (!item) return
+    box.style.setProperty("--att", item.tone)
+    $("attTitle").textContent = item.title
+    $("attBody").textContent = item.body
+    const actions = $("attActions")
+    actions.innerHTML = ""
+    item.actions.forEach(([label, fn]) => {
+      const b = document.createElement("button")
+      b.type = "button"; b.className = "chip-btn"; b.textContent = label
+      b.addEventListener("click", fn)
+      actions.appendChild(b)
+    })
+  }
+
+  /* Read-only. Before connecting it says what will be used; once connected it
+     says what is being used. Never a control -- those live in Routes/Traffic. */
+  function renderFacts(){
+    const pinned = ep.mode === "custom" ? normalizeEndpoint(ep.address) : null
+    const live = state === "live"
+    const rows = live
+      ? [["Transport","MASQUE over HTTP/2",false],
+         ["Endpoint", pinned ?? "162.159.192.7:2408", true],
+         ["Addresses", family === "both" ? "IPv4 + IPv6" : "IPv4 only", false],
+         ["DNS","1.1.1.1, 1.0.0.1",true],
+         ["Local proxy","127.0.0.1:1819",true]]
+      : [["Profile", profileName, false],
+         ["Endpoint", pinned ?? "Chosen automatically", Boolean(pinned)],
+         ["Coverage", coverage === "tun" ? "Whole device" : "Proxy only", false]]
+
+    $("facts").innerHTML = rows.map(([k,v,mono]) =>
+      `<div class="fact"><span class="fact-k">${k}</span><span class="fact-v"${mono ? ' data-mono' : ''}>${v}</span></div>`).join("")
+    $("factsNote").textContent = live
+      ? "Live values. Change them under Routes and Traffic."
+      : "What will be used when you connect. Change it under Routes and Traffic."
+    $("rail").hidden = !live
+  }
+
+  /* -- Connection state machine ------------------------------------------- */
+  function apply(next, opts = {}){
+    clear()
+    state = next
+    device.dataset.conn = next
+    device.style.setProperty("--sig", `var(--sig-${next === "idle" ? "idle" : next === "work" ? "work" : next === "live" ? "live" : "fail"})`)
+    orbIcon.innerHTML = ICONS[next]
+    orbCta.textContent = COPY[next].cta
+    pill.textContent = COPY[next].pill
+    line.textContent = COPY[next].line
+    head.textContent = COPY[next].head
+    $("probe").hidden = next === "idle"
+    $("probeLabel").textContent = next === "work" ? "Testing paths"
+      : next === "live" ? "Path chosen" : "Paths tested"
+    document.querySelectorAll(".seg[data-state]").forEach((b) =>
+      b.setAttribute("aria-pressed", String(b.dataset.state === next)))
+
+    if (next === "idle"){
+      stopClocks(); resetProbes(); setRing(0); series = []; drawSpark(false)
+      $("mLatency").innerHTML = "\u2014<small>ms</small>"; $("mUptime").textContent = "00:00"
+    } else if (next === "work"){
+      stopClocks(); resetProbes(); setRing(12)
+      $("mLatency").innerHTML = "\u2014<small>ms</small>"; drawSpark(false)
+      if (opts.snapshot){
+        markProbe(PROBES[0]); markProbe(PROBES[1]); setRing(52)
+        line.textContent = "Testing WireGuard + Noize\u2026"
+      } else runRace()
+    } else if (next === "live"){
+      resetProbes(); PROBES.forEach(markProbe); winner("h2"); setRing(100); startClocks()
+    } else {
+      stopClocks(); resetProbes()
+      PROBES.forEach((p) => markProbe({ ...p, ok:false, rtt:"timeout", fill:18 }))
+      setRing(68); $("mLatency").innerHTML = "\u2014<small>ms</small>"; drawSpark(false)
+    }
+    renderAttention(); renderFacts()
+  }
+
+  function resetProbes(){
+    device.querySelectorAll(".probe-row").forEach((row) => {
+      row.dataset.state = "idle"
+      row.querySelector(".probe-fill").style.width = "0"
+      row.querySelector(".probe-val").textContent = "\u2014"
+    })
+  }
+  function markProbe(p){
+    const row = device.querySelector(`.probe-row[data-probe="${p.id}"]`)
+    row.dataset.state = p.ok ? "done" : "fail"
+    row.querySelector(".probe-fill").style.width = `${p.fill}%`
+    row.querySelector(".probe-val").textContent = p.rtt
+  }
+  function winner(id){
+    const row = device.querySelector(`.probe-row[data-probe="${id}"]`)
+    row.dataset.state = "win"
+    row.querySelector(".probe-val").textContent = "42 ms"
+  }
+  function runRace(){
+    const steps = [
+      [  60,"Testing MASQUE over HTTP/2\u2026",       18,"h2",null],
+      [ 550,"MASQUE over HTTP/2 answered in 42 ms",34,null,PROBES[0]],
+      [ 700,"Testing MASQUE over HTTP/3\u2026",       40,"h3",null],
+      [1150,"MASQUE over HTTP/3 is blocked here",52,null,PROBES[1]],
+      [1300,"Testing WireGuard + Noize\u2026",        58,"wg",null],
+      [1750,"WireGuard + Noize answered in 88 ms",70,null,PROBES[2]],
+      [1900,"Testing WARP in WARP\u2026",             76,"wiw",null],
+      [2350,"WARP in WARP answered in 140 ms",   88,null,PROBES[3]],
+      [2600,"Checking the connection works\u2026",    94,null,null],
+    ]
+    steps.forEach(([at, text, pct, testing, probe]) => after(at, () => {
+      line.textContent = text
+      setRing(pct)
+      if (probe) markProbe(probe)
+      if (testing){
+        const row = device.querySelector(`.probe-row[data-probe="${testing}"]`)
+        row.dataset.state = "test"
+        row.querySelector(".probe-val").textContent = "testing"
+      }
+    }))
+    after(3050, () => { apply("live"); showToast("Connected \u00b7 MASQUE over HTTP/2") })
+  }
+
+  orb.addEventListener("click", () => {
+    if (state === "idle" || state === "fail") apply("work")
+    else if (state === "work"){ apply("idle"); showToast("Stopped") }
+    else { apply("idle"); showToast("Disconnected") }
+  })
+  document.querySelectorAll(".seg[data-state]").forEach((b) =>
+    b.addEventListener("click", () => apply(b.dataset.state, { snapshot:true })))
+
+  /* -- Navigation --------------------------------------------------------- */
+  const TAB_OF = { endpoint:"routes", diagnostics:"settings" }
+  function goTo(name){
+    device.dataset.screen = name
+    device.querySelectorAll(".screen").forEach((s) => s.classList.toggle("is-on", s.dataset.screen === name))
+    const tab = TAB_OF[name] ?? name
+    device.querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.goto === tab)))
+    moveIndicator()
+    viewport.scrollTop = 0
+  }
+  /* Measured off the rendered boxes, not offsetLeft/offsetWidth, so the pill
+     lands on the tab's exact centre even at fractional column widths. */
+  function moveIndicator(){
+    const active = device.querySelector('.tab[aria-selected="true"]')
+    if (!active) return
+    const parent = tabInd.parentElement
+    const bar = parent.getBoundingClientRect()
+    const cell = active.getBoundingClientRect()
+    /* top:0 is the padding box, which sits inside the bar's top border. */
+    const cs = getComputedStyle(parent)
+    const bx = parseFloat(cs.borderLeftWidth) || 0
+    const by = parseFloat(cs.borderTopWidth) || 0
+    const inset = 4
+    tabInd.style.width = `${cell.width - inset * 2}px`
+    tabInd.style.height = `${cell.height}px`
+    tabInd.style.transform =
+      `translate(${cell.left - bar.left - bx + inset}px, ${cell.top - bar.top - by}px)`
+  }
+  document.querySelectorAll("[data-goto]").forEach((el) =>
+    el.addEventListener("click", () => goTo(el.dataset.goto)))
+
+  /* -- Advanced disclosure ------------------------------------------------ */
+  document.querySelectorAll("[data-adv] .adv-trigger").forEach((t) =>
+    t.addEventListener("click", () => {
+      const adv = t.closest("[data-adv]")
+      adv.dataset.open = adv.dataset.open === "true" ? "false" : "true"
+    }))
+  function setAdvanced(on){
+    $("advSwitch").setAttribute("aria-checked", String(on))
+    document.querySelectorAll("[data-adv]").forEach((a) => { a.dataset.open = String(on) })
+  }
+  $("advSwitch").addEventListener("click", () => {
+    const on = $("advSwitch").getAttribute("aria-checked") !== "true"
+    setAdvanced(on)
+    showToast(on ? "Advanced controls shown everywhere" : "Advanced controls hidden")
+  })
+  document.querySelectorAll("[data-toggle]").forEach((sw) =>
+    sw.addEventListener("click", () =>
+      sw.setAttribute("aria-checked", String(sw.getAttribute("aria-checked") !== "true"))))
+
+  /* -- Routes ------------------------------------------------------------- */
+  let profileName = "Adaptive"
+
+  function pickProfile(name){
+    document.querySelectorAll("[data-profile]").forEach((c) => {
+      const on = c.dataset.profile === name
+      c.setAttribute("aria-pressed", String(on))
+      if (on){
+        profileName = c.querySelector(".choice-name").textContent
+        document.querySelectorAll("[data-opt]").forEach((o) =>
+          o.setAttribute("aria-pressed", String(o.dataset.opt === c.dataset.transport)))
+      }
+    })
+    renderFacts()
+  }
+  document.querySelectorAll("[data-profile]").forEach((c) =>
+    c.addEventListener("click", () => { pickProfile(c.dataset.profile); showToast(`${profileName} selected`) }))
+
+  const single = (selector) => document.querySelectorAll(selector).forEach((b) =>
+    b.addEventListener("click", () => document.querySelectorAll(selector).forEach((o) =>
+      o.setAttribute("aria-pressed", String(o === b)))))
+  single("[data-opt]"); single("[data-scan]")
+
+  /* -- Traffic ------------------------------------------------------------ */
+  let family = "both"
+  let coverage = "tun"
+
+  document.querySelectorAll(".choice[data-mode]").forEach((b) =>
+    b.addEventListener("click", () => {
+      coverage = b.dataset.mode
+      document.querySelectorAll(".choice[data-mode]").forEach((o) => o.setAttribute("aria-pressed", String(o === b)))
+      renderFacts()
+    }))
+  document.querySelectorAll("[data-family]").forEach((b) =>
+    b.addEventListener("click", () => {
+      family = b.dataset.family
+      document.querySelectorAll("[data-family]").forEach((o) => o.setAttribute("aria-pressed", String(o === b)))
+      renderFacts()
+    }))
+
+  /* -- Endpoint ---------------------------------------------------------
+     Mirrors AppSettings.EndpointMode (automatic / custom-first / custom-only)
+     and EndpointAddress.normalize()'s IPv4:port and [IPv6]:port rules.      */
+  const ep = { mode:"auto", fallback:true, address:"", selected:null, busy:null, results:[] }
+  let epTimers = []
+  const epAfter = (ms, fn) => epTimers.push(setTimeout(fn, ms))
+  const epClear = () => { epTimers.forEach(clearTimeout); epTimers = [] }
+
+  const epInput = $("epInput"), epField = $("epField"), epMsg = $("epMsg")
+  const FOUND = [
+    { peer:"162.159.197.3:443",  rtt:38 },
+    { peer:"162.159.192.7:2408", rtt:51 },
+    { peer:"[2606:4700:d0::a29f:c003]:443", rtt:66 },
+    { peer:"188.114.97.66:1701", rtt:94 },
+  ]
+  const SPINNER = '<svg class="spin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>'
+
+  function normalizeEndpoint(value){
+    const input = (value ?? "").trim()
+    let host, portText
+    if (input.startsWith("[")){
+      const close = input.indexOf("]")
+      if (close <= 1 || close + 1 >= input.length || input[close+1] !== ":") return null
+      host = input.slice(1, close); portText = input.slice(close+2)
+    } else if ((input.match(/:/g) || []).length === 1){
+      const cut = input.indexOf(":")
+      host = input.slice(0, cut); portText = input.slice(cut+1)
+    } else return null
+    if (!/^\d+$/.test(portText)) return null
+    const port = Number(portText)
+    if (port < 1 || port > 65535) return null
+    if (!host.includes(":")){
+      const octets = host.split(".")
+      if (octets.length !== 4) return null
+      if (!octets.every((o) => /^\d{1,3}$/.test(o) && Number(o) <= 255)) return null
+      return `${octets.map(Number).join(".")}:${port}`
+    }
+    if (!/^[0-9a-fA-F:.]+$/.test(host)) return null
+    if (!host.includes("::") && host.split(":").length !== 8) return null
+    return `[${host.toLowerCase()}]:${port}`
+  }
+
+  function endpointSummary(){
+    if (ep.mode === "auto") return "Chosen automatically"
+    const norm = normalizeEndpoint(ep.address)
+    if (!norm) return "Specific address \u00b7 not set yet"
+    return norm + (ep.fallback ? "" : " \u00b7 no fallback")
+  }
+
+  function renderEndpoint(){
+    $("customReveal").dataset.open = String(ep.mode === "custom")
+    document.querySelectorAll(".seg-item[data-mode]").forEach((b) =>
+      b.setAttribute("aria-pressed", String(b.dataset.mode === ep.mode)))
+    $("fallbackSwitch").setAttribute("aria-checked", String(ep.fallback))
+
+    const norm = ep.address.trim() ? normalizeEndpoint(ep.address) : null
+    const HINT = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg>'
+    const OK   = '<svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>'
+    const BAD  = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m15 9-6 6M9 9l6 6"/></svg>'
+    if (!ep.address.trim()){
+      epField.dataset.valid = ""
+      epMsg.innerHTML = `${HINT}<span>Looks like 162.159.197.3:443</span>`
+    } else if (norm){
+      epField.dataset.valid = "true"
+      epMsg.innerHTML = `${OK}<span>Valid address</span>`
+    } else {
+      epField.dataset.valid = "false"
+      epMsg.innerHTML = `${BAD}<span>Needs an IP and a port, like 162.159.197.3:443</span>`
+    }
+
+    $("testBtn").disabled = ep.mode !== "custom" || !norm || ep.busy !== null
+    $("scanBtn").disabled = ep.busy === "testing"
+    $("testLabel").innerHTML = ep.busy === "testing" ? `${SPINNER}Testing\u2026` : "Test this one"
+    $("scanLabel").innerHTML = ep.busy === "scanning" ? "Stop"
+      : ep.busy === "cancelling" ? `${SPINNER}Stopping\u2026` : "Find endpoints"
+
+    $("routesEndpointSub").textContent = endpointSummary()
+    renderAttention(); renderFacts()
+  }
+
+  function renderResults(){
+    $("scanPanel").dataset.busy = String(ep.busy === "scanning")
+    const bar = (rtt) => Math.max(8, Math.round((1 - rtt/150) * 100))
+    $("results").innerHTML = ep.results.map((r,i) => `
+      <button class="result" type="button" data-peer="${r.peer}" aria-pressed="${String(ep.selected === r.peer)}" style="animation-delay:${i*60}ms">
+        <span class="result-peer">${r.peer}</span>
+        <span class="result-rtt">${r.rtt} ms</span>
+        <span class="result-note">Authenticated MASQUE route</span>
+        <span class="result-bar"><i style="width:${bar(r.rtt)}%"></i></span>
+      </button>`).join("")
+    $("results").querySelectorAll(".result").forEach((row) =>
+      row.addEventListener("click", () => {
+        ep.mode = "custom"; ep.fallback = true
+        ep.address = row.dataset.peer; ep.selected = row.dataset.peer
+        epInput.value = row.dataset.peer
+        renderEndpoint(); renderResults()
+        showToast(`Using ${row.dataset.peer}`)
+      }))
+  }
+
+  document.querySelectorAll(".seg-item[data-mode]").forEach((b) =>
+    b.addEventListener("click", () => { ep.mode = b.dataset.mode; renderEndpoint() }))
+  $("fallbackSwitch").addEventListener("click", () => { ep.fallback = !ep.fallback; renderEndpoint() })
+  epInput.addEventListener("input", () => {
+    ep.address = epInput.value
+    ep.selected = normalizeEndpoint(ep.address)
+    renderEndpoint(); renderResults()
+  })
+  $("testBtn").addEventListener("click", () => {
+    ep.busy = "testing"; renderEndpoint()
+    $("scanStatus").textContent = "Running the authenticated check\u2026"
+    epAfter(1500, () => {
+      ep.busy = null; renderEndpoint()
+      $("scanStatus").textContent = "That address works \u00b7 38 ms"
+      showToast("Address works \u00b7 38 ms")
+    })
+  })
+  $("scanBtn").addEventListener("click", () => {
+    if (ep.busy === "scanning"){
+      epClear(); ep.busy = "cancelling"; renderEndpoint()
+      epAfter(600, () => { ep.busy = null; $("scanStatus").textContent = "Search stopped"; renderEndpoint(); renderResults() })
+      return
+    }
+    epClear()
+    ep.busy = "scanning"; ep.results = []
+    $("scanStatus").textContent = "Searching for endpoints that answer\u2026"
+    renderEndpoint(); renderResults()
+    FOUND.forEach((found, i) => epAfter(700 + i*620, () => {
+      if (ep.busy !== "scanning") return
+      ep.results = [...ep.results, found]
+      $("scanStatus").textContent = `${ep.results.length} found so far`
+      renderResults()
+    }))
+    epAfter(700 + FOUND.length*620, () => {
+      if (ep.busy !== "scanning") return
+      ep.busy = null
+      $("scanStatus").textContent = `${ep.results.length} endpoints worked \u00b7 fastest first`
+      renderEndpoint(); renderResults()
+    })
+  })
+
+  /* -- Diagnostics -------------------------------------------------------- */
+  const LOGS = [
+    ["09:41:02","INFO","engine","profile loaded: Adaptive","basic"],
+    ["09:41:02","DEBUG","scan","probing 128 endpoints (balanced)","verbose"],
+    ["09:41:03","INFO","masque","h2 handshake ok 162.159.197.3:443 rtt=42ms","basic"],
+    ["09:41:03","WARN","quic","h3 blocked: no UDP reply after 1200ms","basic"],
+    ["09:41:03","DEBUG","wg","wireguard probe rtt=88ms","verbose"],
+    ["09:41:04","TRACE","netstack","tx 1420B seq=18 win=64240","trace"],
+    ["09:41:04","INFO","tunnel","data plane validated, mtu 1280","basic"],
+    ["09:41:04","DEBUG","dns","resolvers 1.1.1.1, 1.0.0.1","verbose"],
+    ["09:41:05","TRACE","noize","firewall profile: 3 padding rules active","trace"],
+    ["09:41:05","INFO","netstack","tun up \u00b7 ipv4+ipv6","basic"],
+    ["09:41:12","ERROR","masque","stream 7 reset by peer, retrying","basic"],
+  ]
+  let logLevel = "basic"
+  const LEVELS = { basic:["basic"], verbose:["basic","verbose"], trace:["basic","verbose","trace"] }
+
+  function renderLogs(){
+    const rows = LOGS.filter((l) => LEVELS[logLevel].includes(l[4]))
+    $("logScroll").innerHTML = rows.map(([t,lvl,tag,msg]) => `
+      <div class="log-line" data-lvl="${lvl}">
+        <span class="log-time">${t}</span><span class="log-lvl">${lvl}</span>
+        <span class="log-tag">${tag}</span><span class="log-msg">${msg}</span>
+      </div>`).join("")
+    $("logCount").textContent = `${rows.length} events`
+    renderReport()
+  }
+  document.querySelectorAll("[data-loglevel]").forEach((b) =>
+    b.addEventListener("click", () => {
+      logLevel = b.dataset.loglevel
+      document.querySelectorAll("[data-loglevel]").forEach((o) => o.setAttribute("aria-pressed", String(o === b)))
+      renderLogs()
+    }))
+
+  const include = { app:true, device:true, events:true, settings:false }
+  let redact = true
+
+  document.querySelectorAll("[data-inc]").forEach((b) =>
+    b.addEventListener("click", () => {
+      include[b.dataset.inc] = !include[b.dataset.inc]
+      b.setAttribute("aria-pressed", String(include[b.dataset.inc]))
+      renderReport()
+    }))
+  $("redactSwitch").addEventListener("click", () => {
+    redact = !redact
+    $("redactSwitch").setAttribute("aria-checked", String(redact))
+    renderReport()
+  })
+
+  function renderReport(){
+    /* Match only bracketed IPv6 and dotted IPv4 -- a looser pattern eats the
+       09:41:02 timestamps, which are the most useful column in the report. */
+    const hide = (s) => redact
+      ? s.replace(/\[[0-9a-f:]+\](:\d+)?/gi, "[ipv6]:port")
+          .replace(/\b\d{1,3}(\.\d{1,3}){3}\b(:\d+)?/g, "0.0.0.0:port")
+      : s
+    const lines = []
+    if (include.app)    lines.push("app 0.2.0 (build 41) \u00b7 engine aether 1.9.3")
+    if (include.device) lines.push("device Pixel 8 \u00b7 Android 15")
+    if (include.settings) lines.push("settings profile=Adaptive transport=h2 coverage=tun dns=1.1.1.1")
+    if (include.events){
+      lines.push("")
+      LOGS.filter((l) => LEVELS[logLevel].includes(l[4]))
+        .forEach(([t,lvl,tag,msg]) => lines.push(hide(`${t} ${lvl} ${tag} ${msg}`)))
+    }
+    if (redact) lines.push("", "# IP addresses and Wi-Fi names replaced")
+    $("reportPreview").textContent = lines.join("\n") || "Nothing selected \u2014 pick at least one item above."
+    $("sendReport").disabled = lines.length === 0
+  }
+  $("copyReport").addEventListener("click", () => showToast("Report copied"))
+  $("sendReport").addEventListener("click", () => showToast("Report sent \u2014 thank you"))
+
+  /* -- Boot -------------------------------------------------------------
+     ?state= ?screen= ?ep= ?ui= ?face= ?frame=1 render a deterministic frame. */
+  const params = new URLSearchParams(location.search)
+  if (params.get("frame")) document.documentElement.dataset.frame = "1"
+  if (params.get("face")) document.documentElement.dataset.face = params.get("face")
+  if (params.get("adv") === "1") setAdvanced(true)
+
+  const bootEp = params.get("ep")
+  if (bootEp){
+    ep.mode = "custom"; ep.address = "162.159.197.3:443"; ep.selected = ep.address
+    epInput.value = ep.address
+    if (bootEp === "scanning"){ ep.busy = "scanning"; ep.results = FOUND.slice(0,2); $("scanStatus").textContent = "Searching for endpoints that answer\u2026" }
+    else if (bootEp === "scanned"){ ep.results = FOUND; $("scanStatus").textContent = "4 endpoints worked \u00b7 fastest first" }
+  }
+
+  themePref = params.get("ui") ?? "system"
+  applyTheme()
+  renderEndpoint(); renderResults(); renderLogs()
+  setRing(0); drawSpark(false)
+  apply(params.get("state") ?? "idle", { snapshot:true })
+  if (params.get("screen")) goTo(params.get("screen"))
+  requestAnimationFrame(moveIndicator)
+  addEventListener("resize", moveIndicator)
+  if (params.get("scroll")) requestAnimationFrame(() => { viewport.scrollTop = Number(params.get("scroll")) })
+})()
+</script>

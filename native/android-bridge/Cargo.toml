@@ -1,0 +1,32 @@
+[package]
+name = "whiteaesther-android"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "AGPL-3.0-only"
+
+[lib]
+name = "whiteaesther_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+aether = { path = "../aether/aether" }
+jni = "0.21.1"
+libc = "0.2.175"
+log = "0.4.27"
+once_cell = "1.21.3"
+parking_lot = "0.12.4"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.142"
+thiserror = "2.0.16"
+tokio = { version = "1.52", features = ["rt-multi-thread", "sync"] }
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = "s"
+panic = "abort"
+strip = "symbols"
+
+[patch.crates-io]
+boring-sys = { path = "../third-party/boring-sys" }

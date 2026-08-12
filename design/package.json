@@ -1,0 +1,19 @@
+{
+  "name": "design-v2-temp",
+  "version": "1.0.0",
+  "description": "Disposable UI direction for review. **Nothing here is wired into the app**; no file outside this folder was touched. Delete the whole folder to undo:",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/plus-jakarta-sans": "^5.3.0",
+    "@fontsource/ibm-plex-sans": "^5.3.0"
+  }
+}

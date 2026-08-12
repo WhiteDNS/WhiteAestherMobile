@@ -1,0 +1,99 @@
+[package]
+name = "boring-sys"
+version = { workspace = true }
+authors = ["Alex Crichton <alex@alexcrichton.com>",
+           "Steven Fackler <sfackler@gmail.com>",
+           "Ivan Nikulin <ifaaan@gmail.com>"]
+license = "MIT"
+description = "FFI bindings to BoringSSL"
+repository = { workspace = true }
+documentation = "https://docs.rs/boring-sys"
+links = "boringssl"
+build = "build/main.rs"
+readme = "README.md"
+categories = ["cryptography", "external-ffi-bindings"]
+edition = { workspace = true }
+rust-version = "1.77"
+include = [
+    "/*.md",
+    "/*.toml",
+    "/LICENSE-MIT",
+    "/cmake/*.cmake",
+    # boringssl (non-FIPS)
+    "/deps/boringssl/src/util/32-bit-toolchain.cmake",
+    "/deps/boringssl/**/*.[chS]",
+    "/deps/boringssl/**/*.asm",
+    "/deps/boringssl/sources.json",
+    "/deps/boringssl/src/crypto/obj/obj_mac.num",
+    "/deps/boringssl/src/crypto/obj/objects.txt",
+    "/deps/boringssl/**/*.bzl",
+    "/deps/boringssl/src/**/*.cc",
+    "/deps/boringssl/**/CMakeLists.txt",
+    "/deps/boringssl/**/sources.cmake",
+    "/deps/boringssl/LICENSE",
+    # boringssl (FIPS)
+    "/deps/boringssl-fips/src/util/32-bit-toolchain.cmake",
+    "/deps/boringssl-fips/**/*.[chS]",
+    "/deps/boringssl-fips/**/*.asm",
+    "/deps/boringssl-fips/**/*.pl",
+    "/deps/boringssl-fips/**/*.go",
+    "/deps/boringssl-fips/**/go.mod",
+    "/deps/boringssl-fips/**/go.sum",
+    "/deps/boringssl-fips/sources.json",
+    "/deps/boringssl-fips/crypto/obj/obj_mac.num",
+    "/deps/boringssl-fips/crypto/obj/objects.txt",
+    "/deps/boringssl-fips/crypto/err/*.errordata",
+    "/deps/boringssl-fips/**/*.bzl",
+    "/deps/boringssl-fips/**/*.cc",
+    "/deps/boringssl-fips/**/CMakeLists.txt",
+    "/deps/boringssl-fips/**/sources.cmake",
+    "/deps/boringssl-fips/LICENSE",
+    "/build/*",
+    "/src",
+    "/patches",
+]
+
+[package.metadata.docs.rs]
+features = ["rpk", "pq-experimental", "underscore-wildcards"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+# Compile boringssl using the FIPS build flag if building boringssl from
+# scratch.
+#
+# See
+# https://boringssl.googlesource.com/boringssl/+/master/crypto/fipsmodule/FIPS.md
+# for instructions and more details on the boringssl FIPS flag.
+fips = []
+
+# Use a precompiled FIPS-validated version of BoringSSL. Meant to be used with
+# FIPS-20230428 or newer. Users must set `BORING_BSSL_FIPS_PATH` to use this
+# feature, or else the build will fail.
+fips-precompiled = []
+
+# Link with precompiled FIPS-validated `bcm.o` module.
+fips-link-precompiled = []
+
+# Enables Raw public key API (https://datatracker.ietf.org/doc/html/rfc7250)
+rpk = []
+
+# Applies a patch (`patches/boring-pq.patch`) to the boringSSL source code that
+# enables support for PQ key exchange. This feature is necessary in order to
+# compile the bindings for the default branch of boringSSL (`deps/boringssl`).
+# Alternatively, a version of boringSSL that implements the same feature set
+# can be provided by setting `BORING_BSSL{,_FIPS}_SOURCE_PATH`.
+pq-experimental = []
+
+# Applies a patch (`patches/underscore-wildcards.patch`) to enable
+# `ffi::X509_CHECK_FLAG_UNDERSCORE_WILDCARDS`. Same caveats as
+# those for `pq-experimental` feature apply.
+underscore-wildcards = []
+
+[build-dependencies]
+bindgen = { workspace = true }
+cmake = { workspace = true }
+fs_extra = { workspace = true }
+fslock = { workspace = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(const_fn)'] }

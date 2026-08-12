@@ -1,0 +1,32 @@
+<!--
+  Themed-icon layer for Android 13+. Only the alpha channel is used, so this
+  must be a shape on transparent. Pointing <monochrome> at the full-colour
+  foreground renders the whole tile as a solid blob.
+  108dp canvas with the globe kept inside the 72dp safe zone.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M54,21a33,33 0 1,0 0,66a33,33 0 1,0 0,-66Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="8.25"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M21,54h66M54,21v66"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6.5"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M54,21c-9.3,9.3 -13.8,21 -13.8,33s4.5,23.7 13.8,33"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6.5"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M54,21c9.3,9.3 13.8,21 13.8,33s-4.5,23.7 -13.8,33"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6.5"
+        android:fillColor="#00000000" />
+</vector>

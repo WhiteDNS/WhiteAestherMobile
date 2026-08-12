@@ -1,0 +1,14 @@
+project: protocols/quiche
+
+target: qpack-decode-libfuzzer
+
+image: ${MAYHEM_DOCKER_REGISTRY}/protocols/quiche-libfuzzer:latest
+
+advanced_triage: false
+
+cmds:
+  - cmd: /home/mayhem/qpack_decode
+    libfuzzer: true
+    sanitizer: true
+    timeout: 5
+    env: {}

@@ -1,0 +1,157 @@
+package com.whitedns.whiteaesther.ui.theme
+
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.Color
+import com.whitedns.whiteaesther.data.ThemeMode
+
+/**
+ * Tokens Material's scheme has no slot for: the four connection signal hues, the
+ * three border weights, and the ink ramp. Both palettes are authored rather than
+ * inverted -- light uses a darker emerald so text keeps its contrast on white.
+ */
+@Immutable
+data class AetherColors(
+    val ink0: Color,
+    val ink1: Color,
+    val ink2: Color,
+    val ink3: Color,
+    val line: Color,
+    val lineSoft: Color,
+    val lineStrong: Color,
+    val text: Color,
+    val text2: Color,
+    val text3: Color,
+    val brand: Color,
+    val onBrand: Color,
+    val signalIdle: Color,
+    val signalWorking: Color,
+    val signalLive: Color,
+    val signalFailed: Color,
+    val cyan: Color,
+    val track: Color,
+    val isDark: Boolean,
+)
+
+private val DarkAether = AetherColors(
+    ink0 = Color(0xFF050908),
+    ink1 = Color(0xFF0A100E),
+    ink2 = Color(0xFF101715),
+    ink3 = Color(0xFF161F1C),
+    line = Color(0xFF2C3B36),
+    lineSoft = Color(0xFF202C28),
+    lineStrong = Color(0xFF3A4D47),
+    text = Color(0xFFEAF2EF),
+    text2 = Color(0xFF93A29E),
+    text3 = Color(0xFF657570),
+    brand = Color(0xFF34D1A6),
+    onBrand = Color(0xFF052018),
+    signalIdle = Color(0xFF7A8D88),
+    signalWorking = Color(0xFFF2B544),
+    signalLive = Color(0xFF34D1A6),
+    signalFailed = Color(0xFFFF7068),
+    cyan = Color(0xFF5EC8E5),
+    track = Color(0xFF2C3B36),
+    isDark = true,
+)
+
+private val LightAether = AetherColors(
+    ink0 = Color(0xFFE7EDEB),
+    ink1 = Color(0xFFF6FAF8),
+    ink2 = Color(0xFFFFFFFF),
+    ink3 = Color(0xFFEFF5F2),
+    line = Color(0xFFC6D4CF),
+    lineSoft = Color(0xFFDDE7E3),
+    lineStrong = Color(0xFFA8BCB6),
+    text = Color(0xFF0B1513),
+    text2 = Color(0xFF4C5E59),
+    text3 = Color(0xFF74847E),
+    brand = Color(0xFF0B8F6C),
+    onBrand = Color(0xFFFFFFFF),
+    signalIdle = Color(0xFF7C8D88),
+    signalWorking = Color(0xFFA06A08),
+    signalLive = Color(0xFF0B8F6C),
+    signalFailed = Color(0xFFC2372F),
+    cyan = Color(0xFF0F7793),
+    track = Color(0xFFC6D4CF),
+    isDark = false,
+)
+
+private fun AetherColors.toMaterialScheme() = if (isDark) {
+    darkColorScheme(
+        primary = brand,
+        onPrimary = onBrand,
+        primaryContainer = ink3,
+        onPrimaryContainer = brand,
+        secondary = cyan,
+        onSecondary = onBrand,
+        background = ink1,
+        onBackground = text,
+        surface = ink2,
+        onSurface = text,
+        surfaceVariant = ink3,
+        onSurfaceVariant = text2,
+        outline = line,
+        outlineVariant = lineSoft,
+        error = signalFailed,
+        onError = onBrand,
+        errorContainer = ink3,
+        onErrorContainer = signalFailed,
+    )
+} else {
+    lightColorScheme(
+        primary = brand,
+        onPrimary = onBrand,
+        primaryContainer = ink3,
+        onPrimaryContainer = brand,
+        secondary = cyan,
+        onSecondary = onBrand,
+        background = ink1,
+        onBackground = text,
+        surface = ink2,
+        onSurface = text,
+        surfaceVariant = ink3,
+        onSurfaceVariant = text2,
+        outline = line,
+        outlineVariant = lineSoft,
+        error = signalFailed,
+        onError = onBrand,
+        errorContainer = ink3,
+        onErrorContainer = signalFailed,
+    )
+}
+
+val LocalAetherColors = staticCompositionLocalOf { DarkAether }
+
+/** Shorthand for the extended palette: `AetherTheme.colors.brand`. */
+object AetherTheme {
+    val colors: AetherColors
+        @Composable @ReadOnlyComposable get() = LocalAetherColors.current
+}
+
+@Composable
+fun WhiteAestherTheme(
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
+    content: @Composable () -> Unit,
+) {
+    val dark = when (themeMode) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
+    val colors = if (dark) DarkAether else LightAether
+    CompositionLocalProvider(LocalAetherColors provides colors) {
+        MaterialTheme(
+            colorScheme = colors.toMaterialScheme(),
+            typography = AetherTypography,
+            content = content,
+        )
+    }
+}

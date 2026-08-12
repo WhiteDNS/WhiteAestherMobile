@@ -1,0 +1,14 @@
+project: protocols/quiche
+
+target: packet-recv-client-libfuzzer
+
+image: ${MAYHEM_DOCKER_REGISTRY}/protocols/quiche-libfuzzer:latest
+
+advanced_triage: false
+
+cmds:
+  - cmd: /home/mayhem/packet_recv_client
+    libfuzzer: true
+    sanitizer: true
+    timeout: 5
+    env: {}

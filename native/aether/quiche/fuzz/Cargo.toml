@@ -1,0 +1,46 @@
+[package]
+name = "quiche-fuzz"
+version = "0.1.0"
+authors = ["Alessandro Ghedini <alessandro@ghedini.me>"]
+edition = "2018"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[profile.dev]
+opt-level = 3
+
+[dependencies]
+env_logger = "0.11"
+libfuzzer-sys = "0.4"
+quiche = { path = "../quiche", features = ["fuzzing"] }
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "packet_recv_client"
+path = "src/packet_recv_client.rs"
+
+[[bin]]
+name = "packet_recv_server"
+path = "src/packet_recv_server.rs"
+
+[[bin]]
+name = "packets_recv_server"
+path = "src/packets_recv_server.rs"
+
+[[bin]]
+name = "packets_posths_server"
+path = "src/packets_posths_server.rs"
+
+[[bin]]
+name = "qpack_decode"
+path = "src/qpack_decode.rs"
+
+[profile.release]
+debug = true
+debug-assertions = true
+overflow-checks = true
