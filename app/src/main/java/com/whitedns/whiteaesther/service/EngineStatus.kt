@@ -29,7 +29,11 @@ object EngineStatusStore {
         mutableStatus.value = status
         if (previous.stage != status.stage || previous.message != status.message) {
             EngineLog.record(
-                level = if (status.stage == EngineStage.ERROR) LogLevel.ERROR else LogLevel.INFO,
+                level = when {
+                    status.stage == EngineStage.ERROR -> LogLevel.ERROR
+                    status.message.contains("retry") -> LogLevel.WARN
+                    else -> LogLevel.INFO
+                },
                 tag = "engine",
                 message = buildString {
                     append(status.stage.name.lowercase())

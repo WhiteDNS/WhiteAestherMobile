@@ -116,6 +116,11 @@ class AetherVpnService : VpnService() {
                 else -> EngineMode.TUN
             }
         }.getOrDefault(EngineMode.TUN)
+        // Record what this attempt is actually configured with. Without it a
+        // diagnostics report cannot answer the question it was collected for --
+        // which transport carried the session, and whether the anti-blocking
+        // options were on.
+        EngineLog.record(LogLevel.INFO, "config", sessionSummary(configJson))
         EngineStatusStore.update(
             EngineStatus(EngineStage.PREPARING, mode, message = "Preparing identity and gateway"),
         )
@@ -170,6 +175,11 @@ class AetherVpnService : VpnService() {
 
         val listener = NativeEngineListener {
             reconnectAttempt = 0
+            EngineLog.record(
+                LogLevel.INFO,
+                "tunnel",
+                "up on ${transportOf(configJson).uppercase()}",
+            )
             EngineStatusStore.update(
                 EngineStatus(EngineStage.CONNECTED, mode, prepared.peer, connectedMessage(mode, configJson)),
             )
@@ -302,6 +312,20 @@ class AetherVpnService : VpnService() {
             }
         }
     }
+
+    private fun sessionSummary(configJson: String): String = runCatching {
+        val json = JSONObject(configJson)
+        buildString {
+            append("transport=").append(json.optString("transport", "h3"))
+            append(" scan=").append(json.optString("scanMode", "balanced"))
+            append(" mode=").append(json.optString("mode", "tun"))
+            append(" noize=").append(json.optString("noize", "firewall"))
+            append(" fragmentTls=").append(json.optBoolean("fragmentTls", false))
+            append(" ech=").append(json.optBoolean("encryptedHello", false))
+            append(" ipScan=").append(json.optString("ipScan", "both"))
+            append(" peerPinned=").append(json.has("peer"))
+        }
+    }.getOrDefault("unavailable")
 
     private fun transportOf(configJson: String): String =
         runCatching { JSONObject(configJson).optString("transport", "h3") }.getOrDefault("h3")
