@@ -967,7 +967,19 @@ fun AboutScreen(nativeVersion: String?, settings: AppSettings, onBack: () -> Uni
             Divider()
             FactRow("Cleartext traffic", "Blocked")
         }
-        Note("Third-party licences are listed in THIRD_PARTY_NOTICES.md in the source repository.")
+        Spacer(Modifier.height(12.dp))
+        AetherCard {
+            CardHead("Licence and source")
+            Spacer(Modifier.height(6.dp))
+            FactRow("Licence", "AGPL-3.0")
+            Divider()
+            FactRow("Source", "github.com/WhiteDNS/WhiteAestherMobile", mono = true)
+        }
+        Note(
+            "WhiteAestherMobile and the Aether engine it embeds are free software under " +
+                "AGPL-3.0. The complete source for this build, and the notices for the " +
+                "third-party code it includes, are published at the address above.",
+        )
     }
 }
 
