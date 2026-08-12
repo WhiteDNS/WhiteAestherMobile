@@ -199,7 +199,20 @@ jobs:
           test -n "$KEYSTORE_PASSWORD"
           test -n "$KEY_ALIAS"
           test -n "$KEY_PASSWORD"
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/whiteaesther-release.jks"
+          # A secret set from PowerShell can carry a trailing carriage return.
+          # In the keystore that makes base64 reject the whole blob; in a
+          # password it surfaces much later as an unexplained signing failure.
+          # Base64 holds no whitespace, so strip all of it; passwords may hold
+          # spaces, so strip only control characters.
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/whiteaesther-release.jks"
+          {
+            echo "KEYSTORE_PASSWORD=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d '[:cntrl:]')"
+            echo "KEY_ALIAS=$(printf '%s' "$KEY_ALIAS" | tr -d '[:cntrl:]')"
+            echo "KEY_PASSWORD=$(printf '%s' "$KEY_PASSWORD" | tr -d '[:cntrl:]')"
+          } >> "$GITHUB_ENV"
+          # Fail here, with a clear message, rather than at signing time.
+          keytool -list -keystore "$RUNNER_TEMP/whiteaesther-release.jks" \
+            -storepass "$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d '[:cntrl:]')" >/dev/null
 
       - name: Resolve Android release version
         id: version
