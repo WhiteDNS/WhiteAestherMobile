@@ -35,6 +35,9 @@ sha256sum -c SHA256SUMS --ignore-missing
 Android will warn about installing outside the Play Store. That is expected for a
 sideloaded APK.
 
+> **راهنمای فارسی:** [docs/GUIDE.fa.md](docs/GUIDE.fa.md) -- installing, first run, and what to change when a
+> network blocks the connection.
+
 ## First run
 
 **1. Leave Coverage on "Whole device".** Under **Traffic**, this is the default
