@@ -18,3 +18,5 @@ memory.md
 
 # Local helper: references the signing-key backup path, never publish
 set-signing-secrets.ps1
+native/chain/third_party/
+native/chain/build/
