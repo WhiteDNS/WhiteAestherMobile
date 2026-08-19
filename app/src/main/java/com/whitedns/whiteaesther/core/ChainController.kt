@@ -1,0 +1,154 @@
+package com.whitedns.whiteaesther.core
+
+import android.content.Context
+import android.os.Build
+import com.whitedns.whiteaesther.data.ChainSettings
+import com.whitedns.whiteaesther.service.EngineLog
+import com.whitedns.whiteaesther.service.LogLevel
+import org.json.JSONObject
+import java.io.File
+
+/**
+ * Drives mihomo: writes its configuration, applies it, and attaches the tunnel
+ * interface.
+ *
+ * Order matters here and is the whole of Stage 2. mihomo must have its rules
+ * before it is given the interface, because a mihomo with no configuration
+ * routes everything DIRECT -- and a DIRECT route from this process is excluded
+ * from the interface, so it would leave in the clear. Attaching last means
+ * packets have nowhere to go until the rules exist, which is the safe failure.
+ */
+class ChainController(private val context: Context) {
+    private val home: File get() = File(context.filesDir, "chain")
+
+    val isAvailable: Boolean get() = NativeChainBridge.isAvailable
+
+    /**
+     * Applies the configuration and attaches [tunFd].
+     *
+     * @param socksPort Aether's SOCKS5 port, or null to dial nodes directly.
+     *   When set, the listener must already be up: the provider fetch that
+     *   happens inside this call travels through it.
+     * @return null on success, or why it failed.
+     */
+    fun start(settings: ChainSettings, socksPort: Int?, tunFd: Int): String? {
+        if (!isAvailable) return "The exit chain is not available in this build"
+        settings.startupError()?.let { return it }
+
+        return runCatching {
+            prepareHome(settings, socksPort)
+
+            initialise()?.let { return it }
+            // Fetches every provider, so it reaches the network and can take a
+            // while on a slow tunnel. It answers with an empty string when the
+            // config was accepted and the reason when it was not.
+            applyConfig()?.let { return it }
+            selectNode(settings.node)
+
+            NativeChainBridge.startTun(
+                fd = tunFd,
+                stack = ChainConfig.TUN_STACK,
+                address = "${ChainConfig.TUN_IPV4},${ChainConfig.TUN_IPV6}",
+                dns = ChainConfig.TUN_DNS,
+            ).failureText()
+        }.getOrElse { error ->
+            error.message ?: "The exit chain did not start"
+        }
+    }
+
+    fun stop() {
+        if (!isAvailable) return
+        NativeChainBridge.stopTun()
+        // Closes listeners and drops the parsed config. Without it a later start
+        // inherits the previous run's providers and selected node.
+        NativeChainBridge.invoke("shutdown")
+    }
+
+    /** The nodes mihomo knows about, for the dashboard and for validation. */
+    fun nodes(): List<ChainNode> {
+        val reply = NativeChainBridge.invoke("getProxies")
+        val data = reply.data as? JSONObject ?: return emptyList()
+        val proxies = data.optJSONObject("proxies") ?: return emptyList()
+        val group = proxies.optJSONObject(ChainConfig.EXIT_GROUP) ?: return emptyList()
+        val members = group.optJSONArray("all") ?: return emptyList()
+
+        return buildList {
+            for (index in 0 until members.length()) {
+                val name = members.optString(index).takeIf { it.isNotBlank() } ?: continue
+                val entry = proxies.optJSONObject(name)
+                add(
+                    ChainNode(
+                        name = name,
+                        kind = entry?.optString("type").orEmpty().ifBlank { "Unknown" },
+                        delay = entry?.optJSONArray("history")
+                            ?.let { history ->
+                                history.optJSONObject(history.length() - 1)?.optInt("delay", 0)
+                            }
+                            ?.takeIf { it > 0 },
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun prepareHome(settings: ChainSettings, socksPort: Int?) {
+        home.mkdirs()
+        File(home, "providers").mkdirs()
+        File(home, "config.yaml").writeText(ChainConfig.render(settings, socksPort))
+        // Only when there is something to write. The renderer declares the file
+        // provider on the same condition, so a missing file and a missing
+        // provider always agree -- a provider pointing at a path that is not
+        // there is a config mihomo rejects outright.
+        if (settings.manual.isNotBlank()) {
+            File(home, "providers/manual.txt").writeText(settings.manual.trim() + "\n")
+        }
+    }
+
+    private fun initialise(): String? {
+        val reply = NativeChainBridge.invoke(
+            "initClash",
+            JSONObject()
+                .put("home-dir", home.absolutePath)
+                // mihomo uses this to decide whether it can read socket owners
+                // from the kernel or has to walk /proc. We ask it not to look at
+                // all, but it is read before that setting is applied.
+                .put("version", Build.VERSION.SDK_INT),
+        )
+        return reply.failureText()
+    }
+
+    private fun applyConfig(): String? {
+        val reply = NativeChainBridge.invoke(
+            "setupConfig",
+            JSONObject()
+                .put("selected-map", JSONObject())
+                .put("test-url", "http://www.gstatic.com/generate_204"),
+        )
+        return reply.failureText()?.let { "The chain rejected its configuration: $it" }
+    }
+
+    /**
+     * Restores the node the user last chose.
+     *
+     * Failure is not fatal and is deliberately not propagated: a subscription
+     * that dropped or renamed that node should leave the chain running on
+     * whichever node the group defaults to, not refuse to start.
+     */
+    private fun selectNode(node: String?) {
+        if (node.isNullOrBlank()) return
+        val reply = NativeChainBridge.invoke(
+            "changeProxy",
+            JSONObject().put("group-name", ChainConfig.EXIT_GROUP).put("proxy-name", node),
+        )
+        reply.failureText()?.let {
+            EngineLog.record(LogLevel.WARN, "chain", "could not select $node: $it")
+        }
+    }
+}
+
+data class ChainNode(
+    val name: String,
+    val kind: String,
+    /** Milliseconds through the tunnel, or null when the last test failed. */
+    val delay: Int?,
+)

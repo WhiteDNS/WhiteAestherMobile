@@ -27,6 +27,7 @@ class SettingsRepository(private val context: Context) {
             showAdvanced = preferences[SHOW_ADVANCED] ?: false,
             fragmentTls = preferences[FRAGMENT_TLS] ?: false,
             encryptedHello = preferences[ENCRYPTED_HELLO] ?: false,
+            chain = ChainSettings.decode(preferences[CHAIN]),
         )
     }
 
@@ -45,6 +46,7 @@ class SettingsRepository(private val context: Context) {
             preferences[SHOW_ADVANCED] = settings.showAdvanced
             preferences[FRAGMENT_TLS] = settings.fragmentTls
             preferences[ENCRYPTED_HELLO] = settings.encryptedHello
+            preferences[CHAIN] = settings.chain.encode()
         }
     }
 
@@ -65,5 +67,8 @@ class SettingsRepository(private val context: Context) {
         val SHOW_ADVANCED = booleanPreferencesKey("show_advanced")
         val FRAGMENT_TLS = booleanPreferencesKey("fragment_tls")
         val ENCRYPTED_HELLO = booleanPreferencesKey("encrypted_hello")
+        // Stored whole rather than spread across keys: the shape is a list
+        // of sources, which preferences have no type for.
+        val CHAIN = stringPreferencesKey("chain")
     }
 }

@@ -45,6 +45,8 @@ const ACTION_TIMEOUT: Duration = Duration::from_secs(60);
 const LIBRARY: &[u8] = b"libwhiteaestherchain.so\0";
 
 type InvokeMethod = unsafe extern "C" fn(*mut c_void, *mut c_char);
+/// Returns `true` always -- see [`start_tun`]. Kept in the signature because
+/// that is what the library exports, not because it carries a verdict.
 type StartTun =
     unsafe extern "C" fn(*mut c_void, c_int, *mut c_char, *mut c_char, *mut c_char) -> u8;
 type StopTun = unsafe extern "C" fn();
@@ -210,16 +212,23 @@ pub fn invoke(params: &str) -> Result<String, String> {
 }
 
 /// Hands mihomo the tun. Ownership of the descriptor passes to Go.
+///
+/// The callback here is not a reply channel, unlike the one in [`invoke`]. Go
+/// keeps it for the life of the tun and calls back through it for `protect` and
+/// for process resolution, and releases it when the tun closes. So nothing is
+/// waited on: `startTUN` returns `true` whether or not the interface came up --
+/// it reports that the call was made, not that it worked -- and the only honest
+/// proof is traffic arriving at the far end.
 pub fn start_tun(fd: i32, stack: &str, address: &str, dns: &str) -> Result<(), String> {
     let core = core()?;
-    let (tx, rx) = mpsc::channel::<String>();
+    let (tx, _rx) = mpsc::channel::<String>();
     let callback = Box::into_raw(Box::new(tx)) as *mut c_void;
 
     let stack = CString::new(stack).map_err(|_| "stack contains a null byte".to_string())?;
     let address = CString::new(address).map_err(|_| "address contains a null byte".to_string())?;
     let dns = CString::new(dns).map_err(|_| "dns contains a null byte".to_string())?;
 
-    let started = unsafe {
+    unsafe {
         (core.start_tun)(
             callback,
             fd,
@@ -228,11 +237,6 @@ pub fn start_tun(fd: i32, stack: &str, address: &str, dns: &str) -> Result<(), S
             dns.into_raw(),
         )
     };
-    if started == 0 {
-        return Err("the chain refused the tun descriptor".into());
-    }
-    // The reply is informational; the return value above is the verdict.
-    let _ = rx.recv_timeout(Duration::from_secs(5));
     Ok(())
 }
 

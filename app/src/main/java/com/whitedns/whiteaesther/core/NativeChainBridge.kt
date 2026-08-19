@@ -39,7 +39,7 @@ object NativeChainBridge {
         val params = JSONObject()
             .put("id", "wa")
             .put("method", method)
-            .apply { if (arguments != null) put("data", arguments) }
+            .apply { if (arguments != null) put("arguments", arguments) }
             .toString()
         return runCatching { ChainReply.parse(nativeInvoke(params)) }
             .getOrElse { ChainReply(false, error = it.message ?: "The chain did not answer") }
@@ -91,14 +91,29 @@ data class ChainReply(
         fun parse(raw: String): ChainReply {
             if (raw.isBlank()) return ChainReply(false, error = "The chain returned nothing")
             val json = JSONObject(raw)
-            // The action protocol answers with "data" on success and "error" on
-            // failure; our own bridge answers with "ok" when it could not get
-            // that far.
-            if (json.has("error") && !json.isNull("error")) {
-                return ChainReply(false, error = json.get("error").toString())
+            // Two shapes arrive here. The core answers {result, error?}, where
+            // error is an object; our own bridge answers {ok:false, error} as a
+            // string when it could not reach the core at all.
+            val error = json.opt("error")
+            if (error != null && error != JSONObject.NULL) {
+                val message = (error as? JSONObject)?.optString("message")?.takeIf { it.isNotBlank() }
+                    ?: error.toString()
+                return ChainReply(false, error = message)
             }
-            val ok = if (json.has("ok")) json.optBoolean("ok", false) else true
-            return ChainReply(ok, data = if (json.has("data")) json.get("data") else null)
+            if (json.has("ok") && !json.optBoolean("ok", false)) {
+                return ChainReply(false, error = "The chain reported a failure")
+            }
+            return ChainReply(true, data = json.opt("result"))
         }
+    }
+
+    /**
+     * Several handlers report trouble as a plain string in `result`, empty when
+     * all is well, rather than through `error`. Reading only `error` there would
+     * take a config mihomo rejected for a config it accepted.
+     */
+    fun failureText(): String? = when {
+        !ok -> error ?: "The chain reported a failure"
+        else -> (data as? String)?.takeIf { it.isNotBlank() }
     }
 }

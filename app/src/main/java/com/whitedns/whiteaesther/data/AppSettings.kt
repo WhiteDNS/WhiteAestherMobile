@@ -80,6 +80,9 @@ data class AppSettings(
     // cost a little on a healthy network and only matter on a filtered one.
     val fragmentTls: Boolean = false,
     val encryptedHello: Boolean = false,
+    // The second hop. Carried to the service beside the engine config rather
+    // than inside it -- mihomo's settings are not the engine's business.
+    val chain: ChainSettings = ChainSettings(),
     // Presentation only -- deliberately absent from toNativeJson.
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val showAdvanced: Boolean = false,
