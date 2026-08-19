@@ -101,6 +101,10 @@ captures IPv4, IPv6 and DNS, or exposes a loopback SOCKS5 proxy.
   with optional fallback
 - **Identity** — provisioned on first connect, private key kept in app-private
   storage, never leaves the device
+- **Exit chain** — an optional second hop after the tunnel, so sites see your
+  own node rather than Cloudflare. Nodes come from a subscription or pasted
+  links, and are dialled from inside the tunnel by default so neither your
+  network nor the node learns the other'''s address
 
 ## Requirements
 
@@ -153,5 +157,7 @@ never sent without you reviewing them first. See [PRIVACY.md](PRIVACY.md).
 
 ## Licence
 
-[AGPL-3.0](LICENSE), as is the Aether engine it embeds. Third-party components
-are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[AGPL-3.0](LICENSE), as is the Aether engine it embeds. The exit chain is built
+on mihomo, which is GPL-3.0; AGPL-3.0 section 13 permits the combination, and
+each part keeps its own licence. Components, revisions, and the one modification
+we make are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

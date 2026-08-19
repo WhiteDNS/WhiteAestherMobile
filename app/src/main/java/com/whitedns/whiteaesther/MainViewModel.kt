@@ -66,7 +66,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val endpointScannerState = mutableEndpointScannerState.asStateFlow()
     private var endpointJob: Job? = null
 
-    private val mutableChainState = MutableStateFlow(ChainState())
+    // Seeded with what the build can do, rather than waiting for a refresh
+    // that only happens once connected. Whether the library is present is known
+    // from the start, and the screen has to say so before the user configures
+    // something that can never run.
+    private val mutableChainState = MutableStateFlow(ChainState(available = chain.isAvailable))
     val chainState = mutableChainState.asStateFlow()
     private var chainJob: Job? = null
 

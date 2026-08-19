@@ -83,6 +83,20 @@ fun ChainScreen(
             "Adds a second hop after the tunnel, so sites see your node's address instead of Cloudflare's.",
         )
 
+        if (!chainState.available) {
+            // The chain is loaded at run time and a build may not ship it. Saying
+            // so is the whole point of the check: the alternative is a switch
+            // that saves happily and a connect that refuses, with the reason
+            // arriving several screens away from the setting that caused it.
+            AttentionCard(
+                tone = colors.signalFailed,
+                title = "Not available in this build",
+                body = "This copy of WhiteAesther does not include the exit chain. " +
+                    "Everything else works as normal.",
+            )
+            return@ScreenColumn
+        }
+
         if (chain.enabled && settings.mode != EngineMode.TUN) {
             AttentionCard(
                 tone = colors.signalFailed,

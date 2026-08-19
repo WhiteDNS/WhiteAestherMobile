@@ -1,17 +1,60 @@
 # Third-party notices
 
-## Aether
+WhiteAestherMobile is [AGPL-3.0](LICENSE). It embeds components under AGPL-3.0
+and GPL-3.0; both are listed below with where to get their source.
+
+AGPL-3.0 section 13 expressly permits combining an AGPL-3.0 work with a work
+under GPL-3.0 into a single combined work. The AGPL-3.0 parts remain AGPL-3.0
+and the GPL-3.0 parts remain GPL-3.0.
+
+## Aether — AGPL-3.0
 
 The native engine is vendored from `MatinSenPai/Aether` revision
-`21b9872d080bd185600b93ff20b87f3f3e1e7307` and is licensed under AGPL-3.0.
-The original license and revision record are included under `native/aether/`.
+`21b9872d080bd185600b93ff20b87f3f3e1e7307`. The original license and revision
+record are included under `native/aether/`.
 
-## BoringSSL Rust bindings
+Shipped as `libwhiteaesther_core.so`.
+
+## FlClash core — GPL-3.0
+
+The exit chain's Go library is built from the `core` directory of
+[chen08209/FlClash](https://github.com/chen08209/FlClash), revision
+`62addf738a76b1a492e19af2dbabdb6d572b9e72`.
+
+## mihomo (Clash.Meta) — GPL-3.0
+
+The proxy engine inside that library is
+[chen08209/Clash.Meta](https://github.com/chen08209/Clash.Meta), revision
+`80362fc1895dcf60b79b562896653046e0687413`, a fork of
+[MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo).
+
+**Modified by WhiteAesther.** One change, kept as a patch rather than a fork so
+it is legible on its own: `native/chain/patches/0001-reality-client-version.patch`.
+mihomo advertises a hardcoded REALITY client version of 1.8.2 in the ClientHello
+session id, while Xray builds those bytes from its own version, so a current
+Xray server rejects the handshake outright.
+
+Shipped as `libwhiteaestherchain.so`.
+
+### Getting the source
+
+Neither GPL-3.0 component is committed to this repository — both are fetched at
+build time, at the exact revisions above, by `native/chain/setup.ps1`. Those
+revisions are pinned in that script, so the source corresponding to any binary
+we ship can be obtained by running it, or by fetching the revisions directly
+from the upstreams named above. `native/chain/README.md` describes the build.
+
+The GPL-3.0 text is in [licenses/GPL-3.0.txt](licenses/GPL-3.0.txt).
+
+## BoringSSL Rust bindings — MIT
 
 `boring-sys` 4.22.0 is vendored under `native/third-party/boring-sys` under its
 MIT license. WhiteAesther changes only its build script to normalize `.exe`
 paths from cargo-ndk on Windows; BoringSSL runtime and crypto source are not
 modified. Details are in `native/third-party/README.md`.
 
-Other Kotlin, Rust, and web dependencies retain their respective upstream
-licenses. Gradle and Cargo lockfiles identify the exact resolved versions.
+## Everything else
+
+Other Kotlin, Rust, and Go dependencies retain their respective upstream
+licenses. The Gradle, Cargo, and Go lockfiles identify the exact resolved
+versions.

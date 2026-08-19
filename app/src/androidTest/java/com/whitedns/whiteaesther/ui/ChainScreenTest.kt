@@ -35,7 +35,7 @@ class ChainScreenTest {
     private fun setApp(
         initial: AppSettings = AppSettings(),
         status: EngineStatus = EngineStatus(),
-        chainState: ChainState = ChainState(),
+        chainState: ChainState = ChainState(available = true),
     ) {
         compose.setContent {
             WhiteAestherTheme {
@@ -62,6 +62,17 @@ class ChainScreenTest {
     private fun openChain() {
         compose.onNodeWithTag("tab-routes").performClick()
         compose.onNodeWithText("Exit chain").performScrollTo().performClick()
+    }
+
+    @Test
+    fun aBuildWithoutTheLibrarySaysSoRatherThanOfferingASwitch() {
+        setApp(chainState = ChainState(available = false))
+        openChain()
+
+        // The alternative is a switch that saves happily and a connect that
+        // refuses, with the reason arriving several screens from the setting.
+        compose.onNodeWithText("Not available in this build").assertExists()
+        compose.onNodeWithTag("chain-switch").assertDoesNotExist()
     }
 
     @Test
