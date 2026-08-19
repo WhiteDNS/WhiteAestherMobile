@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import com.whitedns.whiteaesther.ChainState
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.service.EngineStage
@@ -59,6 +60,7 @@ private enum class Destination(val tab: Tab) {
     HOME(Tab.HOME),
     ROUTES(Tab.ROUTES),
     ENDPOINT(Tab.ROUTES),
+    CHAIN(Tab.ROUTES),
     TRAFFIC(Tab.TRAFFIC),
     SETTINGS(Tab.SETTINGS),
     DIAGNOSTICS(Tab.SETTINGS),
@@ -71,6 +73,7 @@ fun WhiteAestherApp(
     settings: AppSettings,
     engineStatus: EngineStatus,
     endpointScannerState: EndpointScannerState,
+    chainState: ChainState = ChainState(),
     nativeVersion: String?,
     logEntries: List<LogEntry> = emptyList(),
     onSettingsChange: (AppSettings) -> Unit,
@@ -79,6 +82,9 @@ fun WhiteAestherApp(
     onScanEndpoints: (AppSettings) -> Unit,
     onTestEndpoint: (AppSettings) -> Unit,
     onCancelEndpointScan: () -> Unit,
+    onRefreshChainNodes: () -> Unit = {},
+    onSelectChainNode: (String) -> Unit = {},
+    onTestChainNodes: () -> Unit = {},
     onShareReport: (String) -> Unit = {},
     onCopyReport: (String) -> Unit = {},
     onClearLog: () -> Unit = {},
@@ -118,6 +124,17 @@ fun WhiteAestherApp(
                     settings = settings,
                     onSettingsChange = onSettingsChange,
                     onGoToEndpoint = { destination = Destination.ENDPOINT },
+                    onGoToChain = { destination = Destination.CHAIN },
+                )
+                Destination.CHAIN -> ChainScreen(
+                    settings = settings,
+                    status = engineStatus,
+                    chainState = chainState,
+                    onSettingsChange = onSettingsChange,
+                    onRefreshNodes = onRefreshChainNodes,
+                    onSelectNode = onSelectChainNode,
+                    onTestNodes = onTestChainNodes,
+                    onBack = { destination = Destination.ROUTES },
                 )
                 Destination.ENDPOINT -> EndpointScreen(
                     settings = settings,

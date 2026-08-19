@@ -3,6 +3,8 @@ package com.whitedns.whiteaesther
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.whitedns.whiteaesther.core.ChainController
+import com.whitedns.whiteaesther.core.ChainNode
 import com.whitedns.whiteaesther.core.EndpointScanResult
 import com.whitedns.whiteaesther.core.NativeAetherBridge
 import com.whitedns.whiteaesther.data.AppSettings
@@ -13,6 +15,7 @@ import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatusStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,8 +36,25 @@ data class EndpointScannerState(
     val error: String? = null,
 )
 
+/**
+ * What the running chain has to say about its nodes.
+ *
+ * [available] is separate from an empty list on purpose. No nodes because the
+ * chain is not running, and no nodes because the subscription returned none, are
+ * different problems and the screen says different things about them.
+ */
+data class ChainState(
+    val available: Boolean = false,
+    val nodes: List<ChainNode> = emptyList(),
+    val selected: String? = null,
+    val busy: Boolean = false,
+    val error: String? = null,
+)
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = SettingsRepository(application)
+    // Reaches the same mihomo the service is running: there is one per process.
+    private val chain = ChainController(application)
 
     val settings = repository.settings.stateIn(
         scope = viewModelScope,
@@ -46,8 +66,75 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val endpointScannerState = mutableEndpointScannerState.asStateFlow()
     private var endpointJob: Job? = null
 
+    private val mutableChainState = MutableStateFlow(ChainState())
+    val chainState = mutableChainState.asStateFlow()
+    private var chainJob: Job? = null
+
     fun save(settings: AppSettings) {
         viewModelScope.launch { repository.save(settings) }
+    }
+
+    /**
+     * Reads the node list back from the running chain.
+     *
+     * There is no list to read when it is not running. The nodes come from a
+     * subscription mihomo has fetched and parsed, and fetching it early -- before
+     * the tunnel exists -- would send the request over the local network in the
+     * clear, which is the one thing dialling through the tunnel exists to avoid.
+     */
+    fun refreshChainNodes() {
+        if (chainJob?.isCompleted == false) return
+        chainJob = viewModelScope.launch {
+            mutableChainState.value = mutableChainState.value.copy(busy = true, error = null)
+            val reported = withContext(Dispatchers.IO) { chain.nodes() }
+            mutableChainState.value = ChainState(
+                available = chain.isAvailable,
+                nodes = reported.nodes,
+                selected = reported.selected,
+            )
+        }
+    }
+
+    /** Switches the live chain, and remembers the choice for the next connect. */
+    fun selectChainNode(settings: AppSettings, node: String) {
+        if (chainJob?.isCompleted == false) return
+        chainJob = viewModelScope.launch {
+            // Saved first. If the engine refuses the switch the preference is
+            // still what the user asked for, and the next connect honours it --
+            // better than a screen that silently reverts.
+            repository.save(settings.copy(chain = settings.chain.copy(node = node)))
+            val failure = withContext(Dispatchers.IO) { chain.select(node) }
+            val reported = withContext(Dispatchers.IO) { chain.nodes() }
+            mutableChainState.value = ChainState(
+                available = chain.isAvailable,
+                nodes = reported.nodes,
+                selected = reported.selected,
+                error = failure,
+            )
+        }
+    }
+
+    /**
+     * Measures every node.
+     *
+     * The results come back through mihomo's event stream and land in the log, so
+     * this waits before re-reading rather than expecting an answer here.
+     */
+    fun testChainNodes() {
+        if (chainJob?.isCompleted == false) return
+        val names = mutableChainState.value.nodes.map { it.name }
+        if (names.isEmpty()) return
+        chainJob = viewModelScope.launch {
+            mutableChainState.value = mutableChainState.value.copy(busy = true, error = null)
+            withContext(Dispatchers.IO) { chain.testNodes(names) }
+            delay(DELAY_TEST_SETTLE_MS)
+            val reported = withContext(Dispatchers.IO) { chain.nodes() }
+            mutableChainState.value = ChainState(
+                available = chain.isAvailable,
+                nodes = reported.nodes,
+                selected = reported.selected,
+            )
+        }
     }
 
     fun scanEndpoints(settings: AppSettings) {
@@ -172,6 +259,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         NativeAetherBridge.cancelScan()
         endpointJob?.cancel()
+        chainJob?.cancel()
         super.onCleared()
+    }
+
+    private companion object {
+        /** Long enough for the slowest test to answer, short enough to watch. */
+        const val DELAY_TEST_SETTLE_MS = 6_000L
     }
 }

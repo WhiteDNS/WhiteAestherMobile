@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -118,14 +119,20 @@ fun EngineStage.toConnectState(): ConnectState = when (this) {
     EngineStage.ERROR -> ConnectState.FAILED
 }
 
+/** The scrolling page body every screen sits in. */
 @Composable
-private fun ScreenColumn(content: @Composable ColumnScopeAlias.() -> Unit) {
+internal fun ScreenColumn(content: @Composable ColumnScopeAlias.() -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 18.dp)
-            .padding(bottom = 26.dp),
+            .padding(bottom = 26.dp)
+            // Inside the scroll, so the keyboard adds room to scroll into rather
+            // than shrinking the page. Without it the control below a field is
+            // underneath the keyboard the field just opened -- which on the exit
+            // chain is the button that saves what was typed.
+            .imePadding(),
         content = content,
     )
 }
@@ -398,6 +405,7 @@ fun RoutesScreen(
     settings: AppSettings,
     onSettingsChange: (AppSettings) -> Unit,
     onGoToEndpoint: () -> Unit,
+    onGoToChain: () -> Unit = {},
 ) {
     var advanced by rememberSaveable(settings.showAdvanced) { mutableStateOf(settings.showAdvanced) }
     val active = settings.activeProfile()
@@ -452,6 +460,14 @@ fun RoutesScreen(
                 subtitle = settings.endpointSummary(),
                 iconTint = AetherTheme.colors.cyan,
                 onClick = onGoToEndpoint,
+            )
+            Divider()
+            RowCard(
+                icon = AetherIcons.Globe,
+                title = "Exit chain",
+                subtitle = settings.chainSummary(),
+                iconTint = AetherTheme.colors.brand,
+                onClick = onGoToChain,
             )
         }
 

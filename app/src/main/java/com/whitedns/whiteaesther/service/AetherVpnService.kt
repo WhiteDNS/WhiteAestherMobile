@@ -374,7 +374,7 @@ class AetherVpnService : VpnService() {
             }
         }
 
-        EngineLog.record(LogLevel.INFO, "chain", "exit chain up on ${chain.nodes().size} nodes")
+        EngineLog.record(LogLevel.INFO, "chain", "exit chain up on ${chain.nodes().nodes.size} nodes")
         reportConnected(
             mode,
             peer,
