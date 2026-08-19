@@ -42,13 +42,22 @@ if (-not (Test-Path $ndkRoot)) {
     throw "Android NDK not found under $sdk. Set ANDROID_HOME, or sdk.dir in local.properties."
 }
 $ndk = (Get-ChildItem $ndkRoot -Directory | Sort-Object Name -Descending)[0].FullName
-$bin = Join-Path $ndk 'toolchains\llvm\prebuilt\windows-x86_64\bin'
+
+# The NDK ships one toolchain per host, and CI is Linux while development is
+# Windows. Getting this from the host rather than hardcoding it is what lets the
+# release build the same libraries the developer does.
+$hostTag = if ($IsLinux) { 'linux-x86_64' } elseif ($IsMacOS) { 'darwin-x86_64' } else { 'windows-x86_64' }
+$bin = Join-Path $ndk "toolchains/llvm/prebuilt/$hostTag/bin"
+if (-not (Test-Path $bin)) { throw "NDK toolchain not found for this host: $bin" }
+
+# Only Windows wraps the clang drivers in .cmd shims.
+$ext = if ($IsLinux -or $IsMacOS) { '' } else { '.cmd' }
 
 # minSdk is 26, so the toolchain is pinned there rather than to the NDK default.
 $targets = @{
-    'arm64-v8a'   = @{ Arch = 'arm64'; Clang = 'aarch64-linux-android26-clang.cmd';    Arm = $null }
-    'x86_64'      = @{ Arch = 'amd64'; Clang = 'x86_64-linux-android26-clang.cmd';     Arm = $null }
-    'armeabi-v7a' = @{ Arch = 'arm';   Clang = 'armv7a-linux-androideabi26-clang.cmd'; Arm = '7'  }
+    'arm64-v8a'   = @{ Arch = 'arm64'; Clang = "aarch64-linux-android26-clang$ext";    Arm = $null }
+    'x86_64'      = @{ Arch = 'amd64'; Clang = "x86_64-linux-android26-clang$ext";     Arm = $null }
+    'armeabi-v7a' = @{ Arch = 'arm';   Clang = "armv7a-linux-androideabi26-clang$ext"; Arm = '7'  }
 }
 
 Push-Location $core
