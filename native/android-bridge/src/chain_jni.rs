@@ -146,7 +146,7 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeChainBridge_nat
 pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeChainBridge_nativeSetSocketProtector<
     'local,
 >(
-    mut env: JNIEnv<'local>,
+    env: JNIEnv<'local>,
     _class: JClass<'local>,
     protector: JObject<'local>,
 ) {

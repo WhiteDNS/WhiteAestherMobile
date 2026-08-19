@@ -40,3 +40,17 @@ Re-apply whenever Clash.Meta moves.
 
 mihomo is GPL-3.0. This app is AGPL-3.0 and the combination is distributable, but
 the notice obligation is real: see `THIRD_PARTY_NOTICES.md`.
+
+## Checking the bridge code
+
+`chain.rs` and `chain_jni.rs` are `#[cfg(unix)]`: `dlopen` is a Unix API and
+the host build on Windows has no chain at all. A plain `cargo clippy` on a
+Windows desktop therefore compiles none of it and passes on code CI rejects.
+Check against an Android target instead:
+
+```bash
+cd native/android-bridge
+cargo ndk -t arm64-v8a clippy --locked --all-targets -- -D warnings
+```
+
+CI runs on Linux, where the host build is Unix, so it does see this code.

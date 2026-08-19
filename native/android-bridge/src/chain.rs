@@ -60,10 +60,14 @@ type Protect = unsafe extern "C" fn(*mut c_void, c_int);
 type ResolveProcess =
     unsafe extern "C" fn(*mut c_void, c_int, *const c_char, *const c_char, c_int) -> *mut c_char;
 
-/// Set by the service so mihomo's sockets can be kept out of the tun.
-static PROTECTOR: Mutex<Option<Arc<dyn Fn(i32) -> bool + Send + Sync>>> = Mutex::new(None);
+/// Reaches `VpnService.protect()`. Named because it appears in three signatures
+/// and spelling it out each time is what clippy objects to.
+pub type SocketProtector = Arc<dyn Fn(i32) -> bool + Send + Sync>;
 
-pub fn set_socket_protector(protector: Option<Arc<dyn Fn(i32) -> bool + Send + Sync>>) {
+/// Set by the service so mihomo's sockets can be kept out of the tun.
+static PROTECTOR: Mutex<Option<SocketProtector>> = Mutex::new(None);
+
+pub fn set_socket_protector(protector: Option<SocketProtector>) {
     *PROTECTOR.lock() = protector;
 }
 
