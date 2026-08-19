@@ -1,3 +1,8 @@
+// dlopen and friends are a Unix API; the host build on Windows has no chain.
+#[cfg(unix)]
+mod chain;
+#[cfg(unix)]
+mod chain_jni;
 mod tun;
 
 use std::net::SocketAddr;

@@ -110,6 +110,12 @@ android {
         getByName("release").jniLibs.directories.add(
             layout.buildDirectory.dir("generated/rustJniLibs/release").get().asFile.absolutePath,
         )
+        // The exit chain's Go library, built separately by native/chain/build.ps1.
+        // Not produced by this build: it needs the Go toolchain and takes
+        // minutes. A missing directory is not an error -- the app loads the
+        // chain at run time and reports it unavailable when it is absent, which
+        // is what a build without it should do.
+        getByName("main").jniLibs.srcDir(rootProject.file("native/chain/build"))
     }
 }
 
