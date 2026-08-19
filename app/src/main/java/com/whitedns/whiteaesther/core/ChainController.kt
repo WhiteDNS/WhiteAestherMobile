@@ -44,6 +44,7 @@ class ChainController(private val context: Context) {
             // config was accepted and the reason when it was not.
             applyConfig()?.let { return it }
             selectNode(settings.node)
+            startLogging()
 
             NativeChainBridge.startTun(
                 fd = tunFd,
@@ -58,6 +59,10 @@ class ChainController(private val context: Context) {
 
     fun stop() {
         if (!isAvailable) return
+        // Drained first: the lines explaining why a session ended are written
+        // during teardown, and shutdown discards anything still buffered.
+        collectEvents()
+        NativeChainBridge.invoke("stopLog")
         NativeChainBridge.stopTun()
         // Closes listeners and drops the parsed config. Without it a later start
         // inherits the previous run's providers and selected node.
@@ -89,6 +94,45 @@ class ChainController(private val context: Context) {
                 )
             }
         }
+    }
+
+    /**
+     * Moves mihomo's log into the app's, where the diagnostics report can reach
+     * it. Best effort: losing the log is not a reason to refuse to connect.
+     */
+    private fun startLogging() {
+        if (!NativeChainBridge.listenForEvents()) return
+        NativeChainBridge.invoke("startLog")
+    }
+
+    /**
+     * Copies buffered events into [EngineLog].
+     *
+     * Only the log ones. The stream also carries a traffic sample and a record
+     * of every connection, which on a phone is thousands of lines an hour and
+     * would name every host the user visited in a report they might send us.
+     */
+    fun collectEvents() {
+        if (!isAvailable) return
+        NativeChainBridge.drainEvents().forEach { batch ->
+            runCatching {
+                val messages = JSONObject(batch).optJSONArray("arguments") ?: return@runCatching
+                for (index in 0 until messages.length()) {
+                    val message = messages.optJSONObject(index) ?: continue
+                    if (message.optString("type") != "log") continue
+                    val data = message.optJSONObject("data") ?: continue
+                    val payload = data.optString("payload").ifBlank { data.toString() }
+                    EngineLog.record(levelOf(data.optString("logLevel")), "chain", payload)
+                }
+            }
+        }
+    }
+
+    private fun levelOf(level: String): LogLevel = when (level.lowercase()) {
+        "error" -> LogLevel.ERROR
+        "warning", "warn" -> LogLevel.WARN
+        "debug" -> LogLevel.DEBUG
+        else -> LogLevel.INFO
     }
 
     private fun prepareHome(settings: ChainSettings, socksPort: Int?) {

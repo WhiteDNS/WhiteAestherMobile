@@ -53,22 +53,42 @@ reports rather than something waiting behind them.
 
 ## Stages, each with a gate
 
-**1. The core builds and loads.** Fetch the FlClash core and Clash.Meta, apply
-the REALITY patch, build one c-shared library per ABI, stage into `jniLibs`.
-*Gate: the app loads it and an action call answers.*
+**1. The core builds and loads. Done.** Fetch the FlClash core and Clash.Meta,
+apply the REALITY patch, build one c-shared library per ABI, stage into
+`jniLibs`. *Gate met: the library loads beside the Rust engine in one process,
+answers actions, and survives ten consecutive ones -- the two-runtime failure
+this design avoids showed up on the third call, not the first.*
 
-**2. The loop is closed.** This is the hazard, not the UI. The tun takes
+**2. The loop is closed. Done.** This was the hazard, not the UI. The tun takes
 `0.0.0.0/0` and `::/0`, so anything not loopback and not protected is pulled back
-into the tunnel creating it. Three paths to close: Aether's own sockets (already
-protected), mihomo's DNS, and subscription and health-check traffic. The app must
-also exclude itself with `addDisallowedApplication`, or the subscription fetch
-races its own tunnel. One hard-coded node, no UI.
-*Gate: the exit address is the node's, and nothing recurses.*
+into the tunnel creating it. Four paths closed, each differently:
 
-**3. Rendering and nodes.** Port `chain.rs::render` to Kotlin and drive mihomo
-through `invokeAction` rather than its HTTP control API. That sidesteps the bug
-the desktop hit, where Go's `net/http` chunk-frames any reply too large to
-buffer: `/version` at 35 bytes parsed, the node list did not.
+- Aether's own sockets -- already protected per socket
+- mihomo's resolvers -- `#aether` on each nameserver, which is mihomo's syntax
+  for dialling a resolver through a named proxy
+- subscription fetches and health checks -- `dialer-proxy` on the provider
+- everything else this process opens -- `addDisallowedApplication` on ourselves,
+  which the kernel enforces whether or not a caller remembered to protect
+
+*Gate met on Android 16, probed from `adb shell` because a request from inside
+the app proves nothing -- being excluded is the containment under test:*
+
+| | direct | through the chain |
+| --- | --- | --- |
+| exit address | `124.120.14.203` | `64.110.98.173` |
+| Cloudflare edge | BKK | KIX |
+| `api.ipify.org` resolves to | real address | `198.19.0.5`, a fake-ip |
+
+*`tun0` came up at `198.18.0.1/30` owned by mihomo, and went away on teardown
+with the exit address back to direct. Both topologies verified: nodes dialled
+directly, and nodes dialled through MASQUE.*
+
+**3. Rendering and nodes. Renderer done, listing outstanding.**
+`chain.rs::render` is ported and drives mihomo through the action protocol rather
+than its HTTP control API, which sidesteps the bug the desktop hit where Go's
+`net/http` chunk-frames any reply too large to buffer: `/version` at 35 bytes
+parsed, the node list did not. A real subscription imports; `getProxies` reads
+back the group. What is left is surfacing that list and letting a node be picked.
 *Gate: a real subscription imports and lists.*
 
 **4. The dashboard.** Compose equivalent of `src/features/Chain.tsx`.
@@ -77,10 +97,34 @@ buffer: `/version` at 35 bytes parsed, the node list did not.
 the Play tension settled deliberately. Roughly +15 MB per ABI against an 8 MB
 arm64 APK today; ABI splits already contain what each device downloads.
 
+## Decisions taken while building it
+
+**No `external-controller`.** The desktop needs one because mihomo is a separate
+process there. In-process it would be an open loopback port that nothing uses,
+reachable by any page the user opens.
+
+**Dialling directly does not start the engine.** Not an optimisation: this mode
+exists for networks where MASQUE is dead, and on exactly those networks the
+endpoint scan it used to run first is the thing that never finishes.
+
+**Refuse rather than connect without the chain.** If the chain is on and cannot
+start, the session fails and says why. Connecting anyway is the failure that does
+not look like one -- the user believes their traffic leaves from their node while
+it leaves from Cloudflare.
+
+**mihomo's log goes into the app's.** Pulled from a bounded buffer rather than
+pushed, because the events arrive on Go's own threads and pushing would attach
+each one to the JVM. Only the log events are kept: the same stream carries a
+record of every connection, which would name every host the user visited in a
+report they might send us.
+
 ## Still not proven
 
-- A physical device. whitevpn2's proof is an emulator, which does not exercise
-  the VpnService fd path honestly.
-- Any ABI but one. `arm64-v8a` builds there; nothing has run it.
-- IPv6 containment on a v6-capable network.
-- Battery cost, measured rather than assumed.
+- **A physical device.** Everything above is an emulator, which does not
+  exercise the VpnService fd path honestly.
+- **Any ABI but `x86_64`.** `arm64-v8a` builds and is staged; nothing has run it.
+- **IPv6 containment on a v6-capable network.** The emulator has no IPv6, so the
+  `::/0` half of the routing loop is closed by construction and not by test.
+- **Battery cost**, measured rather than assumed.
+- **Recovery.** What happens when the tunnel drops under a live chain, or the
+  network changes, has been reasoned about but not exercised.

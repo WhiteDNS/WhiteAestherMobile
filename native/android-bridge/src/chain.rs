@@ -30,6 +30,7 @@
 //! and it has to reach `VpnService.protect()`. Without that, the tun's default
 //! route pulls mihomo's own connections back into the tunnel it is building.
 
+use std::collections::VecDeque;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::Arc;
@@ -45,6 +46,7 @@ const ACTION_TIMEOUT: Duration = Duration::from_secs(60);
 const LIBRARY: &[u8] = b"libwhiteaestherchain.so\0";
 
 type InvokeMethod = unsafe extern "C" fn(*mut c_void, *mut c_char);
+type SetEventListener = unsafe extern "C" fn(*mut c_void);
 /// Returns `true` always -- see [`start_tun`]. Kept in the signature because
 /// that is what the library exports, not because it carries a verdict.
 type StartTun =
@@ -69,7 +71,31 @@ struct Core {
     invoke_method: InvokeMethod,
     start_tun: StartTun,
     stop_tun: StopTun,
+    set_event_listener: SetEventListener,
 }
+
+/// What a callback handle means when Go calls back through it.
+///
+/// Go has one `result` entry point and uses it for both a one-shot reply and
+/// the event stream, so the handle has to carry which it is. Getting this wrong
+/// is not a wrong answer -- it is a `Sender` interpreted as an event sink, or a
+/// `Box` freed as the wrong type.
+enum Callback {
+    /// One action's reply. Sent once, then released.
+    Reply(Sender<String>),
+    /// The event stream. Lives for the process; never released by Go.
+    Events,
+}
+
+/// Recent events from mihomo, newest last.
+///
+/// Buffered rather than pushed to Kotlin, because these arrive on Go's own
+/// threads and pushing would mean attaching each one to the JVM. Bounded,
+/// because at log level info a busy tunnel produces a line per connection and
+/// nothing guarantees anyone is draining.
+static EVENTS: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+
+const MAX_EVENTS: usize = 512;
 
 // Only ever read after initialisation, and the Go side is internally
 // synchronised.
@@ -121,6 +147,10 @@ fn load() -> Result<Core, String> {
             )?),
             start_tun: std::mem::transmute::<*mut c_void, StartTun>(symbol(handle, b"startTUN\0")?),
             stop_tun: std::mem::transmute::<*mut c_void, StopTun>(symbol(handle, b"stopTun\0")?),
+            set_event_listener: std::mem::transmute::<*mut c_void, SetEventListener>(symbol(
+                handle,
+                b"setEventListener\0",
+            )?),
         })
     }
 }
@@ -145,26 +175,37 @@ unsafe extern "C" fn host_free_string(data: *mut c_char) {
     }
 }
 
-/// Go is finished with the reply channel.
+/// Go is finished with a callback handle.
 unsafe extern "C" fn host_release_object(object: *mut c_void) {
     if !object.is_null() {
-        drop(Box::from_raw(object as *mut Sender<String>));
+        drop(Box::from_raw(object as *mut Callback));
     }
 }
 
-/// The reply. The string belongs to Go and is freed when this returns, so it is
-/// copied here rather than taken.
+/// A reply, or an event. The string belongs to Go and is freed when this
+/// returns, so it is copied here rather than taken.
 unsafe extern "C" fn host_result(callback: *mut c_void, data: *const c_char) {
     if callback.is_null() {
         return;
     }
-    let reply = if data.is_null() {
+    let payload = if data.is_null() {
         String::new()
     } else {
         CStr::from_ptr(data).to_string_lossy().into_owned()
     };
-    let sender = &*(callback as *const Sender<String>);
-    let _ = sender.send(reply);
+
+    match &*(callback as *const Callback) {
+        Callback::Reply(sender) => {
+            let _ = sender.send(payload);
+        }
+        Callback::Events => {
+            let mut events = EVENTS.lock();
+            if events.len() >= MAX_EVENTS {
+                events.pop_front();
+            }
+            events.push_back(payload);
+        }
+    }
 }
 
 /// Keeps mihomo's own sockets out of the tunnel it is building.
@@ -198,7 +239,7 @@ unsafe extern "C" fn host_resolve_process(
 pub fn invoke(params: &str) -> Result<String, String> {
     let core = core()?;
     let (tx, rx) = mpsc::channel::<String>();
-    let callback = Box::into_raw(Box::new(tx)) as *mut c_void;
+    let callback = Box::into_raw(Box::new(Callback::Reply(tx))) as *mut c_void;
     let owned = CString::new(params).map_err(|_| "action contains a null byte".to_string())?;
 
     unsafe { (core.invoke_method)(callback, owned.into_raw()) };
@@ -222,7 +263,7 @@ pub fn invoke(params: &str) -> Result<String, String> {
 pub fn start_tun(fd: i32, stack: &str, address: &str, dns: &str) -> Result<(), String> {
     let core = core()?;
     let (tx, _rx) = mpsc::channel::<String>();
-    let callback = Box::into_raw(Box::new(tx)) as *mut c_void;
+    let callback = Box::into_raw(Box::new(Callback::Reply(tx))) as *mut c_void;
 
     let stack = CString::new(stack).map_err(|_| "stack contains a null byte".to_string())?;
     let address = CString::new(address).map_err(|_| "address contains a null byte".to_string())?;
@@ -244,4 +285,28 @@ pub fn stop_tun() {
     if let Ok(core) = core() {
         unsafe { (core.stop_tun)() };
     }
+}
+
+/// Registers the event sink, once. mihomo's logs and its delay and connection
+/// notices all arrive through it.
+///
+/// The handle is deliberately leaked: Go holds it for the life of the process
+/// and only releases it when a new listener replaces it, which never happens
+/// here.
+pub fn listen_for_events() -> Result<(), String> {
+    static REGISTERED: OnceCell<()> = OnceCell::new();
+    let core = core()?;
+    REGISTERED.get_or_init(|| {
+        let callback = Box::into_raw(Box::new(Callback::Events)) as *mut c_void;
+        unsafe { (core.set_event_listener)(callback) };
+    });
+    Ok(())
+}
+
+/// Takes everything buffered since the last call.
+///
+/// Draining rather than reading keeps the buffer from being re-reported, and
+/// means a caller that stops asking cannot grow it without bound.
+pub fn drain_events() -> Vec<String> {
+    EVENTS.lock().drain(..).collect()
 }

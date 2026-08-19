@@ -71,10 +71,34 @@ object NativeChainBridge {
         if (NativeAetherBridge.isLoaded) runCatching { nativeSetSocketProtector(protector) }
     }
 
+    /**
+     * Starts collecting mihomo's own log and event stream.
+     *
+     * Without this the chain is a black box: a node that fails to dial, a
+     * provider that will not parse, a health check that never passes all look
+     * identical from out here -- the tunnel is simply up and carrying nothing.
+     */
+    fun listenForEvents(): Boolean =
+        isAvailable && runCatching { nativeListenForEvents() }.getOrDefault(false)
+
+    /**
+     * Takes every event since the last call, newest last.
+     *
+     * Pulled rather than pushed: these arrive on the core's own threads, and a
+     * busy tunnel at log level info produces a line per connection.
+     */
+    fun drainEvents(): List<String> {
+        if (!isAvailable) return emptyList()
+        return runCatching { nativeDrainEvents()?.filterNotNull().orEmpty() }
+            .getOrDefault(emptyList())
+    }
+
     private external fun nativeAvailable(): Boolean
     private external fun nativeInvoke(params: String): String
     private external fun nativeStartTun(fd: Int, stack: String, address: String, dns: String): String
     private external fun nativeStopTun()
+    private external fun nativeListenForEvents(): Boolean
+    private external fun nativeDrainEvents(): Array<String?>?
     private external fun nativeSetSocketProtector(protector: NativeSocketProtector?)
 }
 

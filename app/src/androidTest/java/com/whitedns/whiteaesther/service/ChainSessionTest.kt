@@ -38,6 +38,13 @@ class ChainSessionTest {
     private val holdSeconds: Long
         get() = InstrumentationRegistry.getArguments().getString("chainHold")?.toLongOrNull() ?: 0L
 
+    /**
+     * Whether to put the MASQUE tunnel underneath. Off by default so a failure
+     * is unambiguous: with it on, either half can be the one that broke.
+     */
+    private val throughTunnel: Boolean
+        get() = InstrumentationRegistry.getArguments().getString("chainThroughTunnel") == "true"
+
     @After
     fun tearDown() {
         AetherVpnService.stop(context)
@@ -52,11 +59,7 @@ class ChainSessionTest {
             mode = EngineMode.TUN,
             chain = ChainSettings(
                 enabled = true,
-                // Dialled directly, not through the tunnel. This isolates what is
-                // being tested: whether mihomo owns the interface and nothing
-                // recurses. Adding the tunnel underneath makes a failure
-                // ambiguous between the two halves.
-                throughTunnel = false,
+                throughTunnel = throughTunnel,
                 sources = listOf(ChainSource("Test", url!!, true)),
             ),
         )
@@ -67,7 +70,7 @@ class ChainSessionTest {
             settings.chain.encode(),
         )
 
-        val status = awaitStage(EngineStage.CONNECTED, timeoutMs = 180_000)
+        val status = awaitStage(EngineStage.CONNECTED, timeoutMs = if (throughTunnel) 300_000 else 180_000)
         assertEquals(
             "the chain did not connect: ${EngineStatusStore.status.value.message}",
             EngineStage.CONNECTED,
@@ -84,6 +87,16 @@ class ChainSessionTest {
                 EngineStatusStore.status.value.stage,
             )
         }
+
+        // mihomo's own log has to be reaching ours. Without it the chain is a
+        // black box: a node that will not dial, a provider that will not parse
+        // and a health check that never passes all look identical from outside,
+        // and the diagnostics report the user sends would say nothing about the
+        // half that failed.
+        assertTrue(
+            "no log from the chain reached the app",
+            EngineLog.entries.value.any { it.tag == "chain" },
+        )
     }
 
     @Test

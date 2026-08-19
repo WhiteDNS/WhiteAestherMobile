@@ -361,6 +361,19 @@ class AetherVpnService : VpnService() {
             return
         }
 
+        // mihomo's own log, moved into ours while the session runs. Draining only
+        // at teardown would lose exactly the lines that explain a chain which is
+        // up and carrying nothing.
+        // Bounded by the generation rather than by a handle, so the direct-dial
+        // path -- which returns from here with mihomo still running -- does not
+        // leave it pumping for a session that has been replaced.
+        serviceScope.launch {
+            while (sessionGeneration == generation) {
+                delay(EVENT_DRAIN_MS)
+                withContext(Dispatchers.IO) { chain.collectEvents() }
+            }
+        }
+
         EngineLog.record(LogLevel.INFO, "chain", "exit chain up on ${chain.nodes().size} nodes")
         reportConnected(
             mode,
@@ -377,7 +390,8 @@ class AetherVpnService : VpnService() {
         // down too rather than quietly falling back to a direct connection.
         // Dialling directly there is no such route, and mihomo runs until the
         // user stops it.
-        engine?.join() ?: return
+        if (engine == null) return
+        engine.join()
         cleanUp()
         if (sessionGeneration != generation) return
         scheduleReconnect(configJson, sessionGeneration, mode, "The encrypted route closed")
@@ -674,6 +688,7 @@ class AetherVpnService : VpnService() {
         // Generous, because that tunnel is itself still searching for a route.
         private const val TUNNEL_WAIT_MS = 120_000L
         private const val DEFAULT_SOCKS_PORT = 1819
+        private const val EVENT_DRAIN_MS = 5_000L
         // Long enough for a healthy session to unwind, short enough that a
         // wedged one never leaves the user with only force-stop.
         private const val STOP_GRACE_MS = 4_000L

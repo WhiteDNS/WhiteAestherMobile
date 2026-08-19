@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use jni::objects::{JClass, JObject, JString};
-use jni::sys::{jboolean, jint, jstring, JNI_FALSE, JNI_TRUE};
+use jni::sys::{jboolean, jint, jobjectArray, jstring, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 
 use crate::chain;
@@ -79,6 +79,47 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeChainBridge_nat
     match result {
         Ok(()) => java_string(env, r#"{"ok":true}"#),
         Err(reason) => java_string(env, &failure(&reason)),
+    }
+}
+
+/// Takes every event mihomo has produced since the last call.
+///
+/// Pulled rather than pushed because these arrive on Go's own threads, and
+/// pushing would mean attaching each one to the JVM for a log line.
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeChainBridge_nativeDrainEvents<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jobjectArray {
+    let events = chain::drain_events();
+    let empty = match env.new_string("") {
+        Ok(value) => value,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let array = match env.new_object_array(events.len() as i32, "java/lang/String", &empty) {
+        Ok(value) => value,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    for (index, event) in events.iter().enumerate() {
+        let Ok(value) = env.new_string(event) else { continue };
+        let _ = env.set_object_array_element(&array, index as i32, value);
+    }
+    array.into_raw()
+}
+
+/// Starts delivering mihomo's events into the buffer [`nativeDrainEvents`]
+/// reads.
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeChainBridge_nativeListenForEvents(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+) -> jboolean {
+    if chain::listen_for_events().is_ok() {
+        JNI_TRUE
+    } else {
+        JNI_FALSE
     }
 }
 
