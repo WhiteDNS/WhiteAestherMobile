@@ -97,7 +97,7 @@ pub async fn run_cli() -> Result<()> {
                 identity.ipv6
             );
             let ech = resolve_ech().await;
-            let lastconn_path = lastconn_path(&config_path);
+            let lastconn_path = lastconn_path(&config_path, Protocol::Masque);
             run_masque(identity, ech, listen, lastconn_path).await
         }
         Protocol::WireGuard => {
@@ -109,7 +109,7 @@ pub async fn run_cli() -> Result<()> {
                 identity.ipv4,
                 identity.ipv6
             );
-            let lastconn_path = lastconn_path(&config_path);
+            let lastconn_path = lastconn_path(&config_path, Protocol::WireGuard);
             run_wireguard(identity, listen, lastconn_path).await
         }
         Protocol::WarpInWarp => {
@@ -222,7 +222,11 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
     };
 
     let profile = std::env::var("AETHER_NOIZE").unwrap_or_else(|_| "firewall".to_string());
-    lastconn::save(&lastconn_path(&config_path), &peer.to_string(), &profile);
+    lastconn::save(
+        &lastconn_path(&config_path, config.protocol()),
+        &peer.to_string(),
+        &profile,
+    );
 
     // Nested, the interface is addressed for the inner account: that is the one
     // whose packets reach the internet, and addressing it as the outer would
@@ -270,7 +274,7 @@ async fn select_embedded_wg_peer(
         log::warn!("[-] custom endpoint {peer} failed; falling back to automatic discovery");
     }
 
-    if let Some(cached) = lastconn::load(&lastconn_path(config_path)) {
+    if let Some(cached) = lastconn::load(&lastconn_path(config_path, config.protocol())) {
         if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
             let profile = aethernoize::from_profile(&cached.profile);
             if verify_wg_peer(identity, peer, &profile).await.is_ok() {
@@ -382,7 +386,11 @@ pub async fn run_embedded(
         let (peer, profile, name) =
             select_embedded_wg_peer(&identity, &config.clone_with_peer(peer), &config_path).await?;
         log::info!("[+] WireGuard endpoint {peer} using aethernoize profile '{name}'");
-        lastconn::save(&lastconn_path(&config_path), &peer.to_string(), &name);
+        lastconn::save(
+            &lastconn_path(&config_path, config.protocol()),
+            &peer.to_string(),
+            &name,
+        );
 
         if config.protocol() == Protocol::WarpInWarp {
             let secondary = load_or_provision_warp(&config.secondary_identity_path()).await?;
@@ -686,7 +694,7 @@ async fn select_embedded_peer(
         }
     }
 
-    if let Some(cached) = lastconn::load(&lastconn_path(config_path)) {
+    if let Some(cached) = lastconn::load(&lastconn_path(config_path, Protocol::Masque)) {
         if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
             if quick_verify_masque_peer(identity, peer).await {
                 return Ok(peer);
@@ -1141,14 +1149,30 @@ fn warp_config_path(base: &str) -> String {
     }
 }
 
+/// Where MASQUE's identity lives -- the same file every other protocol uses.
+///
+/// A Cloudflare WARP account carries the WireGuard keys, and a MASQUE
+/// certificate is enrolled onto that same device rather than being a second
+/// account. Keeping them apart meant a user who tried both protocols registered
+/// twice, and Cloudflare rate-limits registrations per address. On a network
+/// where connecting is already hard, that is the difference between a slow start
+/// and no connection at all.
+///
+/// Under a Zero Trust team the two were already the same file, which is what
+/// says sharing was always the intent and the split was incidental.
 fn masque_config_path(base: &str) -> String {
     if let Ok(p) = std::env::var("AETHER_MASQUE_CONFIG") {
         return p;
     }
-    match team_scope() {
-        Some(team) => derive_sibling_path(base, &format!("team-{team}")),
-        None => derive_sibling_path(base, "masque"),
-    }
+    warp_config_path(base)
+}
+
+/// The file MASQUE used before identities were shared.
+///
+/// Read only when the shared file is absent, so an install that already paid
+/// for a registration keeps it instead of buying another.
+fn legacy_masque_config_path(base: &str) -> String {
+    derive_sibling_path(base, "masque")
 }
 
 fn derive_sibling_path(base: &str, suffix: &str) -> String {
@@ -1182,6 +1206,7 @@ async fn load_or_provision_warp(config_path: &str) -> Result<account::Identity> 
 }
 
 async fn load_or_provision_masque(config_path: &str) -> Result<account::Identity> {
+    adopt_legacy_masque_identity(config_path)?;
     if let Some(identity) = config::load(config_path)? {
         log::info!("[+] loaded existing masque identity from {config_path}");
         if identity.has_masque_credentials() {
@@ -1381,8 +1406,37 @@ fn masque_probe(identity: &account::Identity, ip: prober::IpScan) -> prober::Mas
     }
 }
 
-fn lastconn_path(config_path: &str) -> String {
-    derive_sibling_path(config_path, "lastconn")
+/// Where the last working endpoint for one protocol is remembered.
+///
+/// Per protocol even though the identity is shared: a MASQUE gateway and a
+/// WireGuard endpoint are different addresses on different ports, and offering
+/// one to the other wastes a validation attempt on every connect.
+fn lastconn_path(config_path: &str, protocol: Protocol) -> String {
+    match protocol {
+        Protocol::Masque => derive_sibling_path(config_path, "masque-lastconn"),
+        _ => derive_sibling_path(config_path, "lastconn"),
+    }
+}
+
+/// Moves a pre-sharing MASQUE identity to the shared file.
+///
+/// Without this, sharing the path would look to an existing install exactly like
+/// a fresh one, and the first thing it would do is register again -- the cost
+/// this change exists to avoid.
+fn adopt_legacy_masque_identity(config_path: &str) -> Result<()> {
+    if config::load(config_path)?.is_some() {
+        return Ok(());
+    }
+    let legacy = legacy_masque_config_path(config_path);
+    if legacy == config_path {
+        return Ok(());
+    }
+    let Some(identity) = config::load(&legacy)? else {
+        return Ok(());
+    };
+    log::info!("[+] adopting the existing identity from {legacy}; no new registration needed");
+    config::save(config_path, &identity)?;
+    Ok(())
 }
 
 async fn quick_verify_masque_peer(identity: &account::Identity, peer: SocketAddr) -> bool {
@@ -2444,5 +2498,138 @@ async fn select_ip_version() -> prober::IpScan {
         Some("2") => prober::IpScan::V6,
         Some("3") => prober::IpScan::Both,
         _ => prober::IpScan::V4,
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    /// Clears the environment these paths read, so a developer's own settings
+    /// cannot decide whether the suite passes.
+    fn isolated() {
+        std::env::remove_var("AETHER_MASQUE_CONFIG");
+        std::env::remove_var("AETHER_WG_CONFIG");
+        std::env::remove_var("CF_TEAM");
+        std::env::remove_var("AETHER_TEAM");
+    }
+
+    #[test]
+    fn every_protocol_shares_one_identity_file() {
+        isolated();
+        // One Cloudflare device serves all of them: the account carries the
+        // WireGuard keys and the MASQUE certificate is enrolled onto that same
+        // device. Separate files meant separate registrations, and Cloudflare
+        // rate-limits registrations per address.
+        assert_eq!(
+            masque_config_path("/data/aether.toml"),
+            warp_config_path("/data/aether.toml"),
+        );
+    }
+
+    #[test]
+    fn each_protocol_remembers_its_own_endpoint() {
+        isolated();
+        let base = "/data/aether.toml";
+        // A MASQUE gateway and a WireGuard endpoint are different addresses on
+        // different ports. Sharing this file would offer each the other's, and
+        // waste a validation on every connect.
+        assert_ne!(
+            lastconn_path(base, Protocol::Masque),
+            lastconn_path(base, Protocol::WireGuard),
+        );
+    }
+
+    #[test]
+    fn remembered_endpoints_keep_the_names_existing_installs_wrote() {
+        isolated();
+        let base = "/data/aether.toml";
+        // Renaming these would not break anything visibly -- it would just
+        // silently discard the cached endpoint and make the next connect scan
+        // from scratch, which is the slow path this file exists to avoid.
+        assert!(lastconn_path(base, Protocol::Masque).ends_with("aether-masque-lastconn.toml"));
+        assert!(lastconn_path(base, Protocol::WireGuard).ends_with("aether-lastconn.toml"));
+    }
+
+    #[test]
+    fn an_existing_masque_identity_is_adopted_rather_than_replaced() {
+        isolated();
+        let dir = std::env::temp_dir().join(format!("aether-adopt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("aether.toml");
+        let base = base.to_str().unwrap();
+
+        // What an install from before identities were shared looks like: the
+        // identity is in MASQUE's own file and the shared one does not exist.
+        let identity = account::Identity {
+            device_id: "device-from-before".into(),
+            access_token: "token".into(),
+            cert_pem: Vec::new(),
+            key_pem: Vec::new(),
+            cert_issued_at: 0,
+            ipv4: "172.16.0.2".into(),
+            ipv6: "2606:4700:110::1".into(),
+            wg_private_key: [7u8; 32],
+            wg_peer_public_key: [9u8; 32],
+            client_id: [1, 2, 3],
+            organization: String::new(),
+            gateway_proxy: String::new(),
+            assigned_endpoint: String::new(),
+        };
+        config::save(&legacy_masque_config_path(base), &identity).unwrap();
+        assert!(config::load(base).unwrap().is_none());
+
+        adopt_legacy_masque_identity(base).unwrap();
+
+        // Without this the shared path looks like a fresh install, and the first
+        // thing it does is register again -- the exact cost this avoids.
+        let adopted = config::load(base)
+            .unwrap()
+            .expect("identity was not adopted");
+        assert_eq!("device-from-before", adopted.device_id);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn adoption_never_overwrites_an_identity_already_in_place() {
+        isolated();
+        let dir = std::env::temp_dir().join(format!("aether-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("aether.toml");
+        let base = base.to_str().unwrap();
+
+        let current = account::Identity {
+            device_id: "current".into(),
+            access_token: "token".into(),
+            cert_pem: Vec::new(),
+            key_pem: Vec::new(),
+            cert_issued_at: 0,
+            ipv4: "172.16.0.2".into(),
+            ipv6: "2606:4700:110::1".into(),
+            wg_private_key: [1u8; 32],
+            wg_peer_public_key: [2u8; 32],
+            client_id: [4, 5, 6],
+            organization: String::new(),
+            gateway_proxy: String::new(),
+            assigned_endpoint: String::new(),
+        };
+        let stale = account::Identity {
+            device_id: "stale".into(),
+            ..current.clone()
+        };
+        config::save(base, &current).unwrap();
+        config::save(&legacy_masque_config_path(base), &stale).unwrap();
+
+        adopt_legacy_masque_identity(base).unwrap();
+
+        // A leftover file from before the migration must never displace the
+        // identity in use: that would swap the device mid-life and strand the
+        // certificate enrolled against it.
+        assert_eq!("current", config::load(base).unwrap().unwrap().device_id);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

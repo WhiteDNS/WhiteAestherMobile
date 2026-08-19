@@ -28,6 +28,27 @@ enum class TunnelProtocol(val wireName: String, val label: String) {
 
     /** True when a failed attempt can be retried on the other framing. */
     val hasSibling: Boolean get() = this == H3 || this == H2
+
+    /**
+     * Which set of endpoints this protocol reaches.
+     *
+     * Not the same question as [hasSibling]. H3 and H2 dial the identical
+     * address -- only the framing differs -- and WARP-in-WARP picks its outer
+     * hop from the same WireGuard endpoints as WireGuard itself. But a retry may
+     * only swap the two MASQUE framings: substituting a different tunnel is a
+     * different account and a different exit, which is not a retry.
+     */
+    val endpointFamily: EndpointFamily
+        get() = when (this) {
+            H3, H2 -> EndpointFamily.MASQUE
+            WIREGUARD, WARP_IN_WARP -> EndpointFamily.WARP
+        }
+}
+
+/** Protocols sharing one set of endpoints, so an address found on one fits the other. */
+enum class EndpointFamily {
+    MASQUE,
+    WARP,
 }
 
 enum class ScanStrategy(val wireName: String, val label: String) {
@@ -90,6 +111,16 @@ data class AppSettings(
     val noizeProfile: String = "firewall",
     val endpointMode: EndpointMode = EndpointMode.AUTOMATIC,
     val customEndpoint: String = "",
+    /**
+     * Which protocol the pinned address was found under.
+     *
+     * Endpoints are not interchangeable between protocols: a MASQUE gateway and
+     * a WireGuard endpoint are different services on different ports. Pinning
+     * one and then switching protocol otherwise fails at connect time with a
+     * message about the address, which reads as a bad address rather than the
+     * wrong protocol for it.
+     */
+    val customEndpointProtocol: TunnelProtocol? = null,
     // Anti-inspection measures for the HTTP/2 transport. Off by default: both
     // cost a little on a healthy network and only matter on a filtered one.
     val fragmentTls: Boolean = false,
@@ -106,6 +137,14 @@ data class AppSettings(
         customEndpoint.isBlank() -> "Enter a custom endpoint"
         EndpointAddress.normalize(customEndpoint) == null -> "Endpoint must be a valid IP:port"
         else -> null
+    }
+
+    /**
+     * Set when the pinned address belongs to a protocol other than the one now
+     * selected, which is a mismatch the user can only fix by knowing about it.
+     */
+    fun endpointProtocolMismatch(): TunnelProtocol? = customEndpointProtocol?.takeIf {
+        endpointMode != EndpointMode.AUTOMATIC && it.endpointFamily != transport.endpointFamily
     }
 
     fun toNativeJson(context: Context): String {

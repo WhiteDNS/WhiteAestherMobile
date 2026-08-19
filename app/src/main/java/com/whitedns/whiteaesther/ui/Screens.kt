@@ -562,6 +562,30 @@ fun EndpointScreen(
         CrumbBar("Routes · Endpoint", onBack = onBack)
         PageTitle("Where it connects to", "Leave this automatic unless someone gave you an address to use.")
 
+        settings.endpointProtocolMismatch()?.let { pinnedFor ->
+            // Without this the connect fails with a message about the address,
+            // which reads as a bad address rather than the right address for a
+            // protocol that is no longer selected.
+            AttentionCard(
+                tone = colors.signalFailed,
+                title = "This address is not for ${settings.transport.label}",
+                body = "It was found for ${pinnedFor.label}, and endpoints are not shared " +
+                    "between protocols. Scan again, or switch Endpoint back to Automatic.",
+                actions = listOf(
+                    "Use automatic" to {
+                        onSettingsChange(
+                            settings.copy(
+                                endpointMode = EndpointMode.AUTOMATIC,
+                                customEndpoint = "",
+                                customEndpointProtocol = null,
+                            ),
+                        )
+                    },
+                ),
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+
         AetherCard {
             Box(Modifier.padding(11.dp)) {
                 SegGroup(
@@ -585,7 +609,12 @@ fun EndpointScreen(
                         value = endpointText,
                         onValueChange = { value ->
                             endpointText = value.take(96)
-                            onSettingsChange(settings.copy(customEndpoint = endpointText))
+                            onSettingsChange(
+                                settings.copy(
+                                    customEndpoint = endpointText,
+                                    customEndpointProtocol = settings.transport,
+                                ),
+                            )
                         },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -689,6 +718,7 @@ fun EndpointScreen(
                                 settings.copy(
                                     endpointMode = EndpointMode.CUSTOM_FIRST,
                                     customEndpoint = result.peer,
+                                    customEndpointProtocol = settings.transport,
                                 ),
                             )
                         }
@@ -705,7 +735,11 @@ fun EndpointScreen(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            if (selected) "Authenticated MASQUE route · pinned" else "Authenticated MASQUE route",
+                            if (selected) {
+                                "Validated ${settings.transport.label} route · pinned"
+                            } else {
+                                "Validated ${settings.transport.label} route"
+                            },
                             style = AetherType.Small,
                             color = colors.text3,
                         )
@@ -714,7 +748,10 @@ fun EndpointScreen(
                 }
             }
         }
-        Note("Only endpoints that finish the authenticated MASQUE check are listed. Tapping one pins it and turns fallback on.")
+        Note(
+            "Only endpoints that pass the ${settings.transport.label} check are listed. Tapping " +
+                "one pins it and turns fallback on. Endpoints are not shared between protocols.",
+        )
     }
 }
 

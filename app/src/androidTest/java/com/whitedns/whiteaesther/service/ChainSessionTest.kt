@@ -5,6 +5,7 @@ import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.ChainSettings
 import com.whitedns.whiteaesther.data.ChainSource
 import com.whitedns.whiteaesther.data.EngineMode
+import com.whitedns.whiteaesther.data.TunnelProtocol
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -45,6 +46,19 @@ class ChainSessionTest {
     private val throughTunnel: Boolean
         get() = InstrumentationRegistry.getArguments().getString("chainThroughTunnel") == "true"
 
+    /**
+     * Which tunnel carries the chain.
+     *
+     * Every protocol has to serve the SOCKS listener mihomo dials through, and
+     * they reach it by different code paths -- MASQUE through its own embedded
+     * tunnel, WireGuard through a second one, WARP-in-WARP through a nested
+     * pair. Sharing one test across them is what says they actually agree.
+     */
+    private val protocol: TunnelProtocol
+        get() = InstrumentationRegistry.getArguments().getString("chainProtocol")
+            ?.let { name -> TunnelProtocol.entries.firstOrNull { it.wireName == name } }
+            ?: TunnelProtocol.H3
+
     @After
     fun tearDown() {
         AetherVpnService.stop(context)
@@ -57,6 +71,7 @@ class ChainSessionTest {
 
         val settings = AppSettings(
             mode = EngineMode.TUN,
+            transport = protocol,
             chain = ChainSettings(
                 enabled = true,
                 throughTunnel = throughTunnel,
@@ -72,7 +87,8 @@ class ChainSessionTest {
 
         val status = awaitStage(EngineStage.CONNECTED, timeoutMs = if (throughTunnel) 300_000 else 180_000)
         assertEquals(
-            "the chain did not connect: ${EngineStatusStore.status.value.message}",
+            "the chain did not connect over ${protocol.label}: " +
+                EngineStatusStore.status.value.message,
             EngineStage.CONNECTED,
             status,
         )

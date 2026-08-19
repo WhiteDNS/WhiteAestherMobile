@@ -23,6 +23,8 @@ class SettingsRepository(private val context: Context) {
             noizeProfile = preferences[NOIZE] ?: "firewall",
             endpointMode = enumValueOrDefault(preferences[ENDPOINT_MODE], EndpointMode.AUTOMATIC),
             customEndpoint = preferences[CUSTOM_ENDPOINT].orEmpty(),
+            customEndpointProtocol = preferences[CUSTOM_ENDPOINT_PROTOCOL]
+                ?.let { name -> TunnelProtocol.entries.firstOrNull { it.name == name } },
             themeMode = enumValueOrDefault(preferences[THEME_MODE], ThemeMode.SYSTEM),
             showAdvanced = preferences[SHOW_ADVANCED] ?: false,
             fragmentTls = preferences[FRAGMENT_TLS] ?: false,
@@ -42,6 +44,7 @@ class SettingsRepository(private val context: Context) {
             preferences[NOIZE] = settings.noizeProfile
             preferences[ENDPOINT_MODE] = settings.endpointMode.name
             preferences[CUSTOM_ENDPOINT] = settings.customEndpoint
+            preferences[CUSTOM_ENDPOINT_PROTOCOL] = settings.customEndpointProtocol?.name.orEmpty()
             preferences[THEME_MODE] = settings.themeMode.name
             preferences[SHOW_ADVANCED] = settings.showAdvanced
             preferences[FRAGMENT_TLS] = settings.fragmentTls
@@ -63,6 +66,7 @@ class SettingsRepository(private val context: Context) {
         val NOIZE = stringPreferencesKey("noize")
         val ENDPOINT_MODE = stringPreferencesKey("endpoint_mode")
         val CUSTOM_ENDPOINT = stringPreferencesKey("custom_endpoint")
+        val CUSTOM_ENDPOINT_PROTOCOL = stringPreferencesKey("custom_endpoint_protocol")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val SHOW_ADVANCED = booleanPreferencesKey("show_advanced")
         val FRAGMENT_TLS = booleanPreferencesKey("fragment_tls")
