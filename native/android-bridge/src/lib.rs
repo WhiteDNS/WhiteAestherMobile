@@ -104,8 +104,8 @@ impl BridgeConfig {
         if !(1_024..=65_535).contains(&config.listen_port) {
             return Err("listenPort must be between 1024 and 65535".into());
         }
-        if !matches!(config.transport.as_str(), "h3" | "h2" | "wg") {
-            return Err("transport must be h3, h2 or wg".into());
+        if !matches!(config.transport.as_str(), "h3" | "h2" | "wg" | "wiw") {
+            return Err("transport must be h3, h2, wg or wiw".into());
         }
         if let Some(peer) = config.peer.as_deref() {
             let address = peer
@@ -143,10 +143,10 @@ impl BridgeConfig {
             // h2 and h3 are two framings of one protocol, chosen by an
             // environment variable; wg is a different tunnel entirely, with its
             // own account, its own endpoints and its own prober.
-            protocol: if self.transport == "wg" {
-                "wireguard".into()
-            } else {
-                "masque".into()
+            protocol: match self.transport.as_str() {
+                "wg" => "wireguard".into(),
+                "wiw" => "warp-in-warp".into(),
+                _ => "masque".into(),
             },
         })
     }

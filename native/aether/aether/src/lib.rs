@@ -175,6 +175,14 @@ impl EmbeddedConfig {
             _ => warp_config_path(&self.config_path),
         }
     }
+
+    /// The second account, for the inner hop of a nested tunnel.
+    ///
+    /// Two accounts, not one used twice: the inner tunnel handshakes through the
+    /// outer one, and Cloudflare would see the same device connecting to itself.
+    fn secondary_identity_path(&self) -> String {
+        derive_sibling_path(&self.identity_path(), "secondary")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -215,6 +223,18 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
 
     let profile = std::env::var("AETHER_NOIZE").unwrap_or_else(|_| "firewall".to_string());
     lastconn::save(&lastconn_path(&config_path), &peer.to_string(), &profile);
+
+    // Nested, the interface is addressed for the inner account: that is the one
+    // whose packets reach the internet, and addressing it as the outer would
+    // give every connection the wrong source.
+    if config.protocol() == Protocol::WarpInWarp {
+        let secondary = load_or_provision_warp(&config.secondary_identity_path()).await?;
+        return Ok(EmbeddedPrepared {
+            ipv4: secondary.ipv4,
+            ipv6: secondary.ipv6,
+            peer,
+        });
+    }
 
     Ok(EmbeddedPrepared {
         ipv4: identity.ipv4,
@@ -363,6 +383,20 @@ pub async fn run_embedded(
             select_embedded_wg_peer(&identity, &config.clone_with_peer(peer), &config_path).await?;
         log::info!("[+] WireGuard endpoint {peer} using aethernoize profile '{name}'");
         lastconn::save(&lastconn_path(&config_path), &peer.to_string(), &name);
+
+        if config.protocol() == Protocol::WarpInWarp {
+            let secondary = load_or_provision_warp(&config.secondary_identity_path()).await?;
+            return run_warp_in_warp_embedded(
+                &identity,
+                &secondary,
+                peer,
+                config.listen,
+                endpoint,
+                ready,
+            )
+            .await;
+        }
+
         return run_wireguard_tunnel_embedded(
             &identity,
             peer,
@@ -377,6 +411,104 @@ pub async fn run_embedded(
     let identity = load_or_provision_masque(&config_path).await?;
     let ech = resolve_ech().await;
     run_masque_tunnel_embedded(&identity, peer, ech, config.listen, endpoint, ready).await
+}
+
+/// A WARP-in-WARP tunnel behind the embedded endpoint abstraction.
+///
+/// Two WireGuard tunnels, the inner one handshaking through the outer. What an
+/// observer sees is a single WARP session carrying opaque UDP; what actually
+/// reaches the internet leaves the inner account, one hop further in.
+///
+/// The outer tunnel keeps a userspace network stack because the forwarder needs
+/// somewhere to open a socket. The inner one does not: its packets are the
+/// user's, so they go straight to whatever the caller asked for.
+async fn run_warp_in_warp_embedded(
+    primary: &account::Identity,
+    secondary: &account::Identity,
+    peer: SocketAddr,
+    listen: SocketAddr,
+    endpoint: EmbeddedEndpoint,
+    ready: Option<tokio::sync::oneshot::Sender<()>>,
+) -> Result<()> {
+    log::info!("[*] establishing outer WARP tunnel to {peer}...");
+    let (outer_stack, mut outer_exit) =
+        establish_wg(primary, peer, TUNNEL_MTU, true, 5, "outer").await?;
+
+    let (forwarder, _forwarder_guard) = spawn_udp_forwarder(&outer_stack, peer).await?;
+    log::info!("[+] inner endpoint tunneled through outer warp via {forwarder}");
+
+    // Obfuscation off and a slower keepalive on the inner hop: it is already
+    // inside an obfuscated tunnel, so a second layer costs bytes and hides
+    // nothing that the outer one has not hidden already.
+    log::info!("[*] establishing inner WARP tunnel (warp-in-warp)...");
+    let inner = establish_wg_channels(secondary, forwarder, false, 20, "inner").await?;
+    let mut inner_exit = inner.exit;
+
+    // Both hops are up and have each carried a packet, so this is the first
+    // point at which the tunnel is genuinely usable.
+    if let Some(ready) = ready {
+        let _ = ready.send(());
+    }
+
+    let mut endpoint_task = match endpoint {
+        EmbeddedEndpoint::Socks => {
+            let stack = netstack::spawn(
+                &secondary.ipv4,
+                &secondary.ipv6,
+                INNER_MTU,
+                inner.inbound_rx,
+                inner.outbound_tx,
+            )?;
+            tokio::spawn(async move {
+                log::info!("[+] socks5 server listening on {listen}");
+                socks::serve(listen, stack).await
+            })
+        }
+        EmbeddedEndpoint::Tun {
+            mut device_to_tunnel,
+            tunnel_to_device,
+        } => {
+            let outbound_tx = inner.outbound_tx;
+            let mut inbound_rx = inner.inbound_rx;
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        packet = device_to_tunnel.recv() => match packet {
+                            Some(packet) => outbound_tx.send(packet).await.map_err(|_| {
+                                AetherError::Other("embedded tunnel outbound channel closed".into())
+                            })?,
+                            None => return Ok(()),
+                        },
+                        packet = inbound_rx.recv() => match packet {
+                            Some(packet) => tunnel_to_device.send(packet).await.map_err(|_| {
+                                AetherError::Other("Android TUN writer channel closed".into())
+                            })?,
+                            None => return Ok(()),
+                        },
+                    }
+                }
+            })
+        }
+    };
+
+    let outcome = tokio::select! {
+        result = &mut outer_exit => join_outcome("outer wireguard tunnel", result),
+        result = &mut inner_exit => join_outcome("inner wireguard tunnel", result),
+        result = &mut endpoint_task => match result {
+            Ok(result) => result,
+            Err(error) => Err(AetherError::Other(format!("embedded endpoint task failed: {error}"))),
+        },
+    };
+
+    outer_exit.abort();
+    inner_exit.abort();
+    endpoint_task.abort();
+    let _ = outer_exit.await;
+    let _ = inner_exit.await;
+    let _ = endpoint_task.await;
+    drop(outer_stack);
+
+    outcome
 }
 
 /// The same endpoint scan as [`scan_embedded`], for WireGuard.
@@ -1969,6 +2101,19 @@ async fn run_wireguard_tunnel(
 
 type TunnelExit = tokio::task::JoinHandle<Result<()>>;
 
+/// The packet ends of a running WireGuard tunnel.
+///
+/// A tunnel that fronts a userspace TCP stack and one that is handed straight to
+/// an Android interface differ only in what consumes these, so they are taken
+/// out here rather than each caller rebuilding the tunnel.
+struct WgChannels {
+    /// Packets arriving from the far end.
+    inbound_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    /// Packets to send to it.
+    outbound_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    exit: TunnelExit,
+}
+
 async fn establish_wg(
     identity: &account::Identity,
     peer: SocketAddr,
@@ -1977,6 +2122,24 @@ async fn establish_wg(
     keepalive: u16,
     label: &'static str,
 ) -> Result<(netstack::StackHandle, TunnelExit)> {
+    let channels = establish_wg_channels(identity, peer, obfuscate, keepalive, label).await?;
+    let stack = netstack::spawn(
+        &identity.ipv4,
+        &identity.ipv6,
+        mtu,
+        channels.inbound_rx,
+        channels.outbound_tx,
+    )?;
+    Ok((stack, channels.exit))
+}
+
+async fn establish_wg_channels(
+    identity: &account::Identity,
+    peer: SocketAddr,
+    obfuscate: bool,
+    keepalive: u16,
+    label: &'static str,
+) -> Result<WgChannels> {
     let private_key = identity.private_key_bytes()?;
     let peer_public = identity.peer_public_key_bytes()?;
 
@@ -2015,7 +2178,6 @@ async fn establish_wg(
         inbound_tx,
         ipv4,
     );
-    let stack = netstack::spawn(&identity.ipv4, &identity.ipv6, mtu, inbound_rx, outbound_tx)?;
 
     let exit = tokio::spawn(async move {
         match tunnel.run(outbound_rx).await {
@@ -2030,7 +2192,11 @@ async fn establish_wg(
         }
     });
 
-    Ok((stack, exit))
+    Ok(WgChannels {
+        inbound_rx,
+        outbound_tx,
+        exit,
+    })
 }
 
 struct ForwarderGuard(Vec<tokio::task::AbortHandle>);

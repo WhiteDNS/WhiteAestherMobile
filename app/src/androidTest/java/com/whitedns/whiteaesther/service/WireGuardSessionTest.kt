@@ -33,6 +33,35 @@ class WireGuardSessionTest {
     }
 
     @Test
+    fun warpInWarpConnectsAndCarriesTheInterface() {
+        assumeTrue(
+            "no wireguard argument, skipping the live tunnel test",
+            InstrumentationRegistry.getArguments().getString("wireguard") == "true",
+        )
+
+        val settings = AppSettings(mode = EngineMode.TUN, transport = TunnelProtocol.WARP_IN_WARP)
+        AetherVpnService.start(context, settings.toNativeJson(context), null)
+
+        // Two handshakes and a second account to provision, the inner one
+        // reached only after the outer is carrying traffic.
+        val stage = awaitStage(EngineStage.CONNECTED, timeoutMs = 420_000)
+        assertEquals(
+            "WARP-in-WARP did not connect: ${EngineStatusStore.status.value.message}",
+            EngineStage.CONNECTED,
+            stage,
+        )
+
+        if (holdSeconds > 0) {
+            Thread.sleep(holdSeconds * 1_000)
+            assertEquals(
+                "the nested tunnel did not stay up",
+                EngineStage.CONNECTED,
+                EngineStatusStore.status.value.stage,
+            )
+        }
+    }
+
+    @Test
     fun wireGuardConnectsAndCarriesTheInterface() {
         // Needs a network, VPN consent, and a WARP account it may have to
         // provision. CI has none of those, so it is opt-in:

@@ -23,10 +23,11 @@ enum class TunnelProtocol(val wireName: String, val label: String) {
     H3("h3", "MASQUE H3"),
     H2("h2", "MASQUE H2"),
     WIREGUARD("wg", "WireGuard"),
+    WARP_IN_WARP("wiw", "WARP in WARP"),
     ;
 
     /** True when a failed attempt can be retried on the other framing. */
-    val hasSibling: Boolean get() = this != WIREGUARD
+    val hasSibling: Boolean get() = this == H3 || this == H2
 }
 
 enum class ScanStrategy(val wireName: String, val label: String) {

@@ -12,7 +12,7 @@ class TunnelProtocolTest {
         // "wg" onto a different tunnel entirely. Renaming one here without the
         // Rust side is a silent downgrade to MASQUE, not a compile error.
         assertEquals(
-            listOf("h3", "h2", "wg"),
+            listOf("h3", "h2", "wg", "wiw"),
             TunnelProtocol.entries.map(TunnelProtocol::wireName),
         )
     }
@@ -27,6 +27,7 @@ class TunnelProtocolTest {
         assertTrue(TunnelProtocol.H3.hasSibling)
         assertTrue(TunnelProtocol.H2.hasSibling)
         assertFalse(TunnelProtocol.WIREGUARD.hasSibling)
+        assertFalse(TunnelProtocol.WARP_IN_WARP.hasSibling)
     }
 
     @Test
@@ -36,7 +37,7 @@ class TunnelProtocolTest {
         // Manual, rather than something a friendly-sounding preset does for you.
         assertTrue(
             com.whitedns.whiteaesther.ui.ConnectionProfile.entries
-                .none { it.transport == TunnelProtocol.WIREGUARD },
+                .none { it.transport?.hasSibling == false },
         )
     }
 }

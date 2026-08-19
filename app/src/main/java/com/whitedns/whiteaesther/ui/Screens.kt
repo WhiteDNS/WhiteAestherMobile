@@ -495,16 +495,21 @@ fun RoutesScreen(
                                 // failed MASQUE retry never lands here and the
                                 // first connect has a scan of its own to do.
                                 TunnelProtocol.WIREGUARD -> "UDP, with an obfuscation sweep. Separate identity"
+                                // Two WARP tunnels, the inner handshaking
+                                // through the outer, so what an observer sees is
+                                // one session carrying opaque UDP.
+                                TunnelProtocol.WARP_IN_WARP -> "Nested tunnel. Slower, harder to classify"
                             },
                             selected = settings.transport == transport,
                             onClick = { onSettingsChange(settings.copy(transport = transport)) },
                         )
                     }
                 }
-                if (settings.transport == TunnelProtocol.WIREGUARD) {
+                if (!settings.transport.hasSibling) {
                     Note(
-                        "WireGuard runs over UDP. On a network that blocks UDP outright it will " +
-                            "not connect at all, and MASQUE H2 over TCP is the one to use there.",
+                        "${settings.transport.label} runs over UDP. On a network that blocks " +
+                            "UDP outright it will not connect at all, and MASQUE H2 over TCP is " +
+                            "the one to use there.",
                     )
                 }
                 CardHead("Discovery depth", "How hard to search for a route. Deeper takes longer and uses more data.")

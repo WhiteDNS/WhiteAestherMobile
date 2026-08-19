@@ -159,14 +159,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // that blocks UDP returns nothing at all -- which is what Iranian
             // mobile users were seeing. Sweep the other rather than reporting an
             // empty network.
-            //
-            // WireGuard has no other framing to sweep. Its endpoints are its
-            // own, so falling back to MASQUE would list addresses that the
-            // chosen protocol cannot use.
             val other = when (base.transport) {
                 TunnelProtocol.H3 -> TunnelProtocol.H2
                 TunnelProtocol.H2 -> TunnelProtocol.H3
-                TunnelProtocol.WIREGUARD -> null
+                // Neither WireGuard nor its nested form has another framing to
+                // sweep. Their endpoints are their own, so falling back to
+                // MASQUE would list addresses the chosen protocol cannot use.
+                TunnelProtocol.WIREGUARD, TunnelProtocol.WARP_IN_WARP -> null
             }
             if (other != null &&
                 result.getOrNull()?.isEmpty() != false &&
