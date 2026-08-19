@@ -105,7 +105,7 @@ class WhiteAestherAppTest {
         compose.onNodeWithTag("choice-strict-network").performScrollTo().performClick()
         compose.runOnIdle {
             assertEquals(com.whitedns.whiteaesther.data.ScanStrategy.STEALTH, saved?.scanStrategy)
-            assertEquals(com.whitedns.whiteaesther.data.MasqueTransport.H2, saved?.transport)
+            assertEquals(com.whitedns.whiteaesther.data.TunnelProtocol.H2, saved?.transport)
         }
     }
 }

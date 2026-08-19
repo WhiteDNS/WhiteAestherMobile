@@ -141,6 +141,40 @@ pub struct EmbeddedConfig {
     pub peer_fallback: bool,
     pub scan_mode: String,
     pub ip_scan: String,
+    /// Which tunnel to build: `masque` or `wireguard`.
+    ///
+    /// Defaults to MASQUE when empty, because that is what every embedded
+    /// caller wanted before there was a choice.
+    pub protocol: String,
+}
+
+impl EmbeddedConfig {
+    fn protocol(&self) -> Protocol {
+        match self.protocol.trim() {
+            "" => Protocol::Masque,
+            other => Protocol::parse(other),
+        }
+    }
+
+    /// A copy that pins [`peer`], so the run path re-establishes the profile for
+    /// the endpoint prepare already chose rather than scanning again.
+    fn clone_with_peer(&self, peer: SocketAddr) -> Self {
+        Self {
+            peer: Some(peer),
+            ..self.clone()
+        }
+    }
+
+    /// Where this protocol's identity lives.
+    ///
+    /// MASQUE and WARP provision separate accounts against different Cloudflare
+    /// APIs, so they cannot share a file. Switching protocol keeps both.
+    fn identity_path(&self) -> String {
+        match self.protocol() {
+            Protocol::Masque => masque_config_path(&self.config_path),
+            _ => warp_config_path(&self.config_path),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -165,9 +199,19 @@ pub enum EmbeddedEndpoint {
 }
 
 pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepared> {
-    let config_path = masque_config_path(&config.config_path);
-    let identity = load_or_provision_masque(&config_path).await?;
-    let peer = select_embedded_peer(&identity, config, &config_path).await?;
+    let config_path = config.identity_path();
+    let identity = match config.protocol() {
+        Protocol::Masque => load_or_provision_masque(&config_path).await?,
+        _ => load_or_provision_warp(&config_path).await?,
+    };
+    let peer = match config.protocol() {
+        Protocol::Masque => select_embedded_peer(&identity, config, &config_path).await?,
+        _ => {
+            select_embedded_wg_peer(&identity, config, &config_path)
+                .await?
+                .0
+        }
+    };
 
     let profile = std::env::var("AETHER_NOIZE").unwrap_or_else(|_| "firewall".to_string());
     lastconn::save(&lastconn_path(&config_path), &peer.to_string(), &profile);
@@ -179,12 +223,86 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
     })
 }
 
+/// Picks a WireGuard endpoint, and the obfuscation profile that reached it.
+///
+/// The profile travels with the address because for WireGuard they are one
+/// answer, not two: an endpoint verified under one profile does not necessarily
+/// answer under another, so carrying the address alone would lose half of what
+/// the scan established.
+async fn select_embedded_wg_peer(
+    identity: &account::Identity,
+    config: &EmbeddedConfig,
+    config_path: &str,
+) -> Result<(SocketAddr, aethernoize::AetherNoizeConfig, String)> {
+    let candidates = wg_profile_candidates();
+
+    if let Some(peer) = config.peer {
+        for (name, profile) in &candidates {
+            if verify_wg_peer(identity, peer, profile).await.is_ok() {
+                return Ok((peer, profile.clone(), name.clone()));
+            }
+        }
+        if !config.peer_fallback {
+            return Err(AetherError::Other(format!(
+                "custom endpoint {peer} failed WireGuard validation"
+            )));
+        }
+        log::warn!("[-] custom endpoint {peer} failed; falling back to automatic discovery");
+    }
+
+    if let Some(cached) = lastconn::load(&lastconn_path(config_path)) {
+        if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
+            let profile = aethernoize::from_profile(&cached.profile);
+            if verify_wg_peer(identity, peer, &profile).await.is_ok() {
+                log::info!("[+] cached WireGuard endpoint {peer} still works");
+                return Ok((peer, profile, cached.profile.clone()));
+            }
+        }
+    }
+
+    hunt_wg_peer(
+        identity,
+        &candidates,
+        &config.scan_mode,
+        prober::IpScan::parse(&config.ip_scan),
+        &HashSet::new(),
+    )
+    .await
+}
+
+async fn verify_wg_peer(
+    identity: &account::Identity,
+    peer: SocketAddr,
+    profile: &aethernoize::AetherNoizeConfig,
+) -> Result<std::time::Duration> {
+    let private_key = identity.private_key_bytes()?;
+    let peer_public = identity.peer_public_key_bytes()?;
+    let ipv4: std::net::Ipv4Addr = identity
+        .ipv4
+        .parse()
+        .map_err(|_| AetherError::Other("invalid ipv4".into()))?;
+    wireguard::verify_endpoint(
+        peer,
+        private_key,
+        peer_public,
+        identity.client_id,
+        ipv4,
+        profile,
+        std::time::Duration::from_secs(8),
+        None,
+    )
+    .await
+}
+
 pub async fn scan_embedded(
     config: &EmbeddedConfig,
     limit: usize,
     cancelled: &AtomicBool,
 ) -> Result<Vec<EmbeddedScanResult>> {
-    let config_path = masque_config_path(&config.config_path);
+    let config_path = config.identity_path();
+    if !matches!(config.protocol(), Protocol::Masque) {
+        return scan_embedded_wg(config, &config_path, limit, cancelled).await;
+    }
     let identity = load_or_provision_masque(&config_path).await?;
     let probe = masque_probe(&identity, prober::IpScan::parse(&config.ip_scan));
     let results = prober::scan_gateways(
@@ -207,7 +325,20 @@ pub async fn test_embedded_peer(config: &EmbeddedConfig) -> Result<EmbeddedScanR
     let peer = config
         .peer
         .ok_or_else(|| AetherError::Other("custom endpoint is required".into()))?;
-    let config_path = masque_config_path(&config.config_path);
+    let config_path = config.identity_path();
+    if !matches!(config.protocol(), Protocol::Masque) {
+        let identity = load_or_provision_warp(&config_path).await?;
+        // Every profile, because an endpoint that refuses one may answer
+        // another, and reporting the first refusal as "dead" would be wrong.
+        let mut last = AetherError::NoCleanEndpoint;
+        for (_, profile) in wg_profile_candidates() {
+            match verify_wg_peer(&identity, peer, &profile).await {
+                Ok(rtt) => return Ok(EmbeddedScanResult { peer, rtt }),
+                Err(error) => last = error,
+            }
+        }
+        return Err(last);
+    }
     let identity = load_or_provision_masque(&config_path).await?;
     let rtt = verify_masque_peer(&identity, peer).await?;
     Ok(EmbeddedScanResult { peer, rtt })
@@ -221,10 +352,180 @@ pub async fn run_embedded(
     let peer = config
         .peer
         .ok_or_else(|| AetherError::Other("embedded peer is required".into()))?;
-    let config_path = masque_config_path(&config.config_path);
+    let config_path = config.identity_path();
+
+    if !matches!(config.protocol(), Protocol::Masque) {
+        let identity = load_or_provision_warp(&config_path).await?;
+        // Which profile reaches this endpoint is part of what the scan found,
+        // and it is not recorded anywhere the caller could hand back -- so it is
+        // established again here rather than guessed.
+        let (peer, profile, name) =
+            select_embedded_wg_peer(&identity, &config.clone_with_peer(peer), &config_path).await?;
+        log::info!("[+] WireGuard endpoint {peer} using aethernoize profile '{name}'");
+        lastconn::save(&lastconn_path(&config_path), &peer.to_string(), &name);
+        return run_wireguard_tunnel_embedded(
+            &identity,
+            peer,
+            profile,
+            config.listen,
+            endpoint,
+            ready,
+        )
+        .await;
+    }
+
     let identity = load_or_provision_masque(&config_path).await?;
     let ech = resolve_ech().await;
     run_masque_tunnel_embedded(&identity, peer, ech, config.listen, endpoint, ready).await
+}
+
+/// The same endpoint scan as [`scan_embedded`], for WireGuard.
+async fn scan_embedded_wg(
+    config: &EmbeddedConfig,
+    config_path: &str,
+    limit: usize,
+    cancelled: &AtomicBool,
+) -> Result<Vec<EmbeddedScanResult>> {
+    let identity = load_or_provision_warp(config_path).await?;
+    let private_key = identity.private_key_bytes()?;
+    let peer_public = identity.peer_public_key_bytes()?;
+
+    let probe = wg_prober::WgProbe {
+        private_key: std::sync::Arc::new(private_key),
+        peer_public_key: std::sync::Arc::new(peer_public),
+        client_id: identity.client_id,
+        local_ipv4: identity
+            .ipv4
+            .parse()
+            .map_err(|_| AetherError::Other("invalid ipv4".into()))?,
+        aethernoize: aethernoize_config(),
+        ports: wireguard::WG_PORTS.to_vec(),
+        ip: prober::IpScan::parse(&config.ip_scan),
+        excluded: HashSet::new(),
+    };
+
+    let results = wg_prober::scan_wg_endpoints(
+        &probe,
+        wg_prober::WgScanMode::parse(&config.scan_mode),
+        limit,
+        cancelled,
+    )
+    .await?;
+
+    Ok(results
+        .into_iter()
+        .map(|result| EmbeddedScanResult {
+            peer: SocketAddr::new(result.ip, result.port),
+            rtt: result.rtt,
+        })
+        .collect())
+}
+
+/// A WireGuard tunnel behind the embedded endpoint abstraction.
+///
+/// The MASQUE equivalent has to wait for the far end to assign an address; here
+/// the address came with the account, so there is nothing to wait for and the
+/// handshake itself is the readiness signal.
+async fn run_wireguard_tunnel_embedded(
+    identity: &account::Identity,
+    peer: SocketAddr,
+    aethernoize: aethernoize::AetherNoizeConfig,
+    listen: SocketAddr,
+    endpoint: EmbeddedEndpoint,
+    ready: Option<tokio::sync::oneshot::Sender<()>>,
+) -> Result<()> {
+    let private_key = identity.private_key_bytes()?;
+    let peer_public = identity.peer_public_key_bytes()?;
+    let ipv4: std::net::Ipv4Addr = identity
+        .ipv4
+        .parse()
+        .map_err(|_| AetherError::Other("invalid ipv4".into()))?;
+
+    log::info!("[*] validating WireGuard tunnel with {peer} (handshake + data-plane)...");
+    let (_, session) = wireguard::verify_endpoint_keep_session(
+        peer,
+        private_key,
+        peer_public,
+        identity.client_id,
+        ipv4,
+        &aethernoize,
+        wg_tunnel_validate_timeout(),
+        Some(wg_keepalive_secs()),
+    )
+    .await
+    .map_err(|error| AetherError::Other(format!("tunnel failed validation: {error}")))?;
+    log::info!("[+] wireguard tunnel validated (end-to-end data confirmed)");
+
+    // Only now, because unlike MASQUE this is the first point at which the far
+    // end has actually carried a packet.
+    if let Some(ready) = ready {
+        let _ = ready.send(());
+    }
+
+    let (outbound_tx, outbound_rx) = tokio::sync::mpsc::channel(sysprofile::channel_capacity());
+    let (inbound_tx, inbound_rx) = tokio::sync::mpsc::channel(sysprofile::channel_capacity());
+
+    let tunnel = wireguard::WgTunnel::from_established(
+        session,
+        std::sync::Arc::new(aethernoize),
+        inbound_tx,
+        ipv4,
+    );
+
+    let mut endpoint_task = match endpoint {
+        EmbeddedEndpoint::Socks => {
+            let stack = netstack::spawn(
+                &identity.ipv4,
+                &identity.ipv6,
+                TUNNEL_MTU,
+                inbound_rx,
+                outbound_tx,
+            )?;
+            tokio::spawn(async move {
+                log::info!("[+] socks5 server listening on {listen}");
+                socks::serve(listen, stack).await
+            })
+        }
+        EmbeddedEndpoint::Tun {
+            mut device_to_tunnel,
+            tunnel_to_device,
+        } => tokio::spawn(async move {
+            let mut inbound_rx = inbound_rx;
+            loop {
+                tokio::select! {
+                    packet = device_to_tunnel.recv() => match packet {
+                        Some(packet) => outbound_tx.send(packet).await.map_err(|_| {
+                            AetherError::Other("embedded tunnel outbound channel closed".into())
+                        })?,
+                        None => return Ok(()),
+                    },
+                    packet = inbound_rx.recv() => match packet {
+                        Some(packet) => tunnel_to_device.send(packet).await.map_err(|_| {
+                            AetherError::Other("Android TUN writer channel closed".into())
+                        })?,
+                        None => return Ok(()),
+                    },
+                }
+            }
+        }),
+    };
+
+    let mut tunnel_task = tokio::spawn(tunnel.run(outbound_rx));
+
+    tokio::select! {
+        result = &mut tunnel_task => {
+            endpoint_task.abort();
+            embedded_tunnel_result(result, "wireguard tunnel exited")
+        }
+        result = &mut endpoint_task => {
+            tunnel_task.abort();
+            let _ = tunnel_task.await;
+            match result {
+                Ok(result) => result,
+                Err(error) => Err(AetherError::Other(format!("embedded endpoint task failed: {error}"))),
+            }
+        }
+    }
 }
 
 async fn select_embedded_peer(

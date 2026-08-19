@@ -11,9 +11,22 @@ enum class EngineMode(val wireName: String) {
     PROXY("proxy"),
 }
 
-enum class MasqueTransport(val wireName: String, val label: String) {
+/**
+ * How the tunnel is carried.
+ *
+ * H3 and H2 are two framings of one protocol -- same account, same endpoints,
+ * same prober -- so the engine alternates between them on a retry. WireGuard is
+ * a different tunnel with its own account and its own endpoints, so it is not
+ * something a retry can substitute.
+ */
+enum class TunnelProtocol(val wireName: String, val label: String) {
     H3("h3", "MASQUE H3"),
     H2("h2", "MASQUE H2"),
+    WIREGUARD("wg", "WireGuard"),
+    ;
+
+    /** True when a failed attempt can be retried on the other framing. */
+    val hasSibling: Boolean get() = this != WIREGUARD
 }
 
 enum class ScanStrategy(val wireName: String, val label: String) {
@@ -69,7 +82,7 @@ object EndpointAddress {
 data class AppSettings(
     val mode: EngineMode = EngineMode.TUN,
     val proxyPort: Int = 1819,
-    val transport: MasqueTransport = MasqueTransport.H3,
+    val transport: TunnelProtocol = TunnelProtocol.H3,
     val scanStrategy: ScanStrategy = ScanStrategy.BALANCED,
     val dualStack: Boolean = true,
     val validationEnabled: Boolean = true,

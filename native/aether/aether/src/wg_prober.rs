@@ -258,6 +258,87 @@ pub async fn hunt_best_wg_endpoint(probe: &WgProbe, mode: WgScanMode) -> Result<
     }
 }
 
+/// Every endpoint that answers, best first, rather than only the best one.
+///
+/// [`hunt_best_wg_endpoint`] exists to start a tunnel and stops as soon as it
+/// has an answer it likes. This one is for the endpoint list a user picks from,
+/// so it keeps collecting until the limit, the deadline, or a cancellation --
+/// the same shape as the MASQUE scanner, so the app can drive both the same way.
+pub async fn scan_wg_endpoints(
+    probe: &WgProbe,
+    mode: WgScanMode,
+    limit: usize,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<Vec<WgProbeResult>> {
+    let mut st = mode.strategy();
+    st.concurrency = crate::sysprofile::cap_concurrency(st.concurrency);
+    // Stopping at the first hit is right for connecting and wrong for listing.
+    st.early_exit_first = false;
+    let timeout = st.per_probe_timeout;
+
+    let mut effective_ip = probe.ip;
+    if probe.ip.want_v6() && !crate::prober::host_has_ipv6().await {
+        if probe.ip.want_v4() {
+            log::warn!("[-] host has no IPv6 route; falling back to IPv4-only scan");
+            effective_ip = IpScan::V4;
+        } else {
+            return Err(AetherError::NoCleanEndpoint);
+        }
+    }
+    let candidates = build_wg_candidates(&st, &probe.ports, effective_ip, &probe.excluded);
+    log::info!(
+        "[*] wireguard endpoint scan mode={} ip={} candidates={} limit={}",
+        mode.label(),
+        effective_ip.label(),
+        candidates.len(),
+        limit,
+    );
+
+    let ironclad = mode == WgScanMode::Ironclad;
+    let stream = futures::stream::iter(
+        candidates
+            .into_iter()
+            .map(|(ip, port)| verify_one_wg(probe, ip, port, timeout, ironclad)),
+    )
+    .buffer_unordered(st.concurrency);
+    tokio::pin!(stream);
+
+    let deadline = Instant::now() + st.overall_deadline;
+    let mut found: Vec<WgProbeResult> = Vec::new();
+
+    loop {
+        if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+            log::info!("[*] wireguard scan cancelled");
+            break;
+        }
+        if limit > 0 && found.len() >= limit {
+            break;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+
+        tokio::select! {
+            item = stream.next() => match item {
+                None => break,
+                Some(None) => continue,
+                Some(Some(result)) => {
+                    log::info!("[+] wg endpoint ok {}:{} rtt={:?}", result.ip, result.port, result.rtt);
+                    found.push(result);
+                }
+            },
+            _ = tokio::time::sleep(remaining) => break,
+        }
+    }
+
+    found.sort_by_key(|result| result.rtt);
+    if found.is_empty() {
+        return Err(AetherError::NoCleanEndpoint);
+    }
+    Ok(found)
+}
+
 async fn verify_one_wg(
     probe: &WgProbe,
     ip: IpAddr,

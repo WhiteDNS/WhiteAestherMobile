@@ -14,6 +14,10 @@ aether = { path = "../aether/aether" }
 jni = "0.21.1"
 libc = "0.2.175"
 log = "0.4.27"
+# The engine logs through `log`, and on Android that goes nowhere unless
+# something installs a sink. Without one, a tunnel that will not come up and
+# a tunnel that never tried look identical from the app side.
+android_logger = "0.15.1"
 once_cell = "1.21.3"
 parking_lot = "0.12.4"
 serde = { version = "1.0.219", features = ["derive"] }

@@ -16,7 +16,7 @@ class SettingsRepository(private val context: Context) {
         AppSettings(
             mode = enumValueOrDefault(preferences[MODE], EngineMode.TUN),
             proxyPort = preferences[PROXY_PORT]?.coerceIn(1_024, 65_535) ?: 1819,
-            transport = enumValueOrDefault(preferences[TRANSPORT], MasqueTransport.H3),
+            transport = enumValueOrDefault(preferences[TRANSPORT], TunnelProtocol.H3),
             scanStrategy = enumValueOrDefault(preferences[SCAN], ScanStrategy.BALANCED),
             dualStack = preferences[DUAL_STACK] ?: true,
             validationEnabled = preferences[VALIDATION] ?: true,

@@ -53,7 +53,7 @@ import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EndpointAddress
 import com.whitedns.whiteaesther.data.EndpointMode
 import com.whitedns.whiteaesther.data.EngineMode
-import com.whitedns.whiteaesther.data.MasqueTransport
+import com.whitedns.whiteaesther.data.TunnelProtocol
 import com.whitedns.whiteaesther.data.ScanStrategy
 import com.whitedns.whiteaesther.data.ThemeMode
 import com.whitedns.whiteaesther.service.EngineStage
@@ -67,20 +67,24 @@ import kotlinx.coroutines.delay
 // -------------------------------------------------------------- profiles ----
 
 /**
- * A profile is a preset over the settings the engine actually takes. Only the
- * combinations below exist -- MasqueTransport is H3/H2, so there is no WireGuard
- * or WARP-in-WARP option to offer.
+ * A profile is a preset over the settings the engine actually takes.
+ *
+ * All four preset to MASQUE. WireGuard is deliberately not behind a profile:
+ * it uses a separate account and a separate set of endpoints, so the first
+ * connect after switching has its own provisioning and its own scan to do.
+ * That is a choice worth making knowingly, under Manual, rather than something
+ * a friendly-sounding preset does on the user's behalf.
  */
 enum class ConnectionProfile(
     val label: String,
     val description: String,
     val tag: String?,
     val scan: ScanStrategy?,
-    val transport: MasqueTransport?,
+    val transport: TunnelProtocol?,
 ) {
-    ADAPTIVE("Adaptive", "Works on most networks. Start here.", "Recommended", ScanStrategy.BALANCED, MasqueTransport.H3),
-    PATCHY("Patchy signal", "For mobile data that keeps dropping.", null, ScanStrategy.THOROUGH, MasqueTransport.H3),
-    STRICT("Strict network", "For Wi-Fi that blocks a lot, such as an office.", null, ScanStrategy.STEALTH, MasqueTransport.H2),
+    ADAPTIVE("Adaptive", "Works on most networks. Start here.", "Recommended", ScanStrategy.BALANCED, TunnelProtocol.H3),
+    PATCHY("Patchy signal", "For mobile data that keeps dropping.", null, ScanStrategy.THOROUGH, TunnelProtocol.H3),
+    STRICT("Strict network", "For Wi-Fi that blocks a lot, such as an office.", null, ScanStrategy.STEALTH, TunnelProtocol.H2),
     MANUAL("Manual", "You choose every setting yourself.", null, null, null),
     ;
 
@@ -478,20 +482,30 @@ fun RoutesScreen(
                 expanded = advanced,
                 onToggle = { advanced = !advanced },
             ) {
-                CardHead("Preferred transport", "Tried first on every connect. The profile already picks a sensible one.")
+                CardHead("Protocol", "Tried first on every connect. The profile already picks a sensible one.")
                 Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    MasqueTransport.entries.forEach { transport ->
+                    TunnelProtocol.entries.forEach { transport ->
                         OptionRow(
                             code = transport.wireName.uppercase(),
                             title = transport.label,
                             subtitle = when (transport) {
-                                MasqueTransport.H3 -> "Faster where QUIC is allowed"
-                                MasqueTransport.H2 -> "Reliable where UDP is blocked"
+                                TunnelProtocol.H3 -> "QUIC. Faster where UDP gets through"
+                                TunnelProtocol.H2 -> "TCP. Survives networks that block UDP"
+                                // Its own account and its own endpoints, so a
+                                // failed MASQUE retry never lands here and the
+                                // first connect has a scan of its own to do.
+                                TunnelProtocol.WIREGUARD -> "UDP, with an obfuscation sweep. Separate identity"
                             },
                             selected = settings.transport == transport,
                             onClick = { onSettingsChange(settings.copy(transport = transport)) },
                         )
                     }
+                }
+                if (settings.transport == TunnelProtocol.WIREGUARD) {
+                    Note(
+                        "WireGuard runs over UDP. On a network that blocks UDP outright it will " +
+                            "not connect at all, and MASQUE H2 over TCP is the one to use there.",
+                    )
                 }
                 CardHead("Discovery depth", "How hard to search for a route. Deeper takes longer and uses more data.")
                 Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {

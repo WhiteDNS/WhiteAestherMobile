@@ -104,8 +104,8 @@ impl BridgeConfig {
         if !(1_024..=65_535).contains(&config.listen_port) {
             return Err("listenPort must be between 1024 and 65535".into());
         }
-        if !matches!(config.transport.as_str(), "h3" | "h2") {
-            return Err("transport must be h3 or h2".into());
+        if !matches!(config.transport.as_str(), "h3" | "h2" | "wg") {
+            return Err("transport must be h3, h2 or wg".into());
         }
         if let Some(peer) = config.peer.as_deref() {
             let address = peer
@@ -140,6 +140,14 @@ impl BridgeConfig {
             peer_fallback: self.peer_fallback,
             scan_mode: self.scan_mode.clone(),
             ip_scan: self.ip_scan.clone(),
+            // h2 and h3 are two framings of one protocol, chosen by an
+            // environment variable; wg is a different tunnel entirely, with its
+            // own account, its own endpoints and its own prober.
+            protocol: if self.transport == "wg" {
+                "wireguard".into()
+            } else {
+                "masque".into()
+            },
         })
     }
 
@@ -150,6 +158,10 @@ impl BridgeConfig {
         } else {
             std::env::remove_var("AETHER_MASQUE_HTTP2");
         }
+        // WireGuard reads its obfuscation from the same AETHER_NOIZE set above,
+        // but the profile names differ in meaning between the two tunnels, so
+        // the engine resolves candidates itself rather than trusting one name.
+
         std::env::set_var("AETHER_QUICK_RECONNECT", "1");
         if self.fragment_tls {
             std::env::set_var("AETHER_MASQUE_H2_FRAGMENT", "1");
@@ -167,6 +179,27 @@ impl BridgeConfig {
             std::env::set_var("AETHER_MASQUE_NO_DATA_CHECK", "1");
         }
     }
+}
+
+/// Sends the engine's own log to logcat, once.
+///
+/// The engine reports what it is doing through the `log` crate -- which endpoint
+/// it is testing, which obfuscation profile answered, why a handshake failed.
+/// On Android nothing consumes that by default, so all of it was being dropped
+/// and every failure looked the same from outside.
+///
+/// `RUST_LOG` still wins where it is set, so a diagnostic build can turn this up
+/// without a code change.
+fn install_logger() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        android_logger::init_once(
+            android_logger::Config::default()
+                .with_max_level(log::LevelFilter::Info)
+                .with_tag("aether"),
+        );
+        log::info!("aether bridge logging installed");
+    });
 }
 
 fn java_string(mut env: JNIEnv<'_>, value: &str) -> jstring {
@@ -211,6 +244,7 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
     env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jstring {
+    install_logger();
     catch_unwind(AssertUnwindSafe(|| {
         java_string(
             env,
@@ -250,6 +284,7 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
     _class: JClass<'_>,
     config: JString<'_>,
 ) -> jstring {
+    install_logger();
     catch_unwind(AssertUnwindSafe(|| {
         let result = (|| -> Result<String, String> {
             if STOP_SENDER.lock().is_some() {
@@ -286,6 +321,7 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
     _class: JClass<'_>,
     config: JString<'_>,
 ) -> jstring {
+    install_logger();
     catch_unwind(AssertUnwindSafe(|| {
         let result = (|| -> Result<String, String> {
             if STOP_SENDER.lock().is_some() {
@@ -377,6 +413,7 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
     tun_fd: jint,
     listener: JObject<'_>,
 ) -> jstring {
+    install_logger();
     catch_unwind(AssertUnwindSafe(|| {
         let result = (|| -> Result<String, String> {
             let raw = read_java_string(&mut env, &config)?;

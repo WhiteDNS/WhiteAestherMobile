@@ -109,6 +109,10 @@ impl WgTunnel {
         };
 
         let sock = UdpSocket::bind(bind_addr).await?;
+        // Before connect, and before a single packet. On Android the tunnel
+        // interface carries a default route, so an unprotected socket here is
+        // routed straight back into the tunnel it is trying to build.
+        crate::socketprotect::protect(&sock)?;
         sock.connect(cfg.peer_endpoint).await?;
 
         let local_secret = StaticSecret::from(cfg.local_private_key);
@@ -581,6 +585,9 @@ pub async fn verify_endpoint_keep_session(
         "[::]:0"
     };
     let sock = UdpSocket::bind(bind).await?;
+    // Endpoint verification runs while a tunnel is already up on a reconnect,
+    // so it needs the same protection as the tunnel socket itself.
+    crate::socketprotect::protect(&sock)?;
     sock.connect(peer).await?;
 
     let start = Instant::now();

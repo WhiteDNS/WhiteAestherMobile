@@ -12,7 +12,7 @@ class AppSettingsTest {
 
         assertEquals(EngineMode.TUN, settings.mode)
         assertEquals(1819, settings.proxyPort)
-        assertEquals(MasqueTransport.H3, settings.transport)
+        assertEquals(TunnelProtocol.H3, settings.transport)
         assertTrue(settings.dualStack)
         assertTrue(settings.validationEnabled)
         assertEquals(EndpointMode.AUTOMATIC, settings.endpointMode)

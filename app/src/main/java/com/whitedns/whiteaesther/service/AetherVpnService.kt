@@ -609,7 +609,15 @@ class AetherVpnService : VpnService() {
         return runCatching {
             val json = JSONObject(configJson)
             val configured = json.optString("transport", "h3")
-            val other = if (configured == "h3") "h2" else "h3"
+            // Only the two MASQUE framings are interchangeable. WireGuard is a
+            // different tunnel with its own account and its own endpoints, so
+            // substituting it would silently connect the user to something they
+            // did not ask for -- and from a different exit address.
+            val other = when (configured) {
+                "h3" -> "h2"
+                "h2" -> "h3"
+                else -> return@runCatching configJson
+            }
             json.put("transport", if (attempt % 2 == 0) other else configured).toString()
         }.getOrDefault(configJson)
     }

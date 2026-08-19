@@ -9,7 +9,7 @@ import com.whitedns.whiteaesther.core.EndpointScanResult
 import com.whitedns.whiteaesther.core.NativeAetherBridge
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EndpointMode
-import com.whitedns.whiteaesther.data.MasqueTransport
+import com.whitedns.whiteaesther.data.TunnelProtocol
 import com.whitedns.whiteaesther.data.SettingsRepository
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatusStore
@@ -147,20 +147,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             mutableEndpointScannerState.value = EndpointScannerState(
                 operation = EndpointOperation.SCANNING,
                 results = mutableEndpointScannerState.value.results,
-                message = "Scanning validated MASQUE routes…",
+                message = "Scanning validated ${settings.transport.label} routes…",
             )
-            // The prober picks TCP or UDP from the transport it is handed: H2
-            // probes over TCP, anything else over QUIC. Scanning with the
-            // configured transport therefore searches UDP only on the default
-            // profile, and a network that blocks UDP returns nothing at all --
-            // which is what Iranian mobile users were seeing. Sweep the other
-            // transport too rather than reporting an empty network.
             val base = settings.copy(endpointMode = EndpointMode.AUTOMATIC, customEndpoint = "")
-            val other = if (base.transport == MasqueTransport.H3) MasqueTransport.H2 else MasqueTransport.H3
             var result = withContext(Dispatchers.IO) {
                 NativeAetherBridge.scan(base.toNativeJson(getApplication()))
             }
-            if (result.getOrNull()?.isEmpty() != false &&
+            // The MASQUE prober picks TCP or UDP from the framing it is handed:
+            // H2 probes over TCP, H3 over QUIC. Scanning with the configured one
+            // therefore searches UDP only on the default profile, and a network
+            // that blocks UDP returns nothing at all -- which is what Iranian
+            // mobile users were seeing. Sweep the other rather than reporting an
+            // empty network.
+            //
+            // WireGuard has no other framing to sweep. Its endpoints are its
+            // own, so falling back to MASQUE would list addresses that the
+            // chosen protocol cannot use.
+            val other = when (base.transport) {
+                TunnelProtocol.H3 -> TunnelProtocol.H2
+                TunnelProtocol.H2 -> TunnelProtocol.H3
+                TunnelProtocol.WIREGUARD -> null
+            }
+            if (other != null &&
+                result.getOrNull()?.isEmpty() != false &&
                 mutableEndpointScannerState.value.operation == EndpointOperation.SCANNING
             ) {
                 mutableEndpointScannerState.value = mutableEndpointScannerState.value.copy(
