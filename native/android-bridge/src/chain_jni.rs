@@ -37,7 +37,9 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeChainBridge_nat
 /// desktop client shipped a version that parsed `/version` at 35 bytes and
 /// failed on the node list for exactly that reason.
 #[no_mangle]
-pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeChainBridge_nativeInvoke<'local>(
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeChainBridge_nativeInvoke<
+    'local,
+>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     params: JString<'local>,
@@ -55,7 +57,9 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeChainBridge_nat
 
 /// Hands mihomo the tun descriptor. Ownership passes to the chain.
 #[no_mangle]
-pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeChainBridge_nativeStartTun<'local>(
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeChainBridge_nativeStartTun<
+    'local,
+>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     fd: jint,
@@ -103,7 +107,9 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeChainBridge_nat
         Err(_) => return std::ptr::null_mut(),
     };
     for (index, event) in events.iter().enumerate() {
-        let Ok(value) = env.new_string(event) else { continue };
+        let Ok(value) = env.new_string(event) else {
+            continue;
+        };
         let _ = env.set_object_array_element(&array, index as i32, value);
     }
     array.into_raw()
