@@ -123,8 +123,8 @@ object ChainConfig {
         if (sources.isEmpty() && manual.isEmpty()) return names
 
         append("proxy-providers:\n")
-        sources.forEachIndexed { index, source ->
-            val key = "source$index"
+        sources.forEach { source ->
+            val key = providerKey(source.url)
             names += key
             append("  $key:\n")
             append("    type: http\n")
@@ -141,6 +141,24 @@ object ChainConfig {
             append(healthCheck())
         }
         return names
+    }
+
+    /**
+     * A provider's name, derived from its URL rather than its position.
+     *
+     * Position was wrong in a way that looked like a caching bug. Delete the
+     * first subscription, add a different one, and it takes the same name and
+     * the same cache file -- so mihomo finds a provider it already has, less
+     * than its refresh interval old, and serves the previous subscription's
+     * nodes for the new one. Keying on the URL makes a different subscription a
+     * different provider, which is what it is.
+     */
+    fun providerKey(url: String): String {
+        var hash = 0x811c9dc5u
+        url.trim().forEach { character ->
+            hash = (hash xor character.code.toUInt()) * 0x01000193u
+        }
+        return "source${hash.toString(16).padStart(8, '0')}"
     }
 
     /**

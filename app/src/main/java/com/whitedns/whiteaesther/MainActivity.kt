@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
                     onScanEndpoints = viewModel::scanEndpoints,
                     onTestEndpoint = viewModel::testEndpoint,
                     onCancelEndpointScan = viewModel::cancelEndpointScan,
-                    onRefreshChainNodes = viewModel::refreshChainNodes,
+                    onRefreshChainNodes = { viewModel.refreshChainNodes(settings) },
                     onSelectChainNode = { node -> viewModel.selectChainNode(settings, node) },
                     onTestChainNodes = viewModel::testChainNodes,
                     onShareReport = ::shareReport,

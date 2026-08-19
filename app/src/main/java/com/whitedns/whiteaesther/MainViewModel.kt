@@ -49,6 +49,8 @@ data class ChainState(
     val selected: String? = null,
     val busy: Boolean = false,
     val error: String? = null,
+    /** The engine is running a configuration the settings no longer describe. */
+    val stale: Boolean = false,
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -86,10 +88,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * the tunnel exists -- would send the request over the local network in the
      * clear, which is the one thing dialling through the tunnel exists to avoid.
      */
-    fun refreshChainNodes() {
+    fun refreshChainNodes(settings: AppSettings) {
         if (chainJob?.isCompleted == false) return
         chainJob = viewModelScope.launch {
             mutableChainState.value = mutableChainState.value.copy(busy = true, error = null)
+            // Editing a subscription does not reconfigure a chain that is
+            // already running, so the engine would answer with the previous
+            // one's nodes. Reporting them as the new subscription's is what
+            // reads as "deleting it did nothing".
+            if (!chain.isRunningConfigCurrent(settings.chain)) {
+                mutableChainState.value = ChainState(available = chain.isAvailable, stale = true)
+                return@launch
+            }
             val reported = withContext(Dispatchers.IO) { chain.nodes() }
             mutableChainState.value = ChainState(
                 available = chain.isAvailable,

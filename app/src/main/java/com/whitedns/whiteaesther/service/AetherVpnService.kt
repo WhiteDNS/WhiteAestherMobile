@@ -162,12 +162,18 @@ class AetherVpnService : VpnService() {
             withContext(Dispatchers.IO) {
                 NativeAetherBridge.prepare(engineConfig)
             }.getOrElse { error ->
-                scheduleReconnect(
-                    configJson,
-                    sessionGeneration,
-                    mode,
-                    error.message ?: "Native preparation failed",
-                )
+                val reason = error.message ?: "Native preparation failed"
+                // Retrying a refused registration is not merely useless, it is
+                // what keeps it refused: every attempt is another registration
+                // against the endpoint that just rate-limited this address.
+                // Stop, and say what will actually help.
+                if (isIdentityRefusal(reason)) {
+                    EngineLog.record(LogLevel.ERROR, "identity", reason)
+                    reportError(mode, reason)
+                    finishIfCurrent(sessionGeneration)
+                    return
+                }
+                scheduleReconnect(configJson, sessionGeneration, mode, reason)
                 return
             }
         } else {
@@ -432,6 +438,25 @@ class AetherVpnService : VpnService() {
         finishIfCurrent(sessionGeneration)
         return false
     }
+
+    /**
+     * Whether Cloudflare refused to give this device an identity.
+     *
+     * Reinstalling discards the identity, so each install registers a new
+     * device -- and a handful of those from one address gets the address
+     * rate-limited or flagged. It looks exactly like a broken app: nothing
+     * connects, and moving between Wi-Fi and mobile data fixes it, because that
+     * is a different address.
+     *
+     * Matched on the engine's own text because that is all that crosses the JNI
+     * boundary today. The strings are the ones account.rs produces for 403 and
+     * 429, and the test pins them.
+     */
+    private fun isIdentityRefusal(reason: String): Boolean =
+        reason.contains("status 403") ||
+            reason.contains("status 429") ||
+            reason.contains("too many registrations", ignoreCase = true) ||
+            reason.contains("refused this network", ignoreCase = true)
 
     private fun withEngineMode(configJson: String, mode: EngineMode): String = runCatching {
         JSONObject(configJson).put("mode", mode.wireName).toString()

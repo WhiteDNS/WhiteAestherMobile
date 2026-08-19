@@ -74,6 +74,19 @@ data class ChainSettings(
         else -> null
     }
 
+    /**
+     * Identifies the parts the engine is actually configured from.
+     *
+     * Deliberately not the whole object: the selected node changes on the live
+     * engine without a restart, so including it would report a stale
+     * configuration every time someone picked a different node.
+     */
+    fun fingerprint(): String = buildString {
+        append(throughTunnel).append('|')
+        sources.filter { it.enabled }.forEach { append(it.url).append(',') }
+        append('|').append(manual.trim())
+    }
+
     fun encode(): String = JSONObject()
         .put("enabled", enabled)
         .put("throughTunnel", throughTunnel)

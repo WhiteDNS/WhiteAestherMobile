@@ -51,18 +51,34 @@ class ChainController(private val context: Context) {
             selectNode(settings.node)
             startLogging()
 
-            NativeChainBridge.startTun(
+            val failure = NativeChainBridge.startTun(
                 fd = tunFd,
                 stack = ChainConfig.TUN_STACK,
                 address = "${ChainConfig.TUN_IPV4},${ChainConfig.TUN_IPV6}",
                 dns = ChainConfig.TUN_DNS,
             ).failureText()
+            if (failure == null) {
+                applied = settings.fingerprint()
+            }
+            failure
         }.getOrElse { error ->
             error.message ?: "The exit chain did not start"
         }
     }
 
+    /**
+     * Whether the running engine was configured from [settings].
+     *
+     * The node list comes from the live engine, so after editing a subscription
+     * it describes the previous one until the chain is restarted. Without this
+     * the screen shows the old subscription's nodes as though they were the new
+     * one's -- which is what a user reads as "delete did nothing".
+     */
+    fun isRunningConfigCurrent(settings: ChainSettings): Boolean =
+        applied != null && applied == settings.fingerprint()
+
     fun stop() {
+        applied = null
         if (!isAvailable) return
         // Drained first: the lines explaining why a session ended are written
         // during teardown, and shutdown discards anything still buffered.
@@ -187,8 +203,22 @@ class ChainController(private val context: Context) {
 
     private fun prepareHome(settings: ChainSettings, socksPort: Int?) {
         home.mkdirs()
-        File(home, "providers").mkdirs()
+        val providers = File(home, "providers")
+        providers.mkdirs()
         File(home, "config.yaml").writeText(ChainConfig.render(settings, socksPort))
+
+        // Cached node lists for subscriptions the user has since removed. They
+        // are not merely clutter: mihomo keys its own state by provider name, so
+        // leaving them means a removed subscription's nodes can come back.
+        val wanted = settings.sources
+            .filter { it.enabled && it.url.isNotBlank() }
+            .map { "${ChainConfig.providerKey(it.url)}.yaml" }
+            .toSet() + "manual.txt"
+        providers.listFiles()?.forEach { file ->
+            if (file.name !in wanted) {
+                file.delete()
+            }
+        }
         // Only when there is something to write. The renderer declares the file
         // provider on the same condition, so a missing file and a missing
         // provider always agree -- a provider pointing at a path that is not
@@ -237,6 +267,16 @@ class ChainController(private val context: Context) {
 
     private companion object {
         const val DELAY_TEST_TIMEOUT_MS = 5_000L
+
+        /**
+         * What the running engine was configured from.
+         *
+         * On the companion because there is one mihomo per process, not one per
+         * instance of this class -- the service starts it and the screen reads
+         * from it, and both need the same answer.
+         */
+        @Volatile
+        var applied: String? = null
     }
 }
 

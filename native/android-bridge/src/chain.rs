@@ -265,6 +265,13 @@ pub fn invoke(params: &str) -> Result<String, String> {
 /// it reports that the call was made, not that it worked -- and the only honest
 /// proof is traffic arriving at the far end.
 pub fn start_tun(fd: i32, stack: &str, address: &str, dns: &str) -> Result<(), String> {
+    // Go only checks for zero, and hands anything else to sing-tun, which dups
+    // and closes it. A negative descriptor there corrupts the process table --
+    // it surfaced as Looper aborting on a descriptor it still owned, nowhere
+    // near the call that caused it.
+    if fd < 0 {
+        return Err("the tunnel descriptor is not valid".into());
+    }
     let core = core()?;
     let (tx, _rx) = mpsc::channel::<String>();
     let callback = Box::into_raw(Box::new(Callback::Reply(tx))) as *mut c_void;

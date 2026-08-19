@@ -70,9 +70,9 @@ fun ChainScreen(
     val chain = settings.chain
     val connected = status.stage == EngineStage.CONNECTED
 
-    // Read back whenever the chain comes up, since that is the moment there is
-    // finally something to read.
-    LaunchedEffect(connected, chain.enabled) {
+    // Keyed on the sources too, so editing one re-asks rather than leaving the
+    // previous subscription's nodes on screen.
+    LaunchedEffect(connected, chain.enabled, chain.fingerprint()) {
         if (connected && chain.enabled) onRefreshNodes()
     }
 
@@ -339,6 +339,18 @@ private fun NodesCard(
                     "Connect to load your nodes. The list comes from the running chain, and " +
                         "your subscription is fetched through the tunnel -- so there is nothing " +
                         "to read until it is up.",
+                    modifier = Modifier.padding(horizontal = 15.dp),
+                )
+            }
+
+            chainState.stale -> {
+                Divider()
+                // The running engine still has the old subscription. Showing its
+                // nodes here is what reads as "deleting it did nothing", so say
+                // what is actually true instead.
+                Note(
+                    "Your sources changed. The chain is still running the previous ones -- " +
+                        "disconnect and connect again to load them.",
                     modifier = Modifier.padding(horizontal = 15.dp),
                 )
             }
