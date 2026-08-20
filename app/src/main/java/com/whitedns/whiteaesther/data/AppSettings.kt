@@ -136,6 +136,29 @@ data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val showAdvanced: Boolean = false,
 ) {
+    /**
+     * What is actually carried, in one line.
+     *
+     * Coverage used to be read from [mode] alone, which said "Whole device"
+     * while a per-app rule quietly restricted the tunnel to one app -- a user
+     * reading it had no way to tell why their traffic was not going through.
+     * The rule is part of the answer, so it is part of the label.
+     */
+    fun coverageSummary(): String = when {
+        mode != EngineMode.TUN -> "Proxy only"
+        splitTunnel.mode == SplitTunnelMode.ALL -> "Whole device"
+        splitTunnel.packages.isEmpty() && splitTunnel.mode == SplitTunnelMode.ONLY ->
+            "No apps chosen"
+        splitTunnel.packages.isEmpty() -> "Whole device"
+        splitTunnel.mode == SplitTunnelMode.ONLY ->
+            "${splitTunnel.packages.size} app${if (splitTunnel.packages.size == 1) "" else "s"} only"
+        else -> "All apps except ${splitTunnel.packages.size}"
+    }
+
+    /** True when a per-app rule means this is not the whole device after all. */
+    fun coverageIsRestricted(): Boolean =
+        mode == EngineMode.TUN && !splitTunnel.isEffectivelyEverything("")
+
     fun endpointValidationError(): String? = when {
         endpointMode == EndpointMode.AUTOMATIC -> null
         customEndpoint.isBlank() -> "Enter a custom endpoint"

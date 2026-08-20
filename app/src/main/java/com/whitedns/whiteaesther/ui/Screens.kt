@@ -304,7 +304,7 @@ fun HomeScreen(
                 Divider()
                 FactRow("Gateway", status.peer ?: "Negotiating", mono = true)
                 Divider()
-                FactRow("Coverage", if (settings.mode == EngineMode.TUN) "Whole device" else "Proxy only")
+                FactRow("Coverage", settings.coverageSummary())
                 Divider()
                 FactRow("Addresses", if (settings.dualStack) "IPv4 + IPv6" else "IPv4 only")
                 if (settings.mode == EngineMode.PROXY) {
@@ -320,7 +320,7 @@ fun HomeScreen(
                     mono = settings.endpointMode != EndpointMode.AUTOMATIC,
                 )
                 Divider()
-                FactRow("Coverage", if (settings.mode == EngineMode.TUN) "Whole device" else "Proxy only")
+                FactRow("Coverage", settings.coverageSummary())
             }
         }
         Note(
@@ -385,6 +385,16 @@ private fun homeAttention(settings: AppSettings, status: EngineStatus): Attentio
             title = "Endpoint address is incomplete",
             body = validationError,
             actions = listOf("Finish setting it" to AttentionTarget.ENDPOINT),
+        )
+        // Ranked above the quieter warnings below because the consequence is the
+        // same as not being connected, for every app outside the rule -- and
+        // nothing else on this screen would tell the user that.
+        settings.coverageIsRestricted() -> Attention(
+            tone = colors.cyan,
+            title = "Only some apps are going through",
+            body = "A per-app rule is limiting this to ${settings.coverageSummary().lowercase()}. " +
+                "Everything else is using your real address, connected or not.",
+            actions = listOf("Change which apps" to AttentionTarget.TRAFFIC),
         )
         settings.mode == EngineMode.PROXY -> Attention(
             tone = colors.cyan,
