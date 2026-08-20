@@ -51,7 +51,7 @@ impl WgScanMode {
     fn strategy(&self) -> WgStrategy {
         match self {
             WgScanMode::Turbo => WgStrategy {
-                concurrency: 12,
+                concurrency: 20,
                 per_probe_timeout: Duration::from_millis(5000),
                 overall_deadline: Duration::from_secs(30),
                 quiet_after_first: Duration::from_secs(0),
@@ -62,10 +62,16 @@ impl WgScanMode {
                 anchor_port_count: 4,
                 pool_port_waves: 2,
             },
+            // Sixteen and two minutes, matching the MASQUE prober. WireGuard
+            // searches a larger space -- fifty-four ports against MASQUE's
+            // handful -- and was given half the concurrency and two thirds the
+            // budget, which covered about one candidate in forty before giving
+            // up. Failure was close to arithmetic rather than evidence the
+            // network was blocking anything.
             WgScanMode::Balanced => WgStrategy {
-                concurrency: 8,
-                per_probe_timeout: Duration::from_millis(7000),
-                overall_deadline: Duration::from_secs(80),
+                concurrency: 16,
+                per_probe_timeout: Duration::from_millis(6000),
+                overall_deadline: Duration::from_secs(120),
                 quiet_after_first: Duration::from_secs(12),
                 target_successes: 5,
                 early_exit_first: false,

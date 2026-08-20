@@ -1889,6 +1889,96 @@ fn wg_endpoint_cooldown() -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
+/// How long the whole hunt may take before it gives up and says so.
+///
+/// Five obfuscation profiles, each scanning the pool for its own full budget,
+/// added up to the better part of seven minutes before one attempt reported
+/// failure -- and the service then retried the whole thing. From outside that is
+/// indistinguishable from a hang, and the user has no way to tell whether
+/// waiting longer would help. Bounded, so the answer arrives while they are
+/// still looking at it.
+fn wg_hunt_budget() -> std::time::Duration {
+    std::env::var("AETHER_WG_HUNT_BUDGET_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(std::time::Duration::from_secs)
+        .unwrap_or_else(|| std::time::Duration::from_secs(210))
+}
+
+/// Tries Cloudflare's documented WireGuard endpoints under every obfuscation
+/// profile, before any sampling.
+///
+/// The sweep below finishes an entire pool scan under one profile before trying
+/// the next, so an endpoint that answers only under a later profile is reached
+/// after every profile ahead of it has spent its full budget. The anchors are a
+/// few dozen probes; running them across all profiles first turns the ordinary
+/// case from minutes into seconds, and costs nothing when they are blocked.
+async fn hunt_wg_anchors(
+    identity: &account::Identity,
+    candidates: &[(String, aethernoize::AetherNoizeConfig)],
+    ip: prober::IpScan,
+) -> Option<(SocketAddr, aethernoize::AetherNoizeConfig, String)> {
+    let private_key = identity.private_key_bytes().ok()?;
+    let peer_public = identity.peer_public_key_bytes().ok()?;
+    let local_ipv4: std::net::Ipv4Addr = identity.ipv4.parse().ok()?;
+
+    let mut anchors: Vec<IpAddr> = Vec::new();
+    if ip.want_v4() {
+        anchors.extend(
+            wireguard::wg_seeds_v4()
+                .iter()
+                .filter_map(|s| s.parse::<Ipv4Addr>().ok())
+                .map(IpAddr::V4),
+        );
+    }
+    if ip.want_v6() {
+        anchors.extend(
+            wireguard::WG_SEEDS_V6
+                .iter()
+                .filter_map(|s| s.parse::<std::net::Ipv6Addr>().ok())
+                .map(IpAddr::V6),
+        );
+    }
+    if anchors.is_empty() {
+        return None;
+    }
+
+    let ports: Vec<u16> = wireguard::WG_PORTS.iter().copied().take(4).collect();
+    log::info!(
+        "[*] trying {} documented endpoints on {} ports across {} profiles",
+        anchors.len(),
+        ports.len(),
+        candidates.len(),
+    );
+
+    for (name, profile) in candidates {
+        for port in &ports {
+            for anchor in &anchors {
+                let peer = SocketAddr::new(*anchor, *port);
+                if wireguard::verify_endpoint(
+                    peer,
+                    private_key,
+                    peer_public,
+                    identity.client_id,
+                    local_ipv4,
+                    profile,
+                    std::time::Duration::from_secs(3),
+                    None,
+                )
+                .await
+                .is_ok()
+                {
+                    log::info!("[+] documented endpoint {peer} answered under profile '{name}'");
+                    return Some((peer, profile.clone(), name.clone()));
+                }
+            }
+        }
+    }
+
+    log::info!("[-] no documented endpoint answered; sampling the address pool");
+    None
+}
+
 async fn hunt_wg_peer(
     identity: &account::Identity,
     candidates: &[(String, aethernoize::AetherNoizeConfig)],
@@ -1896,8 +1986,17 @@ async fn hunt_wg_peer(
     ip: prober::IpScan,
     excluded: &HashSet<SocketAddr>,
 ) -> Result<(SocketAddr, aethernoize::AetherNoizeConfig, String)> {
+    if let Some(found) = hunt_wg_anchors(identity, candidates, ip).await {
+        return Ok(found);
+    }
+
+    let deadline = Instant::now() + wg_hunt_budget();
     let multi = candidates.len() > 1;
     for (name, profile) in candidates {
+        if Instant::now() >= deadline {
+            log::warn!("[-] the WireGuard search ran out of time before trying profile '{name}'");
+            break;
+        }
         log::info!(
             "[*] hunting for a working WireGuard endpoint (handshake + data-plane verification, aethernoize='{name}')"
         );
@@ -1917,7 +2016,14 @@ async fn hunt_wg_peer(
             }
         }
     }
-    Err(AetherError::NoCleanEndpoint)
+    // Named rather than generic. WireGuard is UDP, and a network that blocks
+    // UDP outright cannot be scanned around -- telling the user to keep waiting
+    // would be advice that never comes good.
+    Err(AetherError::Other(
+        "no WireGuard endpoint answered on this network. WireGuard needs UDP, which some \
+         networks block entirely -- MASQUE H2 runs over TCP and works where it does."
+            .into(),
+    ))
 }
 
 async fn run_wireguard(

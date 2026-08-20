@@ -149,7 +149,7 @@ class AetherVpnService : VpnService() {
             EngineLog.record(LogLevel.INFO, "chain", "exit chain on, engine dropped to SOCKS")
         }
         EngineStatusStore.update(
-            EngineStatus(EngineStage.PREPARING, mode, message = "Preparing identity and gateway"),
+            EngineStatus(EngineStage.PREPARING, mode, message = preparingMessage(engineConfig)),
         )
 
         // Dialling the nodes directly takes the engine out of the path entirely,
@@ -167,7 +167,7 @@ class AetherVpnService : VpnService() {
                 // what keeps it refused: every attempt is another registration
                 // against the endpoint that just rate-limited this address.
                 // Stop, and say what will actually help.
-                if (isIdentityRefusal(reason)) {
+                if (isConclusive(reason)) {
                     EngineLog.record(LogLevel.ERROR, "identity", reason)
                     reportError(mode, reason)
                     finishIfCurrent(sessionGeneration)
@@ -457,6 +457,35 @@ class AetherVpnService : VpnService() {
             reason.contains("status 429") ||
             reason.contains("too many registrations", ignoreCase = true) ||
             reason.contains("refused this network", ignoreCase = true)
+
+    /**
+     * Whether trying again in a few seconds could plausibly help.
+     *
+     * Two failures cannot be retried out of: an address Cloudflare has stopped
+     * issuing identities to, and a network with no reachable endpoint for the
+     * chosen protocol. Both take minutes to establish and neither changes on a
+     * three-second backoff, so eight attempts is most of an hour spent
+     * confirming what the first one already knew -- and from outside it is
+     * indistinguishable from a hang.
+     */
+    private fun isConclusive(reason: String): Boolean =
+        isIdentityRefusal(reason) ||
+            reason.contains("no WireGuard endpoint answered", ignoreCase = true)
+
+    /**
+     * What the engine is doing while it prepares.
+     *
+     * One message for every protocol read as a hang on the slow ones: WireGuard
+     * has its own account to provision and its own endpoints to search, and
+     * "Preparing identity and gateway" for four minutes gives the user nothing
+     * to judge whether waiting is worth it.
+     */
+    private fun preparingMessage(configJson: String): String =
+        when (transportOf(configJson)) {
+            "wg" -> "Searching for a WireGuard endpoint. This can take a few minutes."
+            "wiw" -> "Searching for an endpoint for the nested tunnel. This is the slowest option."
+            else -> "Preparing identity and gateway"
+        }
 
     private fun withEngineMode(configJson: String, mode: EngineMode): String = runCatching {
         JSONObject(configJson).put("mode", mode.wireName).toString()
