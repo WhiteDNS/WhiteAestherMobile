@@ -1918,6 +1918,8 @@ async fn hunt_wg_anchors(
     candidates: &[(String, aethernoize::AetherNoizeConfig)],
     ip: prober::IpScan,
 ) -> Option<(SocketAddr, aethernoize::AetherNoizeConfig, String)> {
+    use futures::StreamExt;
+
     let private_key = identity.private_key_bytes().ok()?;
     let peer_public = identity.peer_public_key_bytes().ok()?;
     let local_ipv4: std::net::Ipv4Addr = identity.ipv4.parse().ok()?;
@@ -1944,33 +1946,60 @@ async fn hunt_wg_anchors(
     }
 
     let ports: Vec<u16> = wireguard::WG_PORTS.iter().copied().take(4).collect();
-    log::info!(
-        "[*] trying {} documented endpoints on {} ports across {} profiles",
-        anchors.len(),
-        ports.len(),
-        candidates.len(),
-    );
 
+    // Every combination, flattened, so they can all be in flight at once. Run
+    // one at a time this is nine anchors by four ports by five profiles at three
+    // seconds each -- nine minutes of waiting on a network where none of them
+    // answer, which is worse than the sweep it was meant to shortcut.
+    let mut probes: Vec<(SocketAddr, &String, &aethernoize::AetherNoizeConfig)> = Vec::new();
     for (name, profile) in candidates {
         for port in &ports {
             for anchor in &anchors {
-                let peer = SocketAddr::new(*anchor, *port);
-                if wireguard::verify_endpoint(
-                    peer,
-                    private_key,
-                    peer_public,
-                    identity.client_id,
-                    local_ipv4,
-                    profile,
-                    std::time::Duration::from_secs(3),
-                    None,
-                )
-                .await
-                .is_ok()
-                {
-                    log::info!("[+] documented endpoint {peer} answered under profile '{name}'");
-                    return Some((peer, profile.clone(), name.clone()));
-                }
+                probes.push((SocketAddr::new(*anchor, *port), name, profile));
+            }
+        }
+    }
+
+    let concurrency = sysprofile::cap_concurrency(24);
+    let deadline = Instant::now() + ANCHOR_BUDGET;
+    log::info!(
+        "[*] trying {} documented endpoints across {} profiles, {} at a time",
+        anchors.len() * ports.len(),
+        candidates.len(),
+        concurrency,
+    );
+
+    let stream =
+        futures::stream::iter(probes.into_iter().map(|(peer, name, profile)| async move {
+            let reached = wireguard::verify_endpoint(
+                peer,
+                private_key,
+                peer_public,
+                identity.client_id,
+                local_ipv4,
+                profile,
+                ANCHOR_PROBE_TIMEOUT,
+                None,
+            )
+            .await
+            .is_ok();
+            (reached, peer, name, profile)
+        }))
+        .buffer_unordered(concurrency);
+    tokio::pin!(stream);
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            log::info!("[-] documented endpoints did not answer in time; sampling the pool");
+            return None;
+        }
+        match tokio::time::timeout(remaining, stream.next()).await {
+            Err(_) | Ok(None) => break,
+            Ok(Some((false, ..))) => continue,
+            Ok(Some((true, peer, name, profile))) => {
+                log::info!("[+] documented endpoint {peer} answered under profile '{name}'");
+                return Some((peer, profile.clone(), name.clone()));
             }
         }
     }
@@ -1978,6 +2007,14 @@ async fn hunt_wg_anchors(
     log::info!("[-] no documented endpoint answered; sampling the address pool");
     None
 }
+
+/// How long the documented endpoints get before the pool sweep takes over.
+///
+/// They are a shortcut, not the search. Where they answer it is in a second or
+/// two; where they are blocked, every extra second here is one the real scan
+/// does not get.
+const ANCHOR_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+const ANCHOR_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 async fn hunt_wg_peer(
     identity: &account::Identity,
@@ -1990,13 +2027,33 @@ async fn hunt_wg_peer(
         return Ok(found);
     }
 
-    let deadline = Instant::now() + wg_hunt_budget();
+    // A hard ceiling on the sweep, not a check between profiles: checking
+    // between them lets the last one start just under the limit and then run its
+    // own full budget past it, which is how a bounded search still takes minutes
+    // longer than the bound.
+    match tokio::time::timeout(
+        wg_hunt_budget(),
+        hunt_wg_peer_sweep(identity, candidates, mode_str, ip, excluded),
+    )
+    .await
+    {
+        Ok(found) => found,
+        Err(_) => {
+            log::warn!("[-] the WireGuard search reached its time limit");
+            Err(no_wireguard_endpoint())
+        }
+    }
+}
+
+async fn hunt_wg_peer_sweep(
+    identity: &account::Identity,
+    candidates: &[(String, aethernoize::AetherNoizeConfig)],
+    mode_str: &str,
+    ip: prober::IpScan,
+    excluded: &HashSet<SocketAddr>,
+) -> Result<(SocketAddr, aethernoize::AetherNoizeConfig, String)> {
     let multi = candidates.len() > 1;
     for (name, profile) in candidates {
-        if Instant::now() >= deadline {
-            log::warn!("[-] the WireGuard search ran out of time before trying profile '{name}'");
-            break;
-        }
         log::info!(
             "[*] hunting for a working WireGuard endpoint (handshake + data-plane verification, aethernoize='{name}')"
         );
@@ -2016,14 +2073,18 @@ async fn hunt_wg_peer(
             }
         }
     }
-    // Named rather than generic. WireGuard is UDP, and a network that blocks
-    // UDP outright cannot be scanned around -- telling the user to keep waiting
-    // would be advice that never comes good.
-    Err(AetherError::Other(
+    Err(no_wireguard_endpoint())
+}
+
+/// Named rather than generic. WireGuard is UDP, and a network that blocks UDP
+/// outright cannot be scanned around -- telling the user to keep waiting would
+/// be advice that never comes good.
+fn no_wireguard_endpoint() -> AetherError {
+    AetherError::Other(
         "no WireGuard endpoint answered on this network. WireGuard needs UDP, which some \
          networks block entirely -- MASQUE H2 runs over TCP and works where it does."
             .into(),
-    ))
+    )
 }
 
 async fn run_wireguard(
@@ -2834,6 +2895,60 @@ mod identity_tests {
         assert_eq!("current", config::load(base).unwrap().unwrap().device_id);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The arithmetic that made WireGuard look broken.
+    ///
+    /// Everything here is a bound the search has to satisfy for a user to get an
+    /// answer while they are still looking at the screen. Each was violated at
+    /// some point, and each failure looked like a hang rather than a refusal.
+    #[test]
+    fn the_documented_endpoint_pass_cannot_outlast_the_search_it_shortcuts() {
+        let anchors = wireguard::wg_seeds_v4().len() + wireguard::WG_SEEDS_V6.len();
+        let probes = anchors * 4 * 5; // four ports, five obfuscation profiles
+
+        // Run one at a time this was nine minutes of waiting on a network where
+        // none of them answer -- worse than the sweep it was meant to shortcut.
+        let sequential = ANCHOR_PROBE_TIMEOUT * probes as u32;
+        assert!(
+            sequential > ANCHOR_BUDGET * 4,
+            "the sequential cost is no longer worth bounding; check this still runs concurrently",
+        );
+        assert!(
+            ANCHOR_BUDGET <= std::time::Duration::from_secs(30),
+            "the shortcut may not become the search",
+        );
+    }
+
+    #[test]
+    fn the_whole_search_is_bounded_by_something_a_user_would_wait_for() {
+        let total = ANCHOR_BUDGET + wg_hunt_budget();
+        assert!(
+            total <= std::time::Duration::from_secs(300),
+            "a search this long is indistinguishable from a hang: {total:?}",
+        );
+    }
+
+    #[test]
+    fn wireguard_searches_at_least_as_hard_as_masque_does() {
+        // WireGuard covers fifty-four ports where MASQUE covers a handful, and
+        // was given half the concurrency and two thirds the budget -- about one
+        // candidate in forty before giving up. Failing was arithmetic, not
+        // evidence that anything was blocked.
+        let wg = wg_prober::WgScanMode::parse("balanced").strategy_for_test();
+        let masque = prober::ScanMode::parse("balanced").strategy_for_test();
+        assert!(
+            wg.0 >= masque.0,
+            "wireguard concurrency {} is below masque's {}",
+            wg.0,
+            masque.0,
+        );
+        assert!(
+            wg.1 >= masque.1,
+            "wireguard budget {:?} is below masque's {:?}",
+            wg.1,
+            masque.1,
+        );
     }
 
     #[test]

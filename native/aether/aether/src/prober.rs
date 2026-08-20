@@ -188,6 +188,15 @@ impl ScanMode {
         }
     }
 
+    /// Concurrency and overall budget, for the cross-prober comparison in
+    /// `lib.rs`. The two strategies are private and differently shaped; this is
+    /// the pair that decides how much of the space gets searched.
+    #[cfg(test)]
+    pub(crate) fn strategy_for_test(&self) -> (usize, Duration) {
+        let s = self.strategy();
+        (s.concurrency, s.overall_deadline)
+    }
+
     fn strategy(&self) -> Strategy {
         match self {
             ScanMode::Turbo => Strategy {
