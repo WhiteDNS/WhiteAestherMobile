@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.whitedns.whiteaesther.EndpointOperation
 import com.whitedns.whiteaesther.EndpointScannerState
+import com.whitedns.whiteaesther.IdentityMessage
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EndpointAddress
 import com.whitedns.whiteaesther.data.EndpointMode
@@ -1072,7 +1073,14 @@ private fun CommunityFooter() {
 }
 
 @Composable
-fun IdentityScreen(settings: AppSettings, onBack: () -> Unit) {
+fun IdentityScreen(
+    settings: AppSettings,
+    message: IdentityMessage? = null,
+    onExport: () -> Unit = {},
+    onImport: () -> Unit = {},
+    onBack: () -> Unit,
+) {
+    val colors = AetherTheme.colors
     ScreenColumn {
         CrumbBar("Settings · Identity", onBack = onBack)
         PageTitle(
@@ -1084,13 +1092,55 @@ fun IdentityScreen(settings: AppSettings, onBack: () -> Unit) {
             Divider()
             FactRow("Private key", "App-private storage")
             Divider()
-            FactRow("Leaves this device", "Never")
+            FactRow("Leaves this device", "Only if you save a backup")
             Divider()
             FactRow("Organisation team", "Not configured")
         }
+
+        Spacer(Modifier.height(12.dp))
+        AetherCard {
+            CardHead(
+                "Back up your identity",
+                "Uninstalling deletes it, and a new one is not always free to get.",
+            )
+            Divider()
+            RowCard(
+                icon = AetherIcons.Send,
+                title = "Save a backup",
+                subtitle = "Write this device's identity to a file you keep",
+                iconTint = colors.cyan,
+                trailing = false,
+                onClick = onExport,
+            )
+            Divider()
+            RowCard(
+                icon = AetherIcons.Key,
+                title = "Restore from a backup",
+                subtitle = "Use an identity saved from this or another device",
+                iconTint = colors.brand,
+                trailing = false,
+                onClick = onImport,
+            )
+        }
+
+        if (message != null) {
+            Spacer(Modifier.height(12.dp))
+            AttentionCard(
+                tone = if (message.isError) colors.signalFailed else colors.brand,
+                title = if (message.isError) "That did not work" else "Done",
+                body = message.text,
+            )
+        }
+
         Note(
-            "The engine provisions a device identity the first time it connects and keeps the private key " +
-                "in storage only this app can read. Signing in with an organisation team is not supported yet.",
+            "Cloudflare limits how many identities one network can register. Reinstalling throws " +
+                "yours away, and after a few times it can refuse to issue another -- which looks " +
+                "exactly like the app being broken. A backup skips all of that.",
+        )
+        Note(
+            "Treat the file like a password: anyone who has it can present as this device. It is " +
+                "not encrypted, so keep it somewhere you would keep a password, and do not send " +
+                "it over a channel you would not send one.",
         )
     }
 }

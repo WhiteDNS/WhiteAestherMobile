@@ -36,6 +36,30 @@ object NativeAetherBridge {
 
     fun versionOrNull(): String? = loadResult.mapCatching { nativeVersion() }.getOrNull()
 
+    /**
+     * Packages this install's identity so it survives a reinstall.
+     *
+     * Uninstalling takes the identity with it, and Cloudflare rate-limits device
+     * registrations per address -- so a few reinstalls can leave the address
+     * refused outright, which looks exactly like a broken app.
+     */
+    fun exportIdentity(configPath: String): Result<String> =
+        call { nativeExportIdentity(configPath) }.mapCatching { raw ->
+            val json = JSONObject(raw)
+            check(json.optBoolean("ok")) { json.optString("error", "Nothing to export") }
+            json.getString("payload")
+        }
+
+    /**
+     * Restores an identity produced by [exportIdentity].
+     *
+     * Everything is checked before anything is written: a half-finished import
+     * would leave the device holding an identity Cloudflare does not recognise,
+     * with the working one already gone.
+     */
+    fun importIdentity(configPath: String, payload: String): NativeResult =
+        call { nativeImportIdentity(configPath, payload) }.toResult()
+
     fun validate(configJson: String): NativeResult = call { validateConfig(configJson) }.toResult()
 
     fun prepare(configJson: String): Result<PreparedEngine> = call { nativePrepare(configJson) }
@@ -116,6 +140,8 @@ object NativeAetherBridge {
 
     @JvmStatic
     private external fun validateConfig(configJson: String): String
+    private external fun nativeExportIdentity(configPath: String): String
+    private external fun nativeImportIdentity(configPath: String, payload: String): String
 
     @JvmStatic
     private external fun nativePrepare(configJson: String): String

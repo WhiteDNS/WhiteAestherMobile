@@ -206,6 +206,89 @@ pub enum EmbeddedEndpoint {
     },
 }
 
+/// The envelope an exported identity travels in.
+///
+/// Versioned because it leaves the device and can come back into a build that
+/// did not write it. Refusing an unknown version is the honest failure; guessing
+/// at its shape and writing the result over a working identity is not.
+const IDENTITY_EXPORT_VERSION: u32 = 1;
+
+/// Packages this install's identities so they survive a reinstall.
+///
+/// Cloudflare rate-limits device registrations per address, and uninstalling
+/// discards the identity -- so a few reinstalls can leave an address refused
+/// outright. Carrying the registration across is the difference between that and
+/// connecting immediately.
+///
+/// Both accounts go in. WARP-in-WARP needs a second one for its inner hop, and
+/// leaving it behind would have the user pay for it again on the first nested
+/// connect, which is the cost this exists to avoid.
+pub fn export_identity(base_config: &str) -> Result<String> {
+    let shared = warp_config_path(base_config);
+    adopt_legacy_masque_identity(&shared)?;
+    let identity = config::load(&shared)?
+        .ok_or_else(|| AetherError::Other("there is no identity to export yet".into()))?;
+
+    let secondary = derive_sibling_path(&shared, "secondary");
+    let inner = config::load(&secondary).ok().flatten();
+
+    let mut out = String::new();
+    out.push_str(&format!("version = {IDENTITY_EXPORT_VERSION}\n"));
+    out.push_str(&format!("device_id = {:?}\n\n", identity.device_id));
+    out.push_str("[identity]\n");
+    out.push_str(&config::to_text(&identity)?);
+    if let Some(inner) = inner {
+        out.push_str("\n[secondary]\n");
+        out.push_str(&config::to_text(&inner)?);
+    }
+    Ok(out)
+}
+
+/// Restores identities produced by [`export_identity`].
+///
+/// Everything is parsed and checked before a single byte is written. Half an
+/// import is worse than none: it would leave the device holding an identity
+/// Cloudflare does not recognise, with the working one already gone.
+pub fn import_identity(base_config: &str, payload: &str) -> Result<()> {
+    let envelope: ExportEnvelope = toml::from_str(payload).map_err(|e| {
+        AetherError::Other(format!("this is not a WhiteAesther identity file: {e}"))
+    })?;
+
+    if envelope.version != IDENTITY_EXPORT_VERSION {
+        return Err(AetherError::Other(format!(
+            "this file was written by a different version of WhiteAesther (format {}, this build reads {IDENTITY_EXPORT_VERSION})",
+            envelope.version
+        )));
+    }
+
+    let identity = config::parse(
+        &toml::to_string(&envelope.identity)
+            .map_err(|e| AetherError::Other(format!("this identity file is malformed: {e}")))?,
+    )?;
+    let secondary = match envelope.secondary {
+        Some(value) => Some(config::parse(&toml::to_string(&value).map_err(|e| {
+            AetherError::Other(format!("the second identity is malformed: {e}"))
+        })?)?),
+        None => None,
+    };
+
+    let shared = warp_config_path(base_config);
+    config::write_identity(&shared, &identity)?;
+    if let Some(secondary) = secondary {
+        config::write_identity(&derive_sibling_path(&shared, "secondary"), &secondary)?;
+    }
+    log::info!("[+] imported identity for device {}", identity.device_id);
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+struct ExportEnvelope {
+    version: u32,
+    identity: toml::Value,
+    #[serde(default)]
+    secondary: Option<toml::Value>,
+}
+
 pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepared> {
     let config_path = config.identity_path();
     let identity = match config.protocol() {
@@ -2512,6 +2595,139 @@ mod identity_tests {
         std::env::remove_var("AETHER_WG_CONFIG");
         std::env::remove_var("CF_TEAM");
         std::env::remove_var("AETHER_TEAM");
+    }
+
+    fn sample_identity(device: &str) -> account::Identity {
+        account::Identity {
+            device_id: device.into(),
+            access_token: "token".into(),
+            cert_pem: b"-----BEGIN CERTIFICATE-----".to_vec(),
+            key_pem: b"-----BEGIN PRIVATE KEY-----".to_vec(),
+            cert_issued_at: 1_700_000_000,
+            ipv4: "172.16.0.2".into(),
+            ipv6: "2606:4700:110::1".into(),
+            wg_private_key: [3u8; 32],
+            wg_peer_public_key: [5u8; 32],
+            client_id: [9, 8, 7],
+            organization: String::new(),
+            gateway_proxy: String::new(),
+            assigned_endpoint: String::new(),
+        }
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("aether-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_exported_identity_comes_back_as_the_same_device() {
+        isolated();
+        let dir = scratch("export");
+        let base = dir.join("aether.toml");
+        let base = base.to_str().unwrap();
+        config::save(base, &sample_identity("device-one")).unwrap();
+
+        let payload = export_identity(base).unwrap();
+
+        // The point of the whole feature: a reinstall starts here instead of at
+        // a registration Cloudflare may refuse.
+        let restored = scratch("import").join("aether.toml");
+        let restored = restored.to_str().unwrap();
+        import_identity(restored, &payload).unwrap();
+
+        let identity = config::load(restored).unwrap().unwrap();
+        assert_eq!("device-one", identity.device_id);
+        assert_eq!([3u8; 32], identity.wg_private_key);
+        assert_eq!(b"-----BEGIN PRIVATE KEY-----".to_vec(), identity.key_pem);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_nested_tunnels_second_account_travels_too() {
+        isolated();
+        let dir = scratch("export-two");
+        let base = dir.join("aether.toml");
+        let base = base.to_str().unwrap();
+        config::save(base, &sample_identity("outer")).unwrap();
+        config::save(
+            &derive_sibling_path(base, "secondary"),
+            &sample_identity("inner"),
+        )
+        .unwrap();
+
+        let payload = export_identity(base).unwrap();
+
+        let target = scratch("import-two").join("aether.toml");
+        let target = target.to_str().unwrap();
+        import_identity(target, &payload).unwrap();
+
+        // Leaving it behind would have the user buy it again on the first
+        // WARP-in-WARP connect, which is the cost this exists to avoid.
+        let inner = config::load(&derive_sibling_path(target, "secondary"))
+            .unwrap()
+            .expect("the second identity did not travel");
+        assert_eq!("inner", inner.device_id);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_install_with_no_identity_says_so_rather_than_exporting_nothing() {
+        isolated();
+        let dir = scratch("export-empty");
+        let base = dir.join("aether.toml");
+        let error = export_identity(base.to_str().unwrap()).unwrap_err();
+        assert!(error.to_string().contains("no identity"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_that_is_not_an_identity_is_refused_before_anything_is_written() {
+        isolated();
+        let dir = scratch("import-junk");
+        let base = dir.join("aether.toml");
+        let base = base.to_str().unwrap();
+        let existing = sample_identity("still-here");
+        config::save(base, &existing).unwrap();
+
+        for junk in ["", "hello", "version = 1", "{\"json\": true}"] {
+            assert!(import_identity(base, junk).is_err(), "accepted {junk:?}");
+        }
+
+        // Half an import is worse than none: it would leave the device holding
+        // an identity Cloudflare does not know, with the working one gone.
+        assert_eq!(
+            "still-here",
+            config::load(base).unwrap().unwrap().device_id,
+            "a refused import damaged the identity in use",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_from_a_future_format_is_refused_by_name() {
+        isolated();
+        let dir = scratch("import-future");
+        let base = dir.join("aether.toml");
+        let base = base.to_str().unwrap();
+        config::save(base, &sample_identity("current")).unwrap();
+
+        let payload = export_identity(base)
+            .unwrap()
+            .replace("version = 1", "version = 99");
+        let error = import_identity(base, &payload).unwrap_err().to_string();
+
+        // Guessing at an unknown shape and writing the result over a working
+        // identity is the one outcome worse than refusing.
+        assert!(error.contains("different version"), "{error}");
+        assert_eq!("current", config::load(base).unwrap().unwrap().device_id);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

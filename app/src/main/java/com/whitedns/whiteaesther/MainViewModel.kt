@@ -23,6 +23,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** Something to tell the user about their identity, after an export or import. */
+data class IdentityMessage(val text: String, val isError: Boolean = false)
+
 enum class EndpointOperation {
     SCANNING,
     TESTING,
@@ -72,6 +75,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // that only happens once connected. Whether the library is present is known
     // from the start, and the screen has to say so before the user configures
     // something that can never run.
+    private val mutableIdentityMessage = MutableStateFlow<IdentityMessage?>(null)
+    val identityMessage = mutableIdentityMessage.asStateFlow()
+
     private val mutableChainState = MutableStateFlow(ChainState(available = chain.isAvailable))
     val chainState = mutableChainState.asStateFlow()
     private var chainJob: Job? = null
@@ -79,6 +85,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun save(settings: AppSettings) {
         viewModelScope.launch { repository.save(settings) }
     }
+
+    /**
+     * Produces the identity file the user saves before a reinstall.
+     *
+     * Returns null when there is nothing to export yet, so the caller does not
+     * open a file picker for an empty file.
+     */
+    fun exportIdentity(): String? {
+        val result = NativeAetherBridge.exportIdentity(identityConfigPath())
+        result.exceptionOrNull()?.let { error ->
+            mutableIdentityMessage.value = IdentityMessage(
+                error.message ?: "There is no identity to export yet",
+                isError = true,
+            )
+            return null
+        }
+        return result.getOrNull()
+    }
+
+    /**
+     * Restores an identity, refusing while a tunnel is up.
+     *
+     * Swapping the identity under a running session would leave the engine
+     * carrying traffic for a device it no longer has the keys for, and the
+     * failure would arrive much later than the cause.
+     */
+    fun importIdentity(payload: String) {
+        if (EngineStatusStore.status.value.stage != EngineStage.IDLE &&
+            EngineStatusStore.status.value.stage != EngineStage.ERROR
+        ) {
+            mutableIdentityMessage.value =
+                IdentityMessage("Disconnect before importing an identity", isError = true)
+            return
+        }
+        val result = NativeAetherBridge.importIdentity(identityConfigPath(), payload)
+        mutableIdentityMessage.value = if (result.ok) {
+            IdentityMessage("Identity imported. Connect to use it.")
+        } else {
+            IdentityMessage(result.error ?: "That file is not a WhiteAesther identity", isError = true)
+        }
+    }
+
+    /** Reports how saving the backup went, since only the activity can know. */
+    fun reportIdentityWrite(error: String?) {
+        mutableIdentityMessage.value = if (error == null) {
+            IdentityMessage("Identity saved. Keep it somewhere safe.")
+        } else {
+            IdentityMessage(error, isError = true)
+        }
+    }
+
+    fun clearIdentityMessage() {
+        mutableIdentityMessage.value = null
+    }
+
+    /** The base path the engine derives every identity file from. */
+    private fun identityConfigPath(): String =
+        java.io.File(getApplication<Application>().filesDir, "aether.toml").absolutePath
 
     /**
      * Reads the node list back from the running chain.

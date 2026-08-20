@@ -43,6 +43,25 @@ class MainActivity : ComponentActivity() {
         continueConnectionRequest()
     }
 
+    /** Held between asking for a destination and having one to write to. */
+    private var pendingIdentityExport: String? = null
+
+    private val identityExportTarget = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/toml"),
+    ) { uri ->
+        val payload = pendingIdentityExport
+        pendingIdentityExport = null
+        if (uri == null || payload == null) return@registerForActivityResult
+        writeIdentityBackup(uri, payload)
+    }
+
+    private val identityImportSource = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        readIdentityBackup(uri)
+    }
+
     private val vpnPermission = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
@@ -101,6 +120,14 @@ class MainActivity : ComponentActivity() {
                     onRefreshChainNodes = { viewModel.refreshChainNodes(settings) },
                     onSelectChainNode = { node -> viewModel.selectChainNode(settings, node) },
                     onTestChainNodes = viewModel::testChainNodes,
+                    identityMessage = viewModel.identityMessage.collectAsStateWithLifecycle().value,
+                    onExportIdentity = ::exportIdentity,
+                    onImportIdentity = {
+                        // Any type: pickers vary in whether they know .toml, and
+                        // a file the user cannot select is worse than one the
+                        // engine rejects with a reason.
+                        identityImportSource.launch(arrayOf("*/*"))
+                    },
                     onShareReport = ::shareReport,
                     onCopyReport = ::copyReport,
                     onClearLog = EngineLog::clear,
@@ -161,6 +188,38 @@ class MainActivity : ComponentActivity() {
             putExtra(Intent.EXTRA_TEXT, report)
         }
         startActivity(Intent.createChooser(intent, "Send diagnostics"))
+    }
+
+    /**
+     * Asks where to save the identity, but only once there is one to save.
+     *
+     * Opening a picker first and failing afterwards would leave the user with an
+     * empty file named as though it held their identity -- which they might then
+     * rely on.
+     */
+    private fun exportIdentity() {
+        val payload = viewModel.exportIdentity() ?: return
+        pendingIdentityExport = payload
+        identityExportTarget.launch("whiteaesther-identity.toml")
+    }
+
+    private fun writeIdentityBackup(uri: Uri, payload: String) {
+        val written = runCatching {
+            contentResolver.openOutputStream(uri, "wt")?.use { it.write(payload.toByteArray()) }
+                ?: error("could not open that location")
+        }
+        viewModel.reportIdentityWrite(written.exceptionOrNull()?.message)
+    }
+
+    private fun readIdentityBackup(uri: Uri) {
+        val payload = runCatching {
+            contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
+                ?: error("could not read that file")
+        }
+        payload.fold(
+            onSuccess = viewModel::importIdentity,
+            onFailure = { viewModel.reportIdentityWrite(it.message) },
+        )
     }
 
     private fun copyReport(report: String) {

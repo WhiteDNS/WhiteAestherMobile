@@ -18,6 +18,7 @@ use jni::{JNIEnv, JavaVM};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::Deserialize;
+use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
 const BRIDGE_VERSION: &str = "0.2.0";
@@ -200,6 +201,68 @@ fn install_logger() {
         );
         log::info!("aether bridge logging installed");
     });
+}
+
+/// Packages this install's identity so it survives a reinstall.
+///
+/// Uninstalling takes the identity with it, and Cloudflare rate-limits device
+/// registrations per address -- so a few reinstalls can leave an address refused
+/// outright, which looks exactly like a broken app.
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeExportIdentity<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    config_path: JString<'local>,
+) -> jstring {
+    install_logger();
+    let path: String = match env.get_string(&config_path) {
+        Ok(value) => value.into(),
+        Err(error) => return java_string(env, &failure_json(&error.to_string())),
+    };
+
+    match aether::export_identity(&path) {
+        Ok(payload) => java_string(env, &json!({ "ok": true, "payload": payload }).to_string()),
+        Err(error) => java_string(env, &failure_json(&error.to_string())),
+    }
+}
+
+/// Restores an identity produced by the export above.
+///
+/// Everything is validated before anything is written: a half-finished import
+/// would leave the device holding an identity Cloudflare does not recognise,
+/// with the working one already gone.
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeImportIdentity<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    config_path: JString<'local>,
+    payload: JString<'local>,
+) -> jstring {
+    install_logger();
+    let read = |env: &mut JNIEnv<'local>, value: JString<'local>| -> Result<String, String> {
+        env.get_string(&value)
+            .map(Into::into)
+            .map_err(|error| error.to_string())
+    };
+
+    let result = (|| -> Result<(), String> {
+        let path = read(&mut env, config_path)?;
+        let payload = read(&mut env, payload)?;
+        aether::import_identity(&path, &payload).map_err(|error| error.to_string())
+    })();
+
+    match result {
+        Ok(()) => java_string(env, r#"{"ok":true}"#),
+        Err(reason) => java_string(env, &failure_json(&reason)),
+    }
+}
+
+fn failure_json(reason: &str) -> String {
+    json!({ "ok": false, "error": reason }).to_string()
 }
 
 fn java_string(mut env: JNIEnv<'_>, value: &str) -> jstring {

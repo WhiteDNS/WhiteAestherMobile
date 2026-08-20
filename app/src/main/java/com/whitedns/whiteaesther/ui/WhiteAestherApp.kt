@@ -41,6 +41,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.whitedns.whiteaesther.ChainState
 import com.whitedns.whiteaesther.EndpointScannerState
+import com.whitedns.whiteaesther.IdentityMessage
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatus
@@ -85,6 +86,9 @@ fun WhiteAestherApp(
     onRefreshChainNodes: () -> Unit = {},
     onSelectChainNode: (String) -> Unit = {},
     onTestChainNodes: () -> Unit = {},
+    identityMessage: IdentityMessage? = null,
+    onExportIdentity: () -> Unit = {},
+    onImportIdentity: () -> Unit = {},
     onShareReport: (String) -> Unit = {},
     onCopyReport: (String) -> Unit = {},
     onClearLog: () -> Unit = {},
@@ -172,6 +176,9 @@ fun WhiteAestherApp(
                 )
                 Destination.IDENTITY -> IdentityScreen(
                     settings = settings,
+                    message = identityMessage,
+                    onExport = onExportIdentity,
+                    onImport = onImportIdentity,
                     onBack = { destination = Destination.SETTINGS },
                 )
                 Destination.ABOUT -> AboutScreen(
