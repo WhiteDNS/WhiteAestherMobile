@@ -228,6 +228,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startService(settings: AppSettings) {
-        AetherVpnService.start(this, settings.toNativeJson(this), settings.chain.encode())
+        AetherVpnService.start(
+            this,
+            settings.toNativeJson(this),
+            settings.chain.encode(),
+            settings.splitTunnel.encode(),
+        )
     }
 }

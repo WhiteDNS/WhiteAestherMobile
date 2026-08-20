@@ -125,6 +125,10 @@ data class AppSettings(
     // cost a little on a healthy network and only matter on a filtered one.
     val fragmentTls: Boolean = false,
     val encryptedHello: Boolean = false,
+    // Which apps the tunnel carries. Presentation and VpnService only: the
+    // engine has no idea apps exist, so this is deliberately absent from
+    // toNativeJson.
+    val splitTunnel: SplitTunnel = SplitTunnel(),
     // The second hop. Carried to the service beside the engine config rather
     // than inside it -- mihomo's settings are not the engine's business.
     val chain: ChainSettings = ChainSettings(),

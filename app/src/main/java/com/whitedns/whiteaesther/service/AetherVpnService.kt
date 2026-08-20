@@ -18,6 +18,8 @@ import com.whitedns.whiteaesther.core.NativeEngineListener
 import com.whitedns.whiteaesther.core.NativeSocketProtector
 import com.whitedns.whiteaesther.data.ChainSettings
 import com.whitedns.whiteaesther.data.EngineMode
+import com.whitedns.whiteaesther.data.SplitTunnel
+import com.whitedns.whiteaesther.data.SplitTunnelMode
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +47,7 @@ class AetherVpnService : VpnService() {
     // transport substitution, so retries never compound.
     private var baseConfigJson: String? = null
     private var chainJson: String? = null
+    private var splitJson: String? = null
     private val chain by lazy { ChainController(this) }
 
     override fun onCreate() {
@@ -64,17 +67,23 @@ class AetherVpnService : VpnService() {
                     return START_NOT_STICKY
                 }
                 val chainSettings = intent.getStringExtra(EXTRA_CHAIN)
+                val splitSettings = intent.getStringExtra(EXTRA_SPLIT)
                 if (JSONObject(configJson).optString("mode") == "tun") {
                     preferences.edit {
                         putString(LAST_TUN_CONFIG, configJson)
                         putString(LAST_CHAIN_CONFIG, chainSettings)
+                        putString(LAST_SPLIT_CONFIG, splitSettings)
                     }
                     restartPolicy = START_STICKY
                 } else {
-                    preferences.edit { remove(LAST_TUN_CONFIG); remove(LAST_CHAIN_CONFIG) }
+                    preferences.edit {
+                        remove(LAST_TUN_CONFIG)
+                        remove(LAST_CHAIN_CONFIG)
+                        remove(LAST_SPLIT_CONFIG)
+                    }
                 }
                 startForegroundNow("Preparing connection", "Validating native engine")
-                replaceSession(configJson, chainSettings)
+                replaceSession(configJson, chainSettings, splitSettings)
             }
             else -> {
                 val configJson = preferences.getString(LAST_TUN_CONFIG, null)
@@ -83,7 +92,11 @@ class AetherVpnService : VpnService() {
                 } else {
                     restartPolicy = START_STICKY
                     startForegroundNow("Restoring WhiteAesther", "Reconnecting whole-device VPN")
-                    replaceSession(configJson, preferences.getString(LAST_CHAIN_CONFIG, null))
+                    replaceSession(
+                        configJson,
+                        preferences.getString(LAST_CHAIN_CONFIG, null),
+                        preferences.getString(LAST_SPLIT_CONFIG, null),
+                    )
                 }
             }
         }
@@ -91,7 +104,11 @@ class AetherVpnService : VpnService() {
     }
 
     override fun onRevoke() {
-        preferences.edit { remove(LAST_TUN_CONFIG); remove(LAST_CHAIN_CONFIG) }
+        preferences.edit {
+            remove(LAST_TUN_CONFIG)
+            remove(LAST_CHAIN_CONFIG)
+            remove(LAST_SPLIT_CONFIG)
+        }
         stopFromUser("VPN permission was revoked")
         super.onRevoke()
     }
@@ -105,13 +122,18 @@ class AetherVpnService : VpnService() {
         super.onDestroy()
     }
 
-    private fun replaceSession(configJson: String, chainSettings: String?) {
+    private fun replaceSession(
+        configJson: String,
+        chainSettings: String?,
+        splitSettings: String?,
+    ) {
         serviceScope.launch {
             commandMutex.withLock {
                 generation += 1
                 reconnectAttempt = 0
                 baseConfigJson = configJson
                 chainJson = chainSettings
+                splitJson = splitSettings
                 NativeAetherBridge.stop()
                 runCatching { chain.stop() }
                 sessionJob?.join()
@@ -132,6 +154,7 @@ class AetherVpnService : VpnService() {
         }.getOrDefault(EngineMode.TUN)
 
         val chainSettings = ChainSettings.decode(chainJson)
+        val splitTunnel = SplitTunnel.decode(splitJson)
         val useChain =
             chainSettings.enabled && resolveChainUsage(chainSettings, mode, sessionGeneration)
         if (chainSettings.enabled && !useChain) return
@@ -199,7 +222,12 @@ class AetherVpnService : VpnService() {
                 finishIfCurrent(sessionGeneration)
                 return
             }
-            tun = establishTun(prepared?.ipv4.orEmpty(), prepared?.ipv6.orEmpty(), useChain)
+            tun = establishTun(
+                prepared?.ipv4.orEmpty(),
+                prepared?.ipv6.orEmpty(),
+                useChain,
+                splitTunnel,
+            )
             if (tun == null) {
                 reportError(mode, "Android could not establish the VPN interface")
                 finishIfCurrent(sessionGeneration)
@@ -495,10 +523,70 @@ class AetherVpnService : VpnService() {
      * @param forChain when true the interface belongs to mihomo, so it carries
      *   mihomo's addresses and resolver rather than the engine's.
      */
+    /**
+     * Applies the user's per-app rules to the interface.
+     *
+     * Android takes an allow list or a deny list and throws if given both, so
+     * the mode picks the call rather than being something filtered afterwards.
+     *
+     * This app is never in the allow list and always in the deny list. Routing
+     * our own traffic into our own tunnel is the loop everything else here
+     * exists to prevent -- the engine's sockets to Cloudflare and mihomo's to
+     * its nodes would be captured by the interface they are building.
+     */
+    private fun applySplitTunnel(builder: Builder, rules: SplitTunnel, excludeSelf: Boolean) {
+        val chosen = rules.effectivePackages(packageName)
+
+        if (rules.isEffectivelyEverything(packageName)) {
+            if (excludeSelf) {
+                runCatching { builder.addDisallowedApplication(packageName) }.onFailure {
+                    EngineLog.record(LogLevel.WARN, "split", "could not exclude self: ${it.message}")
+                }
+            }
+            return
+        }
+
+        when (rules.mode) {
+            SplitTunnelMode.ONLY -> {
+                // Our own package is absent by construction, so nothing extra is
+                // needed to keep us out: an allow list excludes everyone else.
+                var added = 0
+                chosen.forEach { name ->
+                    runCatching { builder.addAllowedApplication(name); added++ }.onFailure {
+                        // Uninstalled since it was chosen. Dropping it is right;
+                        // throwing would refuse the whole connection over an app
+                        // the user no longer has.
+                        EngineLog.record(LogLevel.WARN, "split", "skipped $name: ${it.message}")
+                    }
+                }
+                if (added == 0) {
+                    // An allow list Android accepted none of carries nothing at
+                    // all, which looks exactly like a connection that failed
+                    // silently. Better to route everything and say so.
+                    EngineLog.record(
+                        LogLevel.ERROR,
+                        "split",
+                        "none of the chosen apps are installed; routing everything instead",
+                    )
+                }
+            }
+
+            else -> {
+                (chosen + if (excludeSelf) setOf(packageName) else emptySet()).forEach { name ->
+                    runCatching { builder.addDisallowedApplication(name) }.onFailure {
+                        EngineLog.record(LogLevel.WARN, "split", "skipped $name: ${it.message}")
+                    }
+                }
+            }
+        }
+        EngineLog.record(LogLevel.INFO, "split", "coverage ${rules.summary().lowercase()}")
+    }
+
     private fun establishTun(
         ipv4: String,
         ipv6: String,
         forChain: Boolean,
+        splitTunnel: SplitTunnel = SplitTunnel(),
     ): ParcelFileDescriptor? {
         val configureIntent = PendingIntent.getActivity(
             this,
@@ -511,16 +599,15 @@ class AetherVpnService : VpnService() {
             .setConfigureIntent(configureIntent)
             .addRoute("0.0.0.0", 0)
 
+        // Everything this process opens must stay off the interface when the
+        // chain runs: the engine's sockets to Cloudflare, mihomo's to its nodes,
+        // and the subscription fetch that would otherwise race the tunnel it is
+        // being downloaded to configure. protect() covers the same ground one
+        // socket at a time, and both are kept -- this one the kernel enforces,
+        // that one depends on every caller remembering.
+        applySplitTunnel(builder, splitTunnel, excludeSelf = forChain)
+
         if (forChain) {
-            // Everything this process opens stays off the interface: the engine's
-            // sockets to Cloudflare, mihomo's to its nodes, and the subscription
-            // fetch that would otherwise race the tunnel it is being downloaded
-            // to configure. protect() covers the same ground one socket at a
-            // time, and both are kept -- this one the kernel enforces, that one
-            // depends on every caller remembering.
-            runCatching { builder.addDisallowedApplication(packageName) }.onFailure {
-                EngineLog.record(LogLevel.WARN, "chain", "could not exclude self: ${it.message}")
-            }
             // 9000, not 1280. mihomo terminates TCP in userspace, so this sizes a
             // local write rather than anything that reaches the wire, and a
             // larger one means fewer crossings per megabyte.
@@ -557,7 +644,11 @@ class AetherVpnService : VpnService() {
     }
 
     private fun stopFromUser(message: String = "Stopped") {
-        preferences.edit { remove(LAST_TUN_CONFIG); remove(LAST_CHAIN_CONFIG) }
+        preferences.edit {
+            remove(LAST_TUN_CONFIG)
+            remove(LAST_CHAIN_CONFIG)
+            remove(LAST_SPLIT_CONFIG)
+        }
         startForegroundNow("Stopping WhiteAesther", message)
         EngineStatusStore.update(
             EngineStatus(EngineStage.STOPPING, EngineStatusStore.status.value.mode, message = message),
@@ -744,8 +835,10 @@ class AetherVpnService : VpnService() {
         private const val ACTION_STOP = "com.whitedns.whiteaesther.STOP"
         private const val EXTRA_CONFIG = "config"
         private const val EXTRA_CHAIN = "chain"
+        private const val EXTRA_SPLIT = "split"
         private const val LAST_TUN_CONFIG = "last_tun_config"
         private const val LAST_CHAIN_CONFIG = "last_chain_config"
+        private const val LAST_SPLIT_CONFIG = "last_split_config"
         // How long the chain waits for the tunnel it dials its nodes through.
         // Generous, because that tunnel is itself still searching for a route.
         private const val TUNNEL_WAIT_MS = 120_000L
@@ -758,13 +851,19 @@ class AetherVpnService : VpnService() {
         private const val MAX_RECONNECT_DELAY_MS = 60_000L
         private const val MAX_RECONNECT_ATTEMPTS = 8
 
-        fun start(context: Context, configJson: String, chainJson: String? = null) {
+        fun start(
+            context: Context,
+            configJson: String,
+            chainJson: String? = null,
+            splitJson: String? = null,
+        ) {
             ContextCompat.startForegroundService(
                 context,
                 Intent(context, AetherVpnService::class.java)
                     .setAction(ACTION_START)
                     .putExtra(EXTRA_CONFIG, configJson)
-                    .putExtra(EXTRA_CHAIN, chainJson),
+                    .putExtra(EXTRA_CHAIN, chainJson)
+                    .putExtra(EXTRA_SPLIT, splitJson),
             )
         }
 

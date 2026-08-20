@@ -763,6 +763,7 @@ fun TrafficScreen(
     settings: AppSettings,
     status: EngineStatus,
     onSettingsChange: (AppSettings) -> Unit,
+    onGoToSplitTunnel: () -> Unit = {},
 ) {
     var advanced by rememberSaveable(settings.showAdvanced) { mutableStateOf(settings.showAdvanced) }
     var portText by remember(settings.proxyPort) { mutableStateOf(settings.proxyPort.toString()) }
@@ -772,6 +773,19 @@ fun TrafficScreen(
     ScreenColumn {
         CrumbBar("Traffic")
         PageTitle("What is protected", "Choose how much of the device is covered. The rest has safe defaults.")
+
+        if (settings.mode == EngineMode.TUN) {
+            AetherCard {
+                RowCard(
+                    icon = AetherIcons.Sliders,
+                    title = "Apps",
+                    subtitle = settings.splitTunnel.summary(),
+                    iconTint = AetherTheme.colors.cyan,
+                    onClick = onGoToSplitTunnel,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+        }
 
         AetherCard {
             CardHead("Coverage", "Android asks permission the first time you pick whole-device.")

@@ -63,6 +63,7 @@ private enum class Destination(val tab: Tab) {
     ENDPOINT(Tab.ROUTES),
     CHAIN(Tab.ROUTES),
     TRAFFIC(Tab.TRAFFIC),
+    SPLIT_TUNNEL(Tab.TRAFFIC),
     SETTINGS(Tab.SETTINGS),
     DIAGNOSTICS(Tab.SETTINGS),
     IDENTITY(Tab.SETTINGS),
@@ -154,6 +155,12 @@ fun WhiteAestherApp(
                     settings = settings,
                     status = engineStatus,
                     onSettingsChange = onSettingsChange,
+                    onGoToSplitTunnel = { destination = Destination.SPLIT_TUNNEL },
+                )
+                Destination.SPLIT_TUNNEL -> SplitTunnelScreen(
+                    settings = settings,
+                    onSettingsChange = onSettingsChange,
+                    onBack = { destination = Destination.TRAFFIC },
                 )
                 Destination.SETTINGS -> SettingsScreen(
                     settings = settings,

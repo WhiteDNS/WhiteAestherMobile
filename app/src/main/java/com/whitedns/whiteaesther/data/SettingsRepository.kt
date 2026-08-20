@@ -30,6 +30,7 @@ class SettingsRepository(private val context: Context) {
             fragmentTls = preferences[FRAGMENT_TLS] ?: false,
             encryptedHello = preferences[ENCRYPTED_HELLO] ?: false,
             chain = ChainSettings.decode(preferences[CHAIN]),
+            splitTunnel = SplitTunnel.decode(preferences[SPLIT_TUNNEL]),
         )
     }
 
@@ -50,6 +51,7 @@ class SettingsRepository(private val context: Context) {
             preferences[FRAGMENT_TLS] = settings.fragmentTls
             preferences[ENCRYPTED_HELLO] = settings.encryptedHello
             preferences[CHAIN] = settings.chain.encode()
+            preferences[SPLIT_TUNNEL] = settings.splitTunnel.encode()
         }
     }
 
@@ -74,5 +76,6 @@ class SettingsRepository(private val context: Context) {
         // Stored whole rather than spread across keys: the shape is a list
         // of sources, which preferences have no type for.
         val CHAIN = stringPreferencesKey("chain")
+        val SPLIT_TUNNEL = stringPreferencesKey("split_tunnel")
     }
 }
