@@ -52,6 +52,7 @@ import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.IdentityMessage
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EndpointAddress
+import com.whitedns.whiteaesther.data.EndpointFamily
 import com.whitedns.whiteaesther.data.EndpointMode
 import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.data.TunnelProtocol
@@ -83,8 +84,8 @@ enum class ConnectionProfile(
     val scan: ScanStrategy?,
     val transport: TunnelProtocol?,
 ) {
-    ADAPTIVE("Adaptive", "Works on most networks. Start here.", "Recommended", ScanStrategy.BALANCED, TunnelProtocol.H3),
-    PATCHY("Patchy signal", "For mobile data that keeps dropping.", null, ScanStrategy.THOROUGH, TunnelProtocol.H3),
+    ADAPTIVE("Adaptive", "Works on most networks. Start here.", "Recommended", ScanStrategy.BALANCED, TunnelProtocol.AUTO),
+    PATCHY("Patchy signal", "For mobile data that keeps dropping.", null, ScanStrategy.THOROUGH, TunnelProtocol.AUTO),
     STRICT("Strict network", "For Wi-Fi that blocks a lot, such as an office.", null, ScanStrategy.STEALTH, TunnelProtocol.H2),
     MANUAL("Manual", "You choose every setting yourself.", null, null, null),
     ;
@@ -500,6 +501,8 @@ fun RoutesScreen(
                             code = transport.wireName.uppercase(),
                             title = transport.label,
                             subtitle = when (transport) {
+                                TunnelProtocol.AUTO ->
+                                    "Finds what this network allows, and remembers it"
                                 TunnelProtocol.H3 -> "QUIC. Faster where UDP gets through"
                                 TunnelProtocol.H2 -> "TCP. Survives networks that block UDP"
                                 // Its own account and its own endpoints, so a
@@ -516,7 +519,10 @@ fun RoutesScreen(
                         )
                     }
                 }
-                if (!settings.transport.hasSibling) {
+                // The family, not whether a retry can substitute it. Automatic
+                // cannot be substituted either, but it is not a UDP tunnel --
+                // saying so would warn about a limitation it does not have.
+                if (settings.transport.endpointFamily == EndpointFamily.WARP) {
                     Note(
                         "${settings.transport.label} runs over UDP. On a network that blocks " +
                             "UDP outright it will not connect at all, and MASQUE H2 over TCP is " +
@@ -747,9 +753,9 @@ fun EndpointScreen(
                         )
                         Text(
                             if (selected) {
-                                "Validated ${settings.transport.label} route · pinned"
+                                "Validated ${settings.transport.probedAs.label} route · pinned"
                             } else {
-                                "Validated ${settings.transport.label} route"
+                                "Validated ${settings.transport.probedAs.label} route"
                             },
                             style = AetherType.Small,
                             color = colors.text3,
@@ -760,7 +766,7 @@ fun EndpointScreen(
             }
         }
         Note(
-            "Only endpoints that pass the ${settings.transport.label} check are listed. Tapping " +
+            "Only endpoints that pass the ${settings.transport.probedAs.label} check are listed. Tapping " +
                 "one pins it and turns fallback on. Endpoints are not shared between protocols.",
         )
     }

@@ -20,6 +20,14 @@ enum class EngineMode(val wireName: String) {
  * something a retry can substitute.
  */
 enum class TunnelProtocol(val wireName: String, val label: String) {
+    /**
+     * Work out what this network allows, rather than making the user guess.
+     *
+     * Not a transport the engine understands -- the service resolves it to a
+     * real one before the config is built, and remembers what succeeded so the
+     * next connect starts there instead of searching again.
+     */
+    AUTO("auto", "Automatic"),
     H3("h3", "MASQUE H3"),
     H2("h2", "MASQUE H2"),
     WIREGUARD("wg", "WireGuard"),
@@ -28,6 +36,18 @@ enum class TunnelProtocol(val wireName: String, val label: String) {
 
     /** True when a failed attempt can be retried on the other framing. */
     val hasSibling: Boolean get() = this == H3 || this == H2
+
+    /** True when the service picks the real transport rather than the user. */
+    val isAutomatic: Boolean get() = this == AUTO
+
+    /**
+     * The framing an endpoint search actually probes with.
+     *
+     * Automatic is a policy, not a transport, so a screen naming it would be
+     * describing a check that never ran. The scanner probes H2 for the same
+     * reason the ladder tries it first.
+     */
+    val probedAs: TunnelProtocol get() = if (this == AUTO) H2 else this
 
     /**
      * Which set of endpoints this protocol reaches.
@@ -40,7 +60,9 @@ enum class TunnelProtocol(val wireName: String, val label: String) {
      */
     val endpointFamily: EndpointFamily
         get() = when (this) {
-            H3, H2 -> EndpointFamily.MASQUE
+            // Automatic only ever resolves to a MASQUE framing, so it shares
+            // their endpoints.
+            AUTO, H3, H2 -> EndpointFamily.MASQUE
             WIREGUARD, WARP_IN_WARP -> EndpointFamily.WARP
         }
 }
@@ -104,7 +126,10 @@ object EndpointAddress {
 data class AppSettings(
     val mode: EngineMode = EngineMode.TUN,
     val proxyPort: Int = 1819,
-    val transport: TunnelProtocol = TunnelProtocol.H3,
+    // Automatic, because the answer depends on the network and the user has no
+    // way to know it. A fixed default of H3 meant every install on a network
+    // that blocks UDP spent minutes failing before anything else was tried.
+    val transport: TunnelProtocol = TunnelProtocol.AUTO,
     val scanStrategy: ScanStrategy = ScanStrategy.BALANCED,
     val dualStack: Boolean = true,
     val validationEnabled: Boolean = true,

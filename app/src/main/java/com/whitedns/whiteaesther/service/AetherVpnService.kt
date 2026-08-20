@@ -161,7 +161,11 @@ class AetherVpnService : VpnService() {
         // Behind the chain the engine stops owning the interface and becomes the
         // SOCKS5 listener mihomo dials its nodes through. Rewritten here rather
         // than stored, so a reconnect still starts from what the user asked for.
-        val engineConfig = if (useChain) withEngineMode(configJson, EngineMode.PROXY) else configJson
+        // Automatic is a service-level policy: the engine only ever receives a
+        // real transport. Resolved here so the very first attempt is already on
+        // a rung of the ladder rather than on a name the bridge would reject.
+        val resolved = configForAttempt(configJson, reconnectAttempt)
+        val engineConfig = if (useChain) withEngineMode(resolved, EngineMode.PROXY) else resolved
 
         // Record what this attempt is actually configured with. Without it a
         // diagnostics report cannot answer the question it was collected for --
@@ -262,6 +266,7 @@ class AetherVpnService : VpnService() {
                 "tunnel",
                 "up on ${transportOf(engineConfig).uppercase()}",
             )
+            rememberWorkingTransport(engineConfig)
             if (useChain) {
                 tunnelUp.complete(Unit)
             } else {
@@ -749,22 +754,72 @@ class AetherVpnService : VpnService() {
      * Retrying the same dead transport eight times is eight guaranteed failures,
      * so alternate: the configured one on odd attempts, the other on even.
      */
-    private fun configForAttempt(configJson: String, attempt: Int): String {
-        if (attempt <= 1) return configJson
-        return runCatching {
-            val json = JSONObject(configJson)
-            val configured = json.optString("transport", "h3")
-            // Only the two MASQUE framings are interchangeable. WireGuard is a
-            // different tunnel with its own account and its own endpoints, so
-            // substituting it would silently connect the user to something they
-            // did not ask for -- and from a different exit address.
-            val other = when (configured) {
-                "h3" -> "h2"
-                "h2" -> "h3"
-                else -> return@runCatching configJson
-            }
-            json.put("transport", if (attempt % 2 == 0) other else configured).toString()
-        }.getOrDefault(configJson)
+    private fun configForAttempt(configJson: String, attempt: Int): String = runCatching {
+        val json = JSONObject(configJson)
+        if (json.optString("transport") == "auto") return@runCatching autoConfig(json, attempt)
+
+        // Only the two MASQUE framings are interchangeable. WireGuard is a
+        // different tunnel with its own account and its own endpoints, so
+        // substituting it would silently connect the user to something they did
+        // not ask for -- and from a different exit address.
+        val configured = json.optString("transport", "h3")
+        val other = when (configured) {
+            "h3" -> "h2"
+            "h2" -> "h3"
+            else -> return@runCatching configJson
+        }
+        // The other framing on the first retry, not the second. Repeating the
+        // one that just failed costs another full endpoint scan -- on a network
+        // that blocks UDP that is four minutes spent confirming UDP is blocked,
+        // and most people close the app long before the transport that works is
+        // ever tried.
+        json.put("transport", if (attempt % 2 == 1) other else configured).toString()
+    }.getOrDefault(configJson)
+
+    /**
+     * What Automatic tries, in order.
+     *
+     * A network either carries QUIC or it does not, and the user has no way to
+     * know which -- in Iran it varies by operator and by week. So the first two
+     * rungs are quick probes of both framings rather than one deep search of a
+     * transport that may be blocked outright: a fast failure that moves on beats
+     * a thorough one that does not.
+     *
+     * Whatever connected is remembered, so the next connect starts there and
+     * this ladder is only ever climbed once per network.
+     */
+    private fun autoConfig(json: JSONObject, attempt: Int): String {
+        val remembered = preferences.getString(LAST_GOOD_TRANSPORT, null)
+        val ladder = buildList {
+            // Deep, because it is already known to work here.
+            remembered?.let { add(it to json.optString("scanMode", "balanced")) }
+            // Then both framings, quickly. H2 first: it is TCP on 443 and looks
+            // like any other HTTPS connection, so it is the one more likely to
+            // survive a filtered network.
+            add("h2" to "turbo")
+            add("h3" to "turbo")
+            // Only then spend a full search on each.
+            add("h2" to json.optString("scanMode", "balanced"))
+            add("h3" to json.optString("scanMode", "balanced"))
+        }.distinct()
+
+        val (transport, scan) = ladder[attempt.coerceAtLeast(0) % ladder.size]
+        return json.put("transport", transport).put("scanMode", scan).toString()
+    }
+
+    /**
+     * Remembers the transport that reached CONNECTED.
+     *
+     * Only meaningful for Automatic, and only worth writing when it changes:
+     * this is on the connect path, and a preference write per session for a
+     * value that rarely moves is work nobody asked for.
+     */
+    private fun rememberWorkingTransport(engineConfig: String) {
+        val transport = transportOf(engineConfig)
+        if (transport == "auto") return
+        if (preferences.getString(LAST_GOOD_TRANSPORT, null) == transport) return
+        preferences.edit { putString(LAST_GOOD_TRANSPORT, transport) }
+        EngineLog.record(LogLevel.INFO, "auto", "this network carries $transport")
     }
 
     /** 3s, 6s, 12s, 24s, 48s, then a minute between attempts. */
@@ -839,6 +894,7 @@ class AetherVpnService : VpnService() {
         private const val LAST_TUN_CONFIG = "last_tun_config"
         private const val LAST_CHAIN_CONFIG = "last_chain_config"
         private const val LAST_SPLIT_CONFIG = "last_split_config"
+        private const val LAST_GOOD_TRANSPORT = "last_good_transport"
         // How long the chain waits for the tunnel it dials its nodes through.
         // Generous, because that tunnel is itself still searching for a route.
         private const val TUNNEL_WAIT_MS = 120_000L

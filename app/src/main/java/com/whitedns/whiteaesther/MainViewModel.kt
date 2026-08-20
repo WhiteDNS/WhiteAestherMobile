@@ -221,9 +221,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             mutableEndpointScannerState.value = EndpointScannerState(
                 operation = EndpointOperation.SCANNING,
                 results = mutableEndpointScannerState.value.results,
-                message = "Scanning validated ${settings.transport.label} routes…",
+                message = "Scanning validated ${settings.transport.probedAs.label} routes…",
             )
-            val base = settings.copy(endpointMode = EndpointMode.AUTOMATIC, customEndpoint = "")
+            val base = settings
+                .copy(endpointMode = EndpointMode.AUTOMATIC, customEndpoint = "")
+                // The bridge takes a real transport. Scanning on H2 first
+                // matches what Automatic tries first when connecting.
+                .let { if (it.transport.isAutomatic) it.copy(transport = TunnelProtocol.H2) else it }
             var result = withContext(Dispatchers.IO) {
                 NativeAetherBridge.scan(base.toNativeJson(getApplication()))
             }
@@ -234,6 +238,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // mobile users were seeing. Sweep the other rather than reporting an
             // empty network.
             val other = when (base.transport) {
+                // Automatic has not resolved yet here -- the scanner is not a
+                // connect. Sweeping both framings is exactly what it would do.
+                TunnelProtocol.AUTO -> TunnelProtocol.H3
                 TunnelProtocol.H3 -> TunnelProtocol.H2
                 TunnelProtocol.H2 -> TunnelProtocol.H3
                 // Neither WireGuard nor its nested form has another framing to

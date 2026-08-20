@@ -12,7 +12,7 @@ class TunnelProtocolTest {
         // "wg" onto a different tunnel entirely. Renaming one here without the
         // Rust side is a silent downgrade to MASQUE, not a compile error.
         assertEquals(
-            listOf("h3", "h2", "wg", "wiw"),
+            listOf("auto", "h3", "h2", "wg", "wiw"),
             TunnelProtocol.entries.map(TunnelProtocol::wireName),
         )
     }
@@ -24,6 +24,9 @@ class TunnelProtocolTest {
         // with its own identity and its own endpoints -- a retry that swapped it
         // in would connect the user to something they did not choose, from a
         // different exit address.
+        // Automatic is resolved to a real framing before any of this applies,
+        // so it is not itself substitutable.
+        assertFalse(TunnelProtocol.AUTO.hasSibling)
         assertTrue(TunnelProtocol.H3.hasSibling)
         assertTrue(TunnelProtocol.H2.hasSibling)
         assertFalse(TunnelProtocol.WIREGUARD.hasSibling)
@@ -31,13 +34,14 @@ class TunnelProtocolTest {
     }
 
     @Test
-    fun noProfilePresetsWireGuard() {
-        // Switching protocol means provisioning a second account and scanning a
-        // different set of endpoints. That is worth choosing knowingly, under
+    fun noProfilePresetsAWarpTunnel() {
+        // WireGuard and its nested form each need their own Cloudflare account
+        // and their own endpoint search. That is worth choosing knowingly, under
         // Manual, rather than something a friendly-sounding preset does for you.
+        // Automatic is fine here: it only ever resolves to a MASQUE framing.
         assertTrue(
             com.whitedns.whiteaesther.ui.ConnectionProfile.entries
-                .none { it.transport?.hasSibling == false },
+                .none { it.transport?.endpointFamily == EndpointFamily.WARP },
         )
     }
 }
