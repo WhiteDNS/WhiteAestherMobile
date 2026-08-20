@@ -5,6 +5,7 @@ mod chain;
 mod chain_jni;
 mod tun;
 
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{
@@ -13,7 +14,7 @@ use std::sync::{
 };
 
 use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
-use jni::sys::{jboolean, jint, jstring, JNI_FALSE, JNI_TRUE};
+use jni::sys::{jboolean, jint, jobjectArray, jstring, JNI_FALSE, JNI_TRUE};
 use jni::{JNIEnv, JavaVM};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -182,7 +183,49 @@ impl BridgeConfig {
     }
 }
 
-/// Sends the engine's own log to logcat, once.
+/// Recent lines from the engine, newest last.
+///
+/// The engine explains itself through `log` -- which endpoint it is testing,
+/// which obfuscation profile answered, why a handshake failed. Sending that only
+/// to logcat means it is unreachable from a phone the developer does not hold,
+/// so a user reporting "it will not connect" has nothing to send that says why.
+/// Buffered here and drained into the app's diagnostics instead.
+static ENGINE_LOG: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+
+/// Enough for a whole connect attempt including a full endpoint scan, and
+/// bounded because nothing guarantees anybody is draining.
+const MAX_ENGINE_LOG: usize = 400;
+
+/// Writes each line to logcat and keeps a copy the app can read.
+///
+/// One logger, because `log` has room for exactly one. Delegating the logcat
+/// half keeps `adb logcat -s aether` working exactly as before.
+struct TeeLogger(android_logger::AndroidLogger);
+
+impl log::Log for TeeLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        self.0.enabled(metadata)
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        self.0.log(record);
+        if !self.0.enabled(record.metadata()) {
+            return;
+        }
+        let line = format!("{}: {}", record.target(), record.args());
+        let mut buffer = ENGINE_LOG.lock();
+        if buffer.len() >= MAX_ENGINE_LOG {
+            buffer.pop_front();
+        }
+        buffer.push_back(line);
+    }
+
+    fn flush(&self) {
+        self.0.flush();
+    }
+}
+
+/// Sends the engine's own log to logcat and to the app, once.
 ///
 /// The engine reports what it is doing through the `log` crate -- which endpoint
 /// it is testing, which obfuscation profile answered, why a handshake failed.
@@ -194,11 +237,13 @@ impl BridgeConfig {
 fn install_logger() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        android_logger::init_once(
-            android_logger::Config::default()
-                .with_max_level(log::LevelFilter::Info)
-                .with_tag("aether"),
-        );
+        let config = android_logger::Config::default()
+            .with_max_level(log::LevelFilter::Info)
+            .with_tag("aether");
+        let logger = TeeLogger(android_logger::AndroidLogger::new(config));
+        if log::set_boxed_logger(Box::new(logger)).is_ok() {
+            log::set_max_level(log::LevelFilter::Info);
+        }
         log::info!("aether bridge logging installed");
     });
 }
@@ -259,6 +304,35 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
         Ok(()) => java_string(env, r#"{"ok":true}"#),
         Err(reason) => java_string(env, &failure_json(&reason)),
     }
+}
+
+/// Takes every engine log line since the last call.
+///
+/// Pulled rather than pushed: these arrive on the engine's own threads, and a
+/// connect attempt produces hundreds during an endpoint scan.
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeDrainLog<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jobjectArray {
+    let lines: Vec<String> = ENGINE_LOG.lock().drain(..).collect();
+    let empty = match env.new_string("") {
+        Ok(value) => value,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let array = match env.new_object_array(lines.len() as i32, "java/lang/String", &empty) {
+        Ok(value) => value,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    for (index, line) in lines.iter().enumerate() {
+        let Ok(value) = env.new_string(line) else {
+            continue;
+        };
+        let _ = env.set_object_array_element(&array, index as i32, value);
+    }
+    array.into_raw()
 }
 
 fn failure_json(reason: &str) -> String {

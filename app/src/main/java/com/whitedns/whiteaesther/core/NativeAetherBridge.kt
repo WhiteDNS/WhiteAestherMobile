@@ -60,6 +60,20 @@ object NativeAetherBridge {
     fun importIdentity(configPath: String, payload: String): NativeResult =
         call { nativeImportIdentity(configPath, payload) }.toResult()
 
+    /**
+     * Takes the engine's own log since the last call.
+     *
+     * The engine explains itself as it works -- which endpoint it is testing,
+     * which obfuscation profile answered, why a handshake failed. Without this
+     * none of it reaches the diagnostics report, so a user whose phone will not
+     * connect has nothing to send that says why, and the developer is left
+     * guessing on hardware that works.
+     */
+    fun drainLog(): List<String> {
+        if (!isLoaded) return emptyList()
+        return runCatching { nativeDrainLog()?.filterNotNull().orEmpty() }.getOrDefault(emptyList())
+    }
+
     fun validate(configJson: String): NativeResult = call { validateConfig(configJson) }.toResult()
 
     fun prepare(configJson: String): Result<PreparedEngine> = call { nativePrepare(configJson) }
@@ -140,6 +154,7 @@ object NativeAetherBridge {
 
     @JvmStatic
     private external fun validateConfig(configJson: String): String
+    private external fun nativeDrainLog(): Array<String?>?
     private external fun nativeExportIdentity(configPath: String): String
     private external fun nativeImportIdentity(configPath: String, payload: String): String
 

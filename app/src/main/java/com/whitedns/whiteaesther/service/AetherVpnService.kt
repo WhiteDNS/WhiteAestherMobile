@@ -172,6 +172,7 @@ class AetherVpnService : VpnService() {
         // which transport carried the session, and whether the anti-blocking
         // options were on.
         EngineLog.record(LogLevel.INFO, "config", sessionSummary(engineConfig))
+        startEngineLogPump(sessionGeneration)
         if (useChain) {
             EngineLog.record(LogLevel.INFO, "chain", "exit chain on, engine dropped to SOCKS")
         }
@@ -434,6 +435,37 @@ class AetherVpnService : VpnService() {
         cleanUp()
         if (sessionGeneration != generation) return
         scheduleReconnect(configJson, sessionGeneration, mode, "The encrypted route closed")
+    }
+
+    /**
+     * Copies the engine's own log into the app's while a session is running.
+     *
+     * Every session, not just the ones with a chain: the reason a connect
+     * failed is in these lines, and a diagnostics report without them says only
+     * that it failed. Bounded by the generation so a replaced session stops
+     * pumping for one nobody is watching.
+     */
+    private fun startEngineLogPump(sessionGeneration: Long) {
+        serviceScope.launch {
+            while (sessionGeneration == generation) {
+                delay(ENGINE_LOG_DRAIN_MS)
+                val lines = withContext(Dispatchers.IO) { NativeAetherBridge.drainLog() }
+                lines.forEach { line ->
+                    EngineLog.record(engineLevelOf(line), "engine", line)
+                }
+            }
+        }
+    }
+
+    /**
+     * The engine writes its level into the text rather than through a channel
+     * the bridge can read, so it is recovered from the markers it uses: `[-]`
+     * for trouble, `[+]` and `[*]` for progress.
+     */
+    private fun engineLevelOf(line: String): LogLevel = when {
+        line.contains("[-]") -> LogLevel.WARN
+        line.contains("error", ignoreCase = true) -> LogLevel.ERROR
+        else -> LogLevel.INFO
     }
 
     private fun reportConnected(mode: EngineMode, peer: String?, message: String) {
@@ -900,6 +932,7 @@ class AetherVpnService : VpnService() {
         private const val TUNNEL_WAIT_MS = 120_000L
         private const val DEFAULT_SOCKS_PORT = 1819
         private const val EVENT_DRAIN_MS = 5_000L
+        private const val ENGINE_LOG_DRAIN_MS = 2_000L
         // Long enough for a healthy session to unwind, short enough that a
         // wedged one never leaves the user with only force-stop.
         private const val STOP_GRACE_MS = 4_000L

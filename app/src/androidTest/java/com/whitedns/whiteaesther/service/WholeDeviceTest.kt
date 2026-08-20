@@ -53,6 +53,15 @@ class WholeDeviceTest {
                         EngineStage.CONNECTED,
                         EngineStatusStore.status.value.stage,
                     )
+                    // The engine explains itself as it works, and a diagnostics
+                    // report without that says only that something failed. This
+                    // is what makes a problem on hardware the developer does not
+                    // hold something other than guesswork.
+                    Thread.sleep(3_000)
+                    org.junit.Assert.assertTrue(
+                        "the engine log never reached the app",
+                        EngineLog.entries.value.any { it.tag == "engine" },
+                    )
                     return
                 }
                 EngineStage.ERROR -> throw AssertionError(
