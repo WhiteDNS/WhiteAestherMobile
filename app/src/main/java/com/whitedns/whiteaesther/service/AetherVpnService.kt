@@ -186,6 +186,32 @@ class AetherVpnService : VpnService() {
         // the case this mode exists for -- that scan is exactly what never
         // finishes.
         val engineInPath = !useChain || chainSettings.throughTunnel
+
+        // Before preparing, not after. prepare() is where the endpoint hunt
+        // happens -- up to several thousand UDP probes -- and an unprotected
+        // probe socket is routed by whatever tunnel is currently up. On a
+        // reconnect, or when the user switches protocol without disconnecting,
+        // that is the tunnel this session is replacing: every probe goes into a
+        // dying interface, nothing answers, and the scan reports the network as
+        // dead when it was never reached. protect() fails open when no
+        // protector is installed, so this was silent.
+        if (mode == EngineMode.TUN) {
+            if (prepare(this) != null) {
+                reportError(mode, "Android VPN permission is required")
+                finishIfCurrent(sessionGeneration)
+                return
+            }
+            runCatching {
+                NativeAetherBridge.setSocketProtector(
+                    NativeSocketProtector { fd -> protect(fd) },
+                )
+            }.onFailure { error ->
+                reportError(mode, "Socket protection failed: ${error.message}")
+                finishIfCurrent(sessionGeneration)
+                return
+            }
+        }
+
         val prepared = if (engineInPath) {
             withContext(Dispatchers.IO) {
                 NativeAetherBridge.prepare(engineConfig)
@@ -213,20 +239,8 @@ class AetherVpnService : VpnService() {
         var tun: ParcelFileDescriptor? = null
         val tunFd: Int
         if (mode == EngineMode.TUN) {
-            if (prepare(this) != null) {
-                reportError(mode, "Android VPN permission is required")
-                finishIfCurrent(sessionGeneration)
-                return
-            }
-            runCatching {
-                NativeAetherBridge.setSocketProtector(
-                    NativeSocketProtector { fd -> protect(fd) },
-                )
-            }.onFailure { error ->
-                reportError(mode, "Socket protection failed: ${error.message}")
-                finishIfCurrent(sessionGeneration)
-                return
-            }
+            // Consent and the protector are already in place: both had to
+            // happen before the endpoint hunt, above.
             tun = establishTun(
                 prepared?.ipv4.orEmpty(),
                 prepared?.ipv6.orEmpty(),
@@ -240,7 +254,7 @@ class AetherVpnService : VpnService() {
             }
             tunFd = tun.detachFd()
         } else {
-            NativeAetherBridge.setSocketProtector(null)
+            clearSocketProtector(sessionGeneration)
             tunFd = -1
         }
 
@@ -280,7 +294,7 @@ class AetherVpnService : VpnService() {
                 NativeAetherBridge.run(engineConfig, peer.orEmpty(), tunFd, listener)
             }
             tun?.close()
-            runCatching { NativeAetherBridge.setSocketProtector(null) }
+            clearSocketProtector(sessionGeneration)
 
             if (sessionGeneration != generation) return
             scheduleReconnect(
@@ -346,7 +360,7 @@ class AetherVpnService : VpnService() {
         val cleanUp = {
             runCatching { chain.stop() }
             runCatching { NativeAetherBridge.stop() }
-            runCatching { NativeAetherBridge.setSocketProtector(null) }
+            clearSocketProtector(sessionGeneration)
             Unit
         }
 
@@ -709,11 +723,25 @@ class AetherVpnService : VpnService() {
             }
             sessionJob = null
             runCatching { chain.stop() }
-            runCatching { NativeAetherBridge.setSocketProtector(null) }
+            clearSocketProtector(generation)
             EngineStatusStore.update(EngineStatus())
             ServiceCompat.stopForeground(this@AetherVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
+    }
+
+    /**
+     * Drops the socket protector, unless a newer session already owns it.
+     *
+     * The protector is one process-wide slot, but sessions overlap: a session
+     * that is being replaced finishes its teardown after its successor has
+     * already installed its own. Clearing unconditionally then leaves the live
+     * session with no protector, and protect() fails open -- so its sockets
+     * quietly start routing through the very tunnel it is bringing up.
+     */
+    private fun clearSocketProtector(sessionGeneration: Long) {
+        if (sessionGeneration != generation) return
+        runCatching { NativeAetherBridge.setSocketProtector(null) }
     }
 
     private fun reportError(mode: EngineMode?, message: String) {
@@ -870,7 +898,7 @@ class AetherVpnService : VpnService() {
         serviceScope.launch {
             runCatching { chain.stop() }
             runCatching { NativeAetherBridge.stop() }
-            runCatching { NativeAetherBridge.setSocketProtector(null) }
+            clearSocketProtector(generation)
             sessionJob = null
             ServiceCompat.stopForeground(this@AetherVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
