@@ -1960,18 +1960,22 @@ async fn hunt_wg_anchors(
         }
     }
 
+    let probes = interleave_groups(&probes, ports.len() * anchors.len());
+
     let concurrency = sysprofile::cap_concurrency(24);
     let deadline = Instant::now() + ANCHOR_BUDGET;
     log::info!(
-        "[*] trying {} documented endpoints across {} profiles, {} at a time",
+        "[*] trying {} endpoints across {} profiles ({} probes), {} at a time",
         anchors.len() * ports.len(),
         candidates.len(),
+        probes.len(),
         concurrency,
     );
 
+    wg_prober::begin_probe_pass();
     let stream =
         futures::stream::iter(probes.into_iter().map(|(peer, name, profile)| async move {
-            let reached = wireguard::verify_endpoint(
+            let reached = match wireguard::verify_endpoint(
                 peer,
                 private_key,
                 peer_public,
@@ -1982,7 +1986,13 @@ async fn hunt_wg_anchors(
                 None,
             )
             .await
-            .is_ok();
+            {
+                Ok(_) => true,
+                Err(error) => {
+                    wg_prober::record_probe_failure(&error);
+                    false
+                }
+            };
             (reached, peer, name, profile)
         }))
         .buffer_unordered(concurrency);
@@ -1991,7 +2001,10 @@ async fn hunt_wg_anchors(
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            log::info!("[-] documented endpoints did not answer in time; sampling the pool");
+            log::info!(
+                "[-] documented endpoints did not answer in time ({}); sampling the pool",
+                wg_prober::probe_pass_summary(),
+            );
             return None;
         }
         match tokio::time::timeout(remaining, stream.next()).await {
@@ -2004,8 +2017,36 @@ async fn hunt_wg_anchors(
         }
     }
 
-    log::info!("[-] no documented endpoint answered; sampling the address pool");
+    log::info!(
+        "[-] no documented endpoint answered ({}); sampling the address pool",
+        wg_prober::probe_pass_summary(),
+    );
     None
+}
+
+/// Reorders equal-sized groups so they are sampled in parallel, not in turn.
+///
+/// The anchor pass is deliberately given less time than it needs -- it is a
+/// shortcut, and every second it spends is one the real scan does not get. So
+/// the deadline always cuts something. Laid out group by group, what it cuts is
+/// not a slice off each profile: it is the whole of the last one, every time.
+/// A network that answers only under the fifth obfuscation would never see it
+/// tried, and would be indistinguishable from a network that answers under
+/// none. Interleaved, the same deadline takes an even bite out of all of them.
+fn interleave_groups<T: Copy>(items: &[T], stride: usize) -> Vec<T> {
+    if stride == 0 {
+        return items.to_vec();
+    }
+    let groups = items.len().div_ceil(stride);
+    let mut out = Vec::with_capacity(items.len());
+    for offset in 0..stride {
+        for group in 0..groups {
+            if let Some(item) = items.get(group * stride + offset) {
+                out.push(*item);
+            }
+        }
+    }
+    out
 }
 
 /// How long the documented endpoints get before the pool sweep takes over.
@@ -2920,6 +2961,52 @@ mod identity_tests {
         );
     }
 
+    /// What the deadline takes when it cannot take everything.
+    #[test]
+    fn a_truncated_anchor_pass_still_tries_every_obfuscation_profile() {
+        // Five profiles, thirty-six endpoints each, in the order the pass
+        // builds them: all of profile 0, then all of profile 1, and so on.
+        let stride = 36;
+        let profiles = 5;
+        let probes: Vec<usize> = (0..stride * profiles).collect();
+        let profile_of = |probe: usize| probe / stride;
+
+        let ordered = interleave_groups(&probes, stride);
+
+        assert_eq!(ordered.len(), probes.len(), "no probe may be dropped");
+        let mut sorted = ordered.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, probes, "no probe may be duplicated or invented");
+
+        // Roughly what fits in the budget: twenty seconds, twenty-four at a
+        // time, three seconds each.
+        let reached = 20 / 3 * 24;
+        let tried: Vec<usize> = ordered
+            .iter()
+            .take(reached)
+            .map(|p| profile_of(*p))
+            .collect();
+
+        for profile in 0..profiles {
+            let count = tried.iter().filter(|p| **p == profile).count();
+            assert!(
+                count > 0,
+                "profile {profile} was never tried before the deadline; \
+                 a network that only answers under it would look dead",
+            );
+        }
+
+        // And evenly, not merely non-zero.
+        let counts: Vec<usize> = (0..profiles)
+            .map(|profile| tried.iter().filter(|p| **p == profile).count())
+            .collect();
+        let spread = counts.iter().max().unwrap() - counts.iter().min().unwrap();
+        assert!(
+            spread <= 1,
+            "the profiles were sampled unevenly: {counts:?}"
+        );
+    }
+
     #[test]
     fn the_whole_search_is_bounded_by_something_a_user_would_wait_for() {
         let total = ANCHOR_BUDGET + wg_hunt_budget();
@@ -3068,5 +3155,97 @@ mod identity_tests {
         assert_eq!("current", config::load(base).unwrap().unwrap().device_id);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// What MASQUE enrollment does to the WireGuard half of the same registration.
+///
+/// These talk to Cloudflare and hold a real handshake open, so they are
+/// `#[ignore]`d and additionally gated: a registration costs an entry against
+/// the per-IP rate limit, and CI running this on every push would exhaust it
+/// for everybody sharing the runner's address.
+///
+///     AETHER_LIVE_ENROLL_TEST=1 cargo test -p aether enrollment -- --ignored --nocapture
+#[cfg(test)]
+mod enrollment_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// A documented WARP anchor. If a key is registered, this answers in well
+    /// under a second from almost anywhere.
+    const ANCHOR: &str = "162.159.192.1:2408";
+
+    async fn shakes_hands(identity: &account::Identity) -> Result<Duration> {
+        wireguard::verify_endpoint(
+            ANCHOR.parse().unwrap(),
+            identity.wg_private_key,
+            identity.wg_peer_public_key,
+            identity.client_id,
+            identity
+                .ipv4
+                .parse()
+                .map_err(|_| AetherError::Other("invalid ipv4".into()))?,
+            &aethernoize::AetherNoizeConfig::off(),
+            Duration::from_secs(6),
+            None,
+        )
+        .await
+    }
+
+    /// One registration really can serve both protocol families.
+    ///
+    /// It looks like it cannot: `register` puts a Curve25519 public key in the
+    /// device record with `tunnel_type: wireguard`, and `enroll_key` then
+    /// PATCHes what appears to be the same `key` field to a secp256r1 SPKI with
+    /// `tunnel_type: masque`. Reading that, sharing one account across MASQUE
+    /// and WireGuard is obviously broken, and it is a tempting explanation for
+    /// a phone where WireGuard finds no endpoint anywhere -- an unrecognised
+    /// peer gets silence from every WireGuard server, which looks exactly like
+    /// a network dropping UDP.
+    ///
+    /// It is not what happens. Cloudflare keeps the WireGuard peer alive across
+    /// enrollment, so the shared identity is sound and the silence has some
+    /// other cause. This test exists to stop that theory being re-derived from
+    /// the source and acted on: it is cheaper to run than another release.
+    #[tokio::test]
+    #[ignore = "registers a real device with Cloudflare"]
+    async fn wireguard_survives_masque_enrollment_on_the_same_account() {
+        if std::env::var("AETHER_LIVE_ENROLL_TEST").is_err() {
+            eprintln!("set AETHER_LIVE_ENROLL_TEST=1 to run this");
+            return;
+        }
+
+        let identity = account::provision_wg(consts::DEFAULT_MODEL, consts::DEFAULT_LOCALE, None)
+            .await
+            .expect("provision a fresh wireguard registration");
+        eprintln!("[test] registered device {}", identity.device_id);
+
+        let before = shakes_hands(&identity).await;
+        eprintln!("[test] handshake before enrollment: {before:?}");
+        assert!(
+            before.is_ok(),
+            "a freshly registered key should hand shake with {ANCHOR}; got {before:?}. \
+             If this fails the network is blocking UDP and the test proves nothing.",
+        );
+
+        let keypair = account::generate_masque_keypair().expect("masque keypair");
+        account::enroll_key(
+            &identity.device_id,
+            &identity.access_token,
+            &keypair.spki_der,
+            None,
+        )
+        .await
+        .expect("enroll the masque key");
+        eprintln!("[test] enrolled a masque key on the same device record");
+
+        let after = shakes_hands(&identity).await;
+        eprintln!("[test] handshake after enrollment:  {after:?}");
+        assert!(
+            after.is_ok(),
+            "enrolling a MASQUE key stopped the WireGuard key working, so the two \
+             families can no longer share one registration and masque_config_path \
+             must go back to its own file; got {after:?}",
+        );
     }
 }
