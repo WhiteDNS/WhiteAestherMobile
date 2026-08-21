@@ -97,7 +97,7 @@ pub async fn run_cli() -> Result<()> {
                 identity.ipv6
             );
             let ech = resolve_ech().await;
-            let lastconn_path = lastconn_path(&config_path, Protocol::Masque);
+            let lastconn_path = lastconn_path(&config_path);
             run_masque(identity, ech, listen, lastconn_path).await
         }
         Protocol::WireGuard => {
@@ -109,7 +109,7 @@ pub async fn run_cli() -> Result<()> {
                 identity.ipv4,
                 identity.ipv6
             );
-            let lastconn_path = lastconn_path(&config_path, Protocol::WireGuard);
+            let lastconn_path = lastconn_path(&config_path);
             run_wireguard(identity, listen, lastconn_path).await
         }
         Protocol::WarpInWarp => {
@@ -305,11 +305,7 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
     };
 
     let profile = std::env::var("AETHER_NOIZE").unwrap_or_else(|_| "firewall".to_string());
-    lastconn::save(
-        &lastconn_path(&config_path, config.protocol()),
-        &peer.to_string(),
-        &profile,
-    );
+    lastconn::save(&lastconn_path(&config_path), &peer.to_string(), &profile);
 
     // Nested, the interface is addressed for the inner account: that is the one
     // whose packets reach the internet, and addressing it as the outer would
@@ -357,7 +353,7 @@ async fn select_embedded_wg_peer(
         log::warn!("[-] custom endpoint {peer} failed; falling back to automatic discovery");
     }
 
-    if let Some(cached) = lastconn::load(&lastconn_path(config_path, config.protocol())) {
+    if let Some(cached) = lastconn::load(&lastconn_path(config_path)) {
         if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
             let profile = aethernoize::from_profile(&cached.profile);
             if verify_wg_peer(identity, peer, &profile).await.is_ok() {
@@ -469,11 +465,7 @@ pub async fn run_embedded(
         let (peer, profile, name) =
             select_embedded_wg_peer(&identity, &config.clone_with_peer(peer), &config_path).await?;
         log::info!("[+] WireGuard endpoint {peer} using aethernoize profile '{name}'");
-        lastconn::save(
-            &lastconn_path(&config_path, config.protocol()),
-            &peer.to_string(),
-            &name,
-        );
+        lastconn::save(&lastconn_path(&config_path), &peer.to_string(), &name);
 
         if config.protocol() == Protocol::WarpInWarp {
             let secondary = load_or_provision_warp(&config.secondary_identity_path()).await?;
@@ -777,7 +769,7 @@ async fn select_embedded_peer(
         }
     }
 
-    if let Some(cached) = lastconn::load(&lastconn_path(config_path, Protocol::Masque)) {
+    if let Some(cached) = lastconn::load(&lastconn_path(config_path)) {
         if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
             if quick_verify_masque_peer(identity, peer).await {
                 return Ok(peer);
@@ -1232,30 +1224,60 @@ fn warp_config_path(base: &str) -> String {
     }
 }
 
-/// Where MASQUE's identity lives -- the same file every other protocol uses.
+/// Where MASQUE's identity lives -- its own file, apart from WireGuard's.
 ///
-/// A Cloudflare WARP account carries the WireGuard keys, and a MASQUE
-/// certificate is enrolled onto that same device rather than being a second
-/// account. Keeping them apart meant a user who tried both protocols registered
-/// twice, and Cloudflare rate-limits registrations per address. On a network
-/// where connecting is already hard, that is the difference between a slow start
-/// and no connection at all.
+/// It looks like it should be the same file. A Cloudflare WARP account already
+/// carries WireGuard keys, and a MASQUE certificate is enrolled onto that same
+/// device rather than being a second account, so sharing one registration would
+/// halve the number a user spends against a rate limit that counts per IP.
 ///
-/// Under a Zero Trust team the two were already the same file, which is what
-/// says sharing was always the intent and the split was incidental.
+/// Sharing it destroys WireGuard. Enrolment is `PATCH /reg/{id}` and it writes
+/// the same `key` field that registration filled with the Curve25519 public
+/// key, replacing it with a secp256r1 SPKI and setting `tunnel_type: masque`.
+/// Cloudflare then has no WireGuard key for the device, and WireGuard answers
+/// an unrecognised peer with silence -- so every endpoint everywhere stops
+/// replying, which is indistinguishable from a network that drops UDP.
+///
+/// The damage is not immediate. Measured against the live API the old key keeps
+/// working for something between thirty and sixty seconds while the change
+/// reaches the edge, which is long enough for a check made right after
+/// enrolment to come back clean. `wireguard_dies_when_masque_is_enrolled_on_the
+/// _same_account` waits it out.
 fn masque_config_path(base: &str) -> String {
     if let Ok(p) = std::env::var("AETHER_MASQUE_CONFIG") {
         return p;
     }
-    warp_config_path(base)
+    derive_sibling_path(&warp_config_path(base), "masque")
 }
 
-/// The file MASQUE used before identities were shared.
+/// The file the two protocols briefly shared, given MASQUE's own path.
 ///
-/// Read only when the shared file is absent, so an install that already paid
+/// Read only when MASQUE's own file is absent, so an install that already paid
 /// for a registration keeps it instead of buying another.
-fn legacy_masque_config_path(base: &str) -> String {
-    derive_sibling_path(base, "masque")
+fn shared_config_path(masque_path: &str) -> Option<String> {
+    strip_sibling_path(masque_path, "masque")
+}
+
+/// The inverse of [`derive_sibling_path`]: the file a sibling was derived from.
+///
+/// `None` when the path is not a sibling of that kind, which is what an
+/// override through `AETHER_MASQUE_CONFIG` looks like -- and an override points
+/// somewhere deliberate, so nothing should be migrated into it.
+fn strip_sibling_path(path: &str, suffix: &str) -> Option<String> {
+    let dir_end = path
+        .rfind(|c| c == '/' || c == '\\')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let marker = format!("-{suffix}");
+    match path[dir_end..].rfind('.') {
+        Some(rel) => {
+            let dot = dir_end + rel;
+            let stem = &path[..dot];
+            stem.strip_suffix(&marker)
+                .map(|trimmed| format!("{trimmed}{}", &path[dot..]))
+        }
+        None => path.strip_suffix(&marker).map(|t| t.to_string()),
+    }
 }
 
 fn derive_sibling_path(base: &str, suffix: &str) -> String {
@@ -1274,18 +1296,50 @@ fn derive_sibling_path(base: &str, suffix: &str) -> String {
 
 async fn load_or_provision_warp(config_path: &str) -> Result<account::Identity> {
     if let Some(identity) = config::load(config_path)? {
-        log::info!("[+] loaded existing warp identity from {config_path}");
-        let identity = adopt_team_profile(identity).await;
-        config::save(config_path, &identity)?;
-        return Ok(identity);
+        // A certificate on this identity means a MASQUE key was enrolled onto
+        // the same Cloudflare device, which replaced its WireGuard public key.
+        // Nothing recognises the key on disk any more, so every endpoint would
+        // meet it with silence and the search would blame the network. Left
+        // over from the release where the two protocols shared a file; MASQUE
+        // adopts this identity for itself, and WireGuard starts again.
+        if identity.has_masque_credentials() {
+            log::info!(
+                "[!] the identity in {config_path} was enrolled for MASQUE, which revokes its \
+                 WireGuard key; provisioning a separate wireguard account"
+            );
+            // Hand it to MASQUE before overwriting it. The certificate on it is
+            // valid and was paid for with a registration; losing it here would
+            // cost the user another one for no reason.
+            preserve_masque_identity(config_path, &identity)?;
+        } else {
+            log::info!("[+] loaded existing warp identity from {config_path}");
+            let identity = adopt_team_profile(identity).await;
+            config::save(config_path, &identity)?;
+            return Ok(identity);
+        }
+    } else {
+        log::info!("[+] no warp identity found; provisioning dedicated wireguard account");
     }
 
-    log::info!("[+] no warp identity found; provisioning dedicated wireguard account");
     let identity = provision_account().await?;
     let identity = adopt_team_profile(identity).await;
     config::save(config_path, &identity)?;
     log::info!("[+] provisioned and saved new warp identity to {config_path}");
     Ok(identity)
+}
+
+/// Copies a shared-file identity to MASQUE's own file before WireGuard
+/// replaces it.
+///
+/// Only when MASQUE has nothing of its own yet, so a later WireGuard
+/// re-provision cannot overwrite a MASQUE identity that has moved on.
+fn preserve_masque_identity(config_path: &str, identity: &account::Identity) -> Result<()> {
+    let masque = masque_config_path(config_path);
+    if masque == config_path || config::load(&masque)?.is_some() {
+        return Ok(());
+    }
+    log::info!("[+] keeping the enrolled identity for MASQUE at {masque}");
+    config::save(&masque, identity)
 }
 
 async fn load_or_provision_masque(config_path: &str) -> Result<account::Identity> {
@@ -1494,30 +1548,37 @@ fn masque_probe(identity: &account::Identity, ip: prober::IpScan) -> prober::Mas
 /// Per protocol even though the identity is shared: a MASQUE gateway and a
 /// WireGuard endpoint are different addresses on different ports, and offering
 /// one to the other wastes a validation attempt on every connect.
-fn lastconn_path(config_path: &str, protocol: Protocol) -> String {
-    match protocol {
-        Protocol::Masque => derive_sibling_path(config_path, "masque-lastconn"),
-        _ => derive_sibling_path(config_path, "lastconn"),
-    }
+/// Where the last working endpoint for an identity is remembered.
+///
+/// Taken from the identity's own file rather than from the protocol, because
+/// each protocol has its own file again and the distinction is already in the
+/// path. Applying it twice is what produced `aether-masque-masque-lastconn`.
+///
+/// The names this yields are the ones installs already wrote -- MASQUE's
+/// identity is `aether-masque.toml`, so its cache is still
+/// `aether-masque-lastconn.toml` -- so nobody loses a remembered endpoint and
+/// re-scans on the first connect after updating.
+fn lastconn_path(config_path: &str) -> String {
+    derive_sibling_path(config_path, "lastconn")
 }
 
-/// Moves a pre-sharing MASQUE identity to the shared file.
+/// Takes over the identity from the release where both protocols shared a file.
 ///
-/// Without this, sharing the path would look to an existing install exactly like
-/// a fresh one, and the first thing it would do is register again -- the cost
-/// this change exists to avoid.
+/// That identity is a perfectly good MASQUE one -- it is the WireGuard half of
+/// it that enrolment destroyed -- so it is copied here rather than thrown away,
+/// and MASQUE keeps working without spending another registration. WireGuard
+/// gets a fresh account of its own; see [`load_or_provision_warp`].
 fn adopt_legacy_masque_identity(config_path: &str) -> Result<()> {
     if config::load(config_path)?.is_some() {
         return Ok(());
     }
-    let legacy = legacy_masque_config_path(config_path);
-    if legacy == config_path {
-        return Ok(());
-    }
-    let Some(identity) = config::load(&legacy)? else {
+    let Some(shared) = shared_config_path(config_path) else {
         return Ok(());
     };
-    log::info!("[+] adopting the existing identity from {legacy}; no new registration needed");
+    let Some(identity) = config::load(&shared)? else {
+        return Ok(());
+    };
+    log::info!("[+] adopting the existing identity from {shared}; no new registration needed");
     config::save(config_path, &identity)?;
     Ok(())
 }
@@ -3039,19 +3100,6 @@ mod identity_tests {
     }
 
     #[test]
-    fn every_protocol_shares_one_identity_file() {
-        isolated();
-        // One Cloudflare device serves all of them: the account carries the
-        // WireGuard keys and the MASQUE certificate is enrolled onto that same
-        // device. Separate files meant separate registrations, and Cloudflare
-        // rate-limits registrations per address.
-        assert_eq!(
-            masque_config_path("/data/aether.toml"),
-            warp_config_path("/data/aether.toml"),
-        );
-    }
-
-    #[test]
     fn each_protocol_remembers_its_own_endpoint() {
         isolated();
         let base = "/data/aether.toml";
@@ -3059,8 +3107,8 @@ mod identity_tests {
         // different ports. Sharing this file would offer each the other's, and
         // waste a validation on every connect.
         assert_ne!(
-            lastconn_path(base, Protocol::Masque),
-            lastconn_path(base, Protocol::WireGuard),
+            lastconn_path(&masque_config_path(base)),
+            lastconn_path(&warp_config_path(base)),
         );
     }
 
@@ -3071,12 +3119,12 @@ mod identity_tests {
         // Renaming these would not break anything visibly -- it would just
         // silently discard the cached endpoint and make the next connect scan
         // from scratch, which is the slow path this file exists to avoid.
-        assert!(lastconn_path(base, Protocol::Masque).ends_with("aether-masque-lastconn.toml"));
-        assert!(lastconn_path(base, Protocol::WireGuard).ends_with("aether-lastconn.toml"));
+        assert!(lastconn_path(&masque_config_path(base)).ends_with("aether-masque-lastconn.toml"));
+        assert!(lastconn_path(&warp_config_path(base)).ends_with("aether-lastconn.toml"));
     }
 
     #[test]
-    fn an_existing_masque_identity_is_adopted_rather_than_replaced() {
+    fn masque_adopts_the_identity_from_the_release_that_shared_one_file() {
         isolated();
         let dir = std::env::temp_dir().join(format!("aether-adopt-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -3084,14 +3132,15 @@ mod identity_tests {
         let base = dir.join("aether.toml");
         let base = base.to_str().unwrap();
 
-        // What an install from before identities were shared looks like: the
-        // identity is in MASQUE's own file and the shared one does not exist.
+        // What an install of the release that shared one file looks like: a
+        // single identity, carrying the MASQUE certificate that was enrolled
+        // onto it.
         let identity = account::Identity {
-            device_id: "device-from-before".into(),
+            device_id: "device-from-the-shared-release".into(),
             access_token: "token".into(),
-            cert_pem: Vec::new(),
-            key_pem: Vec::new(),
-            cert_issued_at: 0,
+            cert_pem: b"-----BEGIN CERTIFICATE-----".to_vec(),
+            key_pem: b"-----BEGIN PRIVATE KEY-----".to_vec(),
+            cert_issued_at: 1,
             ipv4: "172.16.0.2".into(),
             ipv6: "2606:4700:110::1".into(),
             wg_private_key: [7u8; 32],
@@ -3101,19 +3150,19 @@ mod identity_tests {
             gateway_proxy: String::new(),
             assigned_endpoint: String::new(),
         };
-        config::save(&legacy_masque_config_path(base), &identity).unwrap();
-        assert!(config::load(base).unwrap().is_none());
+        config::save(base, &identity).unwrap();
 
-        adopt_legacy_masque_identity(base).unwrap();
+        let masque = masque_config_path(base);
+        assert_ne!(masque, base, "the two protocols must not share a file");
+        adopt_legacy_masque_identity(&masque).unwrap();
 
-        // Without this the shared path looks like a fresh install, and the first
-        // thing it does is register again -- the exact cost this avoids.
-        let adopted = config::load(base)
+        // The certificate on it is valid and cost a registration. Only the
+        // WireGuard half died, so MASQUE keeps the account rather than the user
+        // paying for another against a per-IP rate limit.
+        let adopted = config::load(&masque)
             .unwrap()
             .expect("identity was not adopted");
-        assert_eq!("device-from-before", adopted.device_id);
-
-        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!("device-from-the-shared-release", adopted.device_id);
     }
 
     #[test]
@@ -3144,17 +3193,52 @@ mod identity_tests {
             device_id: "stale".into(),
             ..current.clone()
         };
-        config::save(base, &current).unwrap();
-        config::save(&legacy_masque_config_path(base), &stale).unwrap();
+        let masque = masque_config_path(base);
+        config::save(&masque, &current).unwrap();
+        config::save(base, &stale).unwrap();
 
-        adopt_legacy_masque_identity(base).unwrap();
+        adopt_legacy_masque_identity(&masque).unwrap();
 
         // A leftover file from before the migration must never displace the
         // identity in use: that would swap the device mid-life and strand the
         // certificate enrolled against it.
-        assert_eq!("current", config::load(base).unwrap().unwrap().device_id);
+        assert_eq!("current", config::load(&masque).unwrap().unwrap().device_id);
+    }
 
-        let _ = std::fs::remove_dir_all(&dir);
+    /// The bug that shipped, in the form the code can check.
+    #[test]
+    fn the_two_protocol_families_never_share_an_identity_file() {
+        isolated();
+        // Enrolling MASQUE rewrites the device's key at Cloudflare and revokes
+        // its WireGuard half. One file for both means connecting with MASQUE
+        // silently destroys WireGuard for that install, and the endpoint search
+        // then reports the network as dead.
+        for base in ["/data/aether.toml", "/data/aether", "C:\\x\\aether.toml"] {
+            assert_ne!(
+                masque_config_path(base),
+                warp_config_path(base),
+                "masque and wireguard identities must live in separate files",
+            );
+        }
+    }
+
+    #[test]
+    fn the_shared_file_is_recovered_from_masques_own_path() {
+        // The migration reads the old shared file given only MASQUE's path, so
+        // the derivation has to be reversible or nothing is ever adopted and
+        // every upgrading install pays for a second registration.
+        for base in ["/data/aether.toml", "/data/aether", "C:\\x\\aether.toml"] {
+            let masque = masque_config_path(base);
+            assert_eq!(
+                Some(warp_config_path(base)),
+                shared_config_path(&masque),
+                "could not get back to the shared file from {masque}",
+            );
+        }
+
+        // A deliberate override is not a derived sibling and nothing should be
+        // migrated into it.
+        assert_eq!(None, shared_config_path("/data/somewhere-else.toml"));
     }
 }
 
@@ -3192,24 +3276,105 @@ mod enrollment_tests {
         .await
     }
 
-    /// One registration really can serve both protocol families.
+    /// Whether an identity a phone could not connect with works from here.
     ///
-    /// It looks like it cannot: `register` puts a Curve25519 public key in the
-    /// device record with `tunnel_type: wireguard`, and `enroll_key` then
-    /// PATCHes what appears to be the same `key` field to a secp256r1 SPKI with
-    /// `tunnel_type: masque`. Reading that, sharing one account across MASQUE
-    /// and WireGuard is obviously broken, and it is a tempting explanation for
-    /// a phone where WireGuard finds no endpoint anywhere -- an unrecognised
-    /// peer gets silence from every WireGuard server, which looks exactly like
-    /// a network dropping UDP.
+    /// This is the fork the diagnostics could not resolve. A device reports
+    /// that no WireGuard endpoint anywhere answers; the same engine, the same
+    /// anchors and a freshly made identity hand shake from a desktop in about a
+    /// second. Either the credentials that device is holding are unusable, or
+    /// they are fine and something on the device stops the packets being what
+    /// Cloudflare expects. Those have nothing in common as fixes.
     ///
-    /// It is not what happens. Cloudflare keeps the WireGuard peer alive across
-    /// enrollment, so the shared identity is sound and the silence has some
-    /// other cause. This test exists to stop that theory being re-derived from
-    /// the source and acted on: it is cheaper to run than another release.
+    /// Pull the file off the device and run it against the anchors from a
+    /// machine known to work:
+    ///
+    ///     adb shell run-as <pkg> cat files/aether.toml > id.toml
+    ///     AETHER_TEST_IDENTITY=id.toml cargo test -p aether identity_from -- \
+    ///         --ignored --nocapture
     #[tokio::test]
-    #[ignore = "registers a real device with Cloudflare"]
-    async fn wireguard_survives_masque_enrollment_on_the_same_account() {
+    #[ignore = "needs an identity file pulled off a device"]
+    async fn an_identity_from_a_device_hand_shakes_from_here() {
+        let Ok(path) = std::env::var("AETHER_TEST_IDENTITY") else {
+            eprintln!("set AETHER_TEST_IDENTITY to a device's aether.toml");
+            return;
+        };
+
+        let identity = config::load(&path)
+            .expect("read the identity file")
+            .expect("the file held an identity");
+
+        eprintln!("[test] device {}", identity.device_id);
+        eprintln!("[test] ipv4 {}", identity.ipv4);
+        eprintln!("[test] client_id {:?}", identity.client_id);
+        eprintln!("[test] assigned endpoint {:?}", identity.assigned_endpoint);
+        eprintln!(
+            "[test] has masque credentials: {}",
+            identity.has_masque_credentials()
+        );
+
+        // Both framings, because the engine tries a plain handshake alongside
+        // the obfuscated ones and a difference between them is itself a result.
+        let profiles = [
+            ("off", aethernoize::AetherNoizeConfig::off()),
+            ("firewall", aethernoize::from_profile("firewall")),
+        ];
+
+        let mut answered = Vec::new();
+        for (name, profile) in &profiles {
+            for seed in wireguard::wg_seeds_v4().iter().take(4) {
+                for port in wireguard::WG_PORTS.iter().copied().take(2) {
+                    let peer: SocketAddr = format!("{seed}:{port}").parse().unwrap();
+                    let result = wireguard::verify_endpoint(
+                        peer,
+                        identity.wg_private_key,
+                        identity.wg_peer_public_key,
+                        identity.client_id,
+                        identity.ipv4.parse().expect("ipv4"),
+                        profile,
+                        std::time::Duration::from_secs(4),
+                        None,
+                    )
+                    .await;
+                    match result {
+                        Ok(rtt) => {
+                            eprintln!("[test] {name:9} {peer} -> OK {rtt:?}");
+                            answered.push((name.to_string(), peer));
+                        }
+                        Err(error) => eprintln!("[test] {name:9} {peer} -> {error}"),
+                    }
+                }
+            }
+        }
+
+        assert!(
+            !answered.is_empty(),
+            "this identity got no answer from any anchor even from a machine \
+             where a fresh one works, so the credentials are the problem, not \
+             the device's network",
+        );
+        eprintln!("[test] {} endpoints answered", answered.len());
+    }
+
+    /// Enrolling MASQUE revokes the WireGuard key on the same account.
+    ///
+    /// Both write the same `key` field on the same device record: registration
+    /// puts a Curve25519 public key there with `tunnel_type: wireguard`, and
+    /// `enroll_key` PATCHes it to a secp256r1 SPKI with `tunnel_type: masque`.
+    /// Afterwards Cloudflare has no WireGuard key for the device, and WireGuard
+    /// meets an unrecognised peer with silence rather than a rejection -- so
+    /// every endpoint everywhere stops answering, and the endpoint search
+    /// reports the network as dead when the credentials are what died.
+    ///
+    /// The delay is the reason this needed a test rather than a reading of the
+    /// source. The old key keeps working for roughly thirty to sixty seconds
+    /// after the PATCH, so a check made straight afterwards comes back clean
+    /// and the sharing looks safe. It is not, and a released version shipped
+    /// believing it was.
+    ///
+    /// If this ever starts failing, Cloudflare has changed the model and the
+    /// two protocols could share one registration again -- which would halve
+    /// what a user spends against a per-IP rate limit, and is worth taking.
+    async fn wireguard_dies_when_masque_is_enrolled_on_the_same_account() {
         if std::env::var("AETHER_LIVE_ENROLL_TEST").is_err() {
             eprintln!("set AETHER_LIVE_ENROLL_TEST=1 to run this");
             return;
@@ -3239,13 +3404,27 @@ mod enrollment_tests {
         .expect("enroll the masque key");
         eprintln!("[test] enrolled a masque key on the same device record");
 
-        let after = shakes_hands(&identity).await;
-        eprintln!("[test] handshake after enrollment:  {after:?}");
+        // Not immediately. Cloudflare does not propagate a key change to its
+        // edge synchronously, so asking straight away gets an answer from an
+        // edge that has not heard yet -- which is exactly how an earlier
+        // version of this test concluded enrollment was harmless, and sent the
+        // investigation off after the network instead.
+        let mut after = shakes_hands(&identity).await;
+        for elapsed in [0u64, 30, 60, 90, 120] {
+            if elapsed > 0 {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                after = shakes_hands(&identity).await;
+            }
+            eprintln!("[test] handshake {elapsed:>3}s after enrollment: {after:?}");
+        }
+
         assert!(
-            after.is_ok(),
-            "enrolling a MASQUE key stopped the WireGuard key working, so the two \
-             families can no longer share one registration and masque_config_path \
-             must go back to its own file; got {after:?}",
+            after.is_err(),
+            "enrolling a MASQUE key left the WireGuard key working. Cloudflare has \
+             changed the model: the two families could share one registration \
+             again, halving what a user spends against the per-IP rate limit. \
+             Re-check before taking it -- the revocation used to take up to a \
+             minute to reach the edge; got {after:?}",
         );
     }
 }
