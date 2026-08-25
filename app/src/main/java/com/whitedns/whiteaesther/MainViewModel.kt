@@ -7,18 +7,24 @@ import com.whitedns.whiteaesther.core.ChainController
 import com.whitedns.whiteaesther.core.ChainNode
 import com.whitedns.whiteaesther.core.EndpointScanResult
 import com.whitedns.whiteaesther.core.NativeAetherBridge
+import com.whitedns.whiteaesther.data.AddressReporter
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EndpointMode
+import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.data.TunnelProtocol
 import com.whitedns.whiteaesther.data.SettingsRepository
+import com.whitedns.whiteaesther.data.UpdateChecker
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatusStore
+import com.whitedns.whiteaesther.service.TrafficMeter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -56,6 +62,18 @@ data class ChainState(
     val stale: Boolean = false,
 )
 
+/**
+ * The address seen on each side of the tunnel.
+ *
+ * Both nullable and for different reasons. [real] is absent until the app has
+ * been open while disconnected long enough to look it up; [tunnel] is absent
+ * whenever no session is carrying traffic.
+ */
+data class AddressPair(
+    val real: String? = null,
+    val tunnel: String? = null,
+)
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = SettingsRepository(application)
     // Reaches the same mihomo the service is running: there is one per process.
@@ -77,6 +95,139 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // something that can never run.
     private val mutableIdentityMessage = MutableStateFlow<IdentityMessage?>(null)
     val identityMessage = mutableIdentityMessage.asStateFlow()
+
+    /**
+     * The address the internet sees, on each side of the tunnel.
+     *
+     * Two separate lookups rather than one refreshed: the address without the
+     * tunnel is only ever read while there is no tunnel, so it is captured
+     * before connecting and then left alone. Asking again mid-session would
+     * push the user's real address out past the thing hiding it.
+     */
+    private val mutableAddresses = MutableStateFlow(AddressPair())
+    val addresses = mutableAddresses.asStateFlow()
+
+    val traffic = TrafficMeter.sample
+
+    /**
+     * A newer release, once one has been seen. Null the rest of the time.
+     */
+    private val mutableUpdate = MutableStateFlow<UpdateChecker.Available?>(null)
+    val update = mutableUpdate.asStateFlow()
+
+    /**
+     * Whether the user has switched IPv6 off.
+     *
+     * The setting names what the tunnel scans, but a screen that shows an IPv6
+     * address while the switch says IPv4 only reads as the switch doing
+     * nothing, so the lookup follows it too.
+     */
+    private fun ipv4Only(): Boolean = !settings.value.dualStack
+
+    /**
+     * Whether a second hop is carrying this session's traffic.
+     *
+     * When it is, the exit belongs to the chain's node rather than to
+     * Cloudflare, and nothing reachable from this process can measure it.
+     */
+    private fun chainCarriesTraffic(): Boolean =
+        settings.value.chain.enabled && settings.value.mode == EngineMode.TUN
+
+    /** Stops asking about this version. */
+    fun dismissUpdate() {
+        val available = mutableUpdate.value ?: return
+        mutableUpdate.value = null
+        viewModelScope.launch { UpdateChecker.dismiss(getApplication(), available.version) }
+    }
+
+
+    init {
+        watchConnectionForAddresses()
+        sampleTrafficWhileConnected()
+    }
+
+    /**
+     * Reads the real address now, while nothing is carrying traffic.
+     *
+     * Called when the app is opened and idle. A user who installs, connects
+     * immediately and never opens the app while disconnected simply has no
+     * before-figure, which is better than fetching one through the tunnel and
+     * labelling the tunnel's own exit as theirs.
+     */
+    fun captureRealAddressIfIdle() {
+        if (EngineStatusStore.status.value.stage != EngineStage.IDLE) return
+        if (mutableAddresses.value.real != null) return
+        viewModelScope.launch {
+            val stored = AddressReporter.realAddress(getApplication(), ipv4Only())
+            if (stored != null) {
+                mutableAddresses.value = mutableAddresses.value.copy(real = stored)
+                return@launch
+            }
+            val fetched = AddressReporter.captureRealAddress(getApplication(), ipv4Only())
+            if (fetched != null) {
+                mutableAddresses.value = mutableAddresses.value.copy(real = fetched)
+            }
+        }
+    }
+
+    private fun watchConnectionForAddresses() {
+        viewModelScope.launch {
+            EngineStatusStore.status
+                .map { it.stage }
+                .distinctUntilChanged()
+                .collect { stage ->
+                    when (stage) {
+                        EngineStage.CONNECTED -> {
+                            mutableAddresses.value = mutableAddresses.value.copy(tunnel = null)
+                            // With the exit chain running this process is kept
+                            // off its own interface -- deliberately, or the
+                            // engine's and mihomo's own sockets would be
+                            // captured by the tunnel they are building. A probe
+                            // from here therefore leaves by the physical
+                            // network and reports the address the tunnel exists
+                            // to hide. It said "seen by websites" over the
+                            // user's real IP.
+                            val exit = if (chainCarriesTraffic()) {
+                                null
+                            } else {
+                                AddressReporter.tunnelAddress(ipv4Only())
+                            }
+                            mutableAddresses.value = mutableAddresses.value.copy(tunnel = exit)
+                            // Only here. Asking GitHub from an unprotected
+                            // socket would tell the network this device runs a
+                            // circumvention tool; inside the tunnel it is just
+                            // more session traffic.
+                            mutableUpdate.value = UpdateChecker.check(
+                                getApplication(),
+                                BuildConfig.VERSION_NAME,
+                            )
+                        }
+                        EngineStage.IDLE -> {
+                            mutableAddresses.value = mutableAddresses.value.copy(tunnel = null)
+                            captureRealAddressIfIdle()
+                        }
+                        else -> mutableAddresses.value = mutableAddresses.value.copy(tunnel = null)
+                    }
+                }
+        }
+    }
+
+    /**
+     * One reading a second, and only while something is running.
+     *
+     * Sampling a stopped tunnel would burn a wake-up per second to report
+     * zero, which is the sort of thing that turns into a battery complaint.
+     */
+    private fun sampleTrafficWhileConnected() {
+        viewModelScope.launch {
+            while (true) {
+                if (EngineStatusStore.status.value.stage == EngineStage.CONNECTED) {
+                    withContext(Dispatchers.IO) { TrafficMeter.sampleNow() }
+                }
+                delay(TRAFFIC_SAMPLE_MS)
+            }
+        }
+    }
 
     private val mutableChainState = MutableStateFlow(ChainState(available = chain.isAvailable))
     val chainState = mutableChainState.asStateFlow()
@@ -359,5 +510,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         /** Long enough for the slowest test to answer, short enough to watch. */
         const val DELAY_TEST_SETTLE_MS = 6_000L
+
+        /** One second: fast enough to read as live, slow enough to be free. */
+        const val TRAFFIC_SAMPLE_MS = 1_000L
     }
 }

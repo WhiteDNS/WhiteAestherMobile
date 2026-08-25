@@ -88,6 +88,9 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         batteryExempt = isIgnoringBatteryOptimizations()
+        // Only acts while nothing is connected, which is the whole point: the
+        // address without the tunnel can only be read when there is no tunnel.
+        viewModel.captureRealAddressIfIdle()
         if (batteryRequestOpen) {
             batteryRequestOpen = false
             // Exempt now means the standard path worked here, which is worth
@@ -128,6 +131,17 @@ class MainActivity : ComponentActivity() {
      * name; one that has been renamed throws, and one that has been removed
      * opens nothing. This intent is part of the platform and always resolves.
      */
+    /**
+     * Hands the release page to a browser.
+     *
+     * Deliberately not a download: an app that fetches and installs its own
+     * replacement is the shape of the thing this app exists to be trusted
+     * against, and the user should see where the file comes from.
+     */
+    private fun openReleasePage(url: String) {
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+    }
+
     private fun openAppSettings() {
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
             .setData(Uri.parse("package:$packageName"))
@@ -168,6 +182,11 @@ class MainActivity : ComponentActivity() {
                     onShareReport = ::shareReport,
                     onCopyReport = ::copyReport,
                     onClearLog = EngineLog::clear,
+                    addresses = viewModel.addresses.collectAsStateWithLifecycle().value,
+                    traffic = viewModel.traffic.collectAsStateWithLifecycle().value,
+                    update = viewModel.update.collectAsStateWithLifecycle().value,
+                    onOpenUpdate = ::openReleasePage,
+                    onDismissUpdate = viewModel::dismissUpdate,
                     batteryExempt = batteryExempt,
                     onRequestBatteryExemption = ::requestBatteryExemption,
                     onOpenAppSettings = ::openAppSettings,

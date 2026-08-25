@@ -50,6 +50,11 @@ import androidx.compose.ui.unit.sp
 import com.whitedns.whiteaesther.EndpointOperation
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.IdentityMessage
+import com.whitedns.whiteaesther.AddressPair
+import com.whitedns.whiteaesther.data.UpdateChecker
+import com.whitedns.whiteaesther.service.TrafficSample
+import com.whitedns.whiteaesther.service.formatBytes
+import com.whitedns.whiteaesther.service.formatRate
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.LanNoticeLevel
 import com.whitedns.whiteaesther.data.LocalAddress
@@ -151,6 +156,12 @@ internal fun ScreenColumn(content: @Composable ColumnScopeAlias.() -> Unit) {
 fun HomeScreen(
     settings: AppSettings,
     status: EngineStatus,
+    addresses: AddressPair,
+    traffic: TrafficSample,
+    chainSelection: String?,
+    update: UpdateChecker.Available?,
+    onOpenUpdate: (String) -> Unit,
+    onDismissUpdate: () -> Unit,
     onToggleConnection: () -> Unit,
     onGoToRoutes: () -> Unit,
     onGoToEndpoint: () -> Unit,
@@ -295,6 +306,128 @@ fun HomeScreen(
                         "%02d:%02d:%02d".format(elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60),
                         style = AetherType.DataLarge,
                         color = colors.text,
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+
+        if (update != null) {
+            AetherCard {
+                CardHead(
+                    "Version ${update.version} is out",
+                    "You are on ${com.whitedns.whiteaesther.BuildConfig.VERSION_NAME}.",
+                )
+                Column(
+                    Modifier.padding(11.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    PrimaryButton(
+                        text = "Open the download page",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("update-open-button"),
+                        onClick = { onOpenUpdate(update.url) },
+                    )
+                    OutlineButton(
+                        text = "Not now",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("update-dismiss-button"),
+                        onClick = onDismissUpdate,
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+
+        if (status.stage == EngineStage.CONNECTED || addresses.real != null) {
+            AetherCard {
+                CardHead("Your address")
+                Spacer(Modifier.height(6.dp))
+                FactRow(
+                    "Without the tunnel",
+                    // Absent until the app has been open while disconnected:
+                    // reading it during a session would send the real address
+                    // out past the thing hiding it.
+                    addresses.real ?: "Not measured yet",
+                    mono = addresses.real != null,
+                )
+                Divider()
+                val viaChain = settings.chain.enabled && settings.mode == EngineMode.TUN
+                FactRow(
+                    "Seen by websites",
+                    when {
+                        status.stage != EngineStage.CONNECTED -> "Not connected"
+                        // The chain's exit cannot be measured from here: this
+                        // process is kept off its own interface while mihomo
+                        // runs, so a probe leaves by the physical network and
+                        // would report the address the tunnel hides.
+                        viaChain -> chainSelection ?: "Your exit chain node"
+                        addresses.tunnel != null -> addresses.tunnel
+                        else -> "Checking"
+                    },
+                    mono = !viaChain && addresses.tunnel != null,
+                )
+                if (viaChain) {
+                    Text(
+                        "Traffic leaves through your exit chain, so the address is your " +
+                            "node's. The app cannot read it from here without routing its " +
+                            "own traffic back into the chain.",
+                        style = AetherType.Small,
+                        color = colors.text3,
+                        modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+
+        if (status.stage == EngineStage.CONNECTED || traffic.received > 0 || traffic.sent > 0) {
+            AetherCard {
+                CardHead("This session")
+                Spacer(Modifier.height(6.dp))
+                if (!traffic.supported) {
+                    Text(
+                        "This phone does not keep per-app byte counters, so there is " +
+                            "nothing to measure.",
+                        style = AetherType.Small,
+                        color = colors.text2,
+                        modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
+                    )
+                } else {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 15.dp, vertical = 11.dp),
+                        horizontalArrangement = Arrangement.spacedBy(15.dp),
+                    ) {
+                        RateColumn(
+                            label = "Download",
+                            rate = formatRate(traffic.downloadPerSecond),
+                            total = formatBytes(traffic.received),
+                            tint = colors.signalLive,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("traffic-download"),
+                        )
+                        RateColumn(
+                            label = "Upload",
+                            rate = formatRate(traffic.uploadPerSecond),
+                            total = formatBytes(traffic.sent),
+                            tint = colors.cyan,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("traffic-upload"),
+                        )
+                    }
+                    Divider()
+                    Text(
+                        "Measured on the encrypted side, which is what your data plan is " +
+                            "billed for, so it runs a little above what an app reports.",
+                        style = AetherType.Small,
+                        color = colors.text3,
+                        modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
                     )
                 }
             }
@@ -1082,6 +1215,45 @@ private fun LanCredentialField(
             errorContainerColor = colors.ink1,
         ),
     )
+}
+
+/**
+ * One direction of the live traffic readout.
+ *
+ * Rate above total, because the rate is what changes and the eye goes to the
+ * top of a column. Both use tabular figures so the numbers do not jitter
+ * sideways as they tick.
+ */
+@Composable
+private fun RateColumn(
+    label: String,
+    rate: String,
+    total: String,
+    tint: Color,
+    modifier: Modifier = Modifier,
+) {
+    val colors = AetherTheme.colors
+    Column(modifier) {
+        SectionLabel(label)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            rate,
+            style = AetherType.DataLarge,
+            color = tint,
+            // One line, always. Two columns share the width, and a rate that
+            // wrapped would push the total below the card's own edge.
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(3.dp))
+        Text(
+            total,
+            style = AetherType.Small,
+            color = colors.text2,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 // -------------------------------------------------------------- settings ----

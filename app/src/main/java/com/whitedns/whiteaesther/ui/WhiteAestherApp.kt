@@ -42,7 +42,10 @@ import androidx.compose.ui.unit.dp
 import com.whitedns.whiteaesther.ChainState
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.IdentityMessage
+import com.whitedns.whiteaesther.AddressPair
+import com.whitedns.whiteaesther.data.UpdateChecker
 import com.whitedns.whiteaesther.data.AppSettings
+import com.whitedns.whiteaesther.service.TrafficSample
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatus
 import com.whitedns.whiteaesther.service.LogEntry
@@ -93,6 +96,11 @@ fun WhiteAestherApp(
     onShareReport: (String) -> Unit = {},
     onCopyReport: (String) -> Unit = {},
     onClearLog: () -> Unit = {},
+    addresses: AddressPair = AddressPair(),
+    traffic: TrafficSample = TrafficSample(),
+    update: UpdateChecker.Available? = null,
+    onOpenUpdate: (String) -> Unit = {},
+    onDismissUpdate: () -> Unit = {},
     batteryExempt: Boolean = true,
     onRequestBatteryExemption: () -> Unit = {},
     onOpenAppSettings: () -> Unit = {},
@@ -111,6 +119,12 @@ fun WhiteAestherApp(
                 Destination.HOME -> HomeScreen(
                     settings = settings,
                     status = engineStatus,
+                    addresses = addresses,
+                    traffic = traffic,
+                    chainSelection = chainState.selected,
+                    update = update,
+                    onOpenUpdate = onOpenUpdate,
+                    onDismissUpdate = onDismissUpdate,
                     // STOPPING is deliberately not actionable. The service takes
                     // the stop through a mutex and waits on the session job, so a
                     // second tap only queues another command behind the first and

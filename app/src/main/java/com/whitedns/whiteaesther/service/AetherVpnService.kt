@@ -483,6 +483,9 @@ class AetherVpnService : VpnService() {
     }
 
     private fun reportConnected(mode: EngineMode, peer: String?, message: String) {
+        // The session's byte counting starts here, not when a screen opens, so
+        // the totals cover the whole session however late somebody looks.
+        TrafficMeter.start()
         EngineStatusStore.update(
             EngineStatus(
                 EngineStage.CONNECTED,
@@ -724,6 +727,9 @@ class AetherVpnService : VpnService() {
             sessionJob = null
             runCatching { chain.stop() }
             clearSocketProtector(generation)
+            // Rates go to zero, totals stay: what a session cost is asked
+            // after it ended, not while it is running.
+            TrafficMeter.stop()
             EngineStatusStore.update(EngineStatus())
             ServiceCompat.stopForeground(this@AetherVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
