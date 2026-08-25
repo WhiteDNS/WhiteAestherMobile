@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -121,8 +122,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * The setting names what the tunnel scans, but a screen that shows an IPv6
      * address while the switch says IPv4 only reads as the switch doing
      * nothing, so the lookup follows it too.
+     *
+     * Read from the repository rather than from [settings]. That flow is a
+     * stateIn holding AppSettings() until DataStore answers, and this runs from
+     * onResume -- early enough to see the placeholder, whose dualStack is true.
+     * The address lookup was therefore deciding by the default instead of by
+     * the user, and kept showing the IPv6 address it was meant to discard.
      */
-    private fun ipv4Only(): Boolean = !settings.value.dualStack
+    private suspend fun ipv4Only(): Boolean = !repository.settings.first().dualStack
 
     /**
      * Whether a second hop is carrying this session's traffic.
@@ -130,8 +137,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * When it is, the exit belongs to the chain's node rather than to
      * Cloudflare, and nothing reachable from this process can measure it.
      */
-    private fun chainCarriesTraffic(): Boolean =
-        settings.value.chain.enabled && settings.value.mode == EngineMode.TUN
+    private suspend fun chainCarriesTraffic(): Boolean {
+        val current = repository.settings.first()
+        return current.chain.enabled && current.mode == EngineMode.TUN
+    }
 
     /** Stops asking about this version. */
     fun dismissUpdate() {
@@ -156,7 +165,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun captureRealAddressIfIdle() {
         if (EngineStatusStore.status.value.stage != EngineStage.IDLE) return
-        if (mutableAddresses.value.real != null) return
+        // Held values are revalidated too, not just stored ones: changing the
+        // setting while the app is open would otherwise leave the address that
+        // the old setting produced on screen until the process restarts.
+        val held = mutableAddresses.value.real
+        if (held != null && !held.contains(':')) return
         viewModelScope.launch {
             val stored = AddressReporter.realAddress(getApplication(), ipv4Only())
             if (stored != null) {

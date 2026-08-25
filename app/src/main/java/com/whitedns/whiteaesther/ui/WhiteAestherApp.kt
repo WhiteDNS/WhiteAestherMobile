@@ -104,6 +104,7 @@ fun WhiteAestherApp(
     batteryExempt: Boolean = true,
     onRequestBatteryExemption: () -> Unit = {},
     onOpenAppSettings: () -> Unit = {},
+    onAddTile: () -> Unit = {},
 ) {
     var destination by rememberSaveable { mutableStateOf(Destination.HOME) }
     val colors = AetherTheme.colors
@@ -183,6 +184,7 @@ fun WhiteAestherApp(
                     batteryExempt = batteryExempt,
                     onRequestBatteryExemption = onRequestBatteryExemption,
                     onOpenAppSettings = onOpenAppSettings,
+                    onAddTile = onAddTile,
                     onGoToDiagnostics = { destination = Destination.DIAGNOSTICS },
                     onGoToAbout = { destination = Destination.ABOUT },
                     onGoToIdentity = { destination = Destination.IDENTITY },

@@ -60,5 +60,28 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="vpn and local SOCKS5 proxy connection engine" />
         </service>
+
+        <!--
+            Connecting from the shade. The settings do not change between
+            sessions for most people, so opening the app to press one button is
+            the only step this removes.
+        -->
+        <service
+            android:name=".service.AetherTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_notification"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <!--
+                The tile reflects the engine, not the last tap, so it is safe to
+                show before the app has ever been opened.
+            -->
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="false" />
+        </service>
     </application>
 </manifest>

@@ -142,6 +142,30 @@ class MainActivity : ComponentActivity() {
         runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
     }
 
+    /**
+     * Offers to put the tile in the shade, on the versions that can ask.
+     *
+     * Android 13 and later let an app request it; before that the only route is
+     * the user finding it in the shade's own edit screen, which nobody does
+     * without being told the tile exists.
+     */
+    private fun offerQuickSettingsTile() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val manager = getSystemService(android.app.StatusBarManager::class.java) ?: return
+        runCatching {
+            manager.requestAddTileService(
+                android.content.ComponentName(
+                    this,
+                    com.whitedns.whiteaesther.service.AetherTileService::class.java,
+                ),
+                getString(R.string.app_name),
+                android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_notification),
+                {},
+                {},
+            )
+        }
+    }
+
     private fun openAppSettings() {
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
             .setData(Uri.parse("package:$packageName"))
@@ -190,6 +214,7 @@ class MainActivity : ComponentActivity() {
                     batteryExempt = batteryExempt,
                     onRequestBatteryExemption = ::requestBatteryExemption,
                     onOpenAppSettings = ::openAppSettings,
+                    onAddTile = ::offerQuickSettingsTile,
                 )
             }
         }

@@ -1233,7 +1233,10 @@ private fun RateColumn(
     modifier: Modifier = Modifier,
 ) {
     val colors = AetherTheme.colors
-    Column(modifier) {
+    // Centred inside its half rather than left-aligned. Two left-aligned
+    // columns put both readings in the left two thirds of the card and leave
+    // the right third empty, which reads as a layout that has come apart.
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         SectionLabel(label)
         Spacer(Modifier.height(4.dp))
         Text(
@@ -1265,6 +1268,7 @@ fun SettingsScreen(
     batteryExempt: Boolean,
     onRequestBatteryExemption: () -> Unit,
     onOpenAppSettings: () -> Unit,
+    onAddTile: () -> Unit,
     onGoToDiagnostics: () -> Unit,
     onGoToAbout: () -> Unit,
     onGoToIdentity: () -> Unit,
@@ -1293,6 +1297,24 @@ fun SettingsScreen(
                     onCheckedChange = { onSettingsChange(settings.copy(showAdvanced = it)) },
                     modifier = Modifier.testTag("show-advanced-switch"),
                 )
+            }
+        }
+
+        // Only where the platform can ask. Before Android 13 the tile is still
+        // there, but the user has to find it in the shade's own edit screen.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            Spacer(Modifier.height(12.dp))
+            AetherCard {
+                SettingRow(
+                    title = "Add a quick settings tile",
+                    subtitle = "Connect and disconnect from the notification shade.",
+                ) {
+                    OutlineButton(
+                        text = "Add",
+                        modifier = Modifier.testTag("add-tile-button"),
+                        onClick = onAddTile,
+                    )
+                }
             }
         }
 

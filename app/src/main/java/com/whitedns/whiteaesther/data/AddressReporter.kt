@@ -92,8 +92,14 @@ object AddressReporter {
      * which is worse than an empty field.
      */
     private suspend fun fetch(ipv4Only: Boolean): String? {
-        if (!ipv4Only) return request(TRACE_HOST)
-        return request(TRACE_V4)
+        // IPv4 first, always. The two rows exist to be compared, and they
+        // cannot be when one is IPv6 and the other IPv4 -- which is what a
+        // dual-stack phone produced, because the resolver prefers IPv6 for the
+        // direct lookup while the tunnel exits on IPv4.
+        request(TRACE_V4)?.let { return it }
+        // Only when IPv4 could not be had at all: a v6-only network, or a
+        // network where the literal is blocked. Better a v6 answer than none.
+        return if (ipv4Only) null else request(TRACE_HOST)
     }
 
     private suspend fun request(url: String): String? = withContext(Dispatchers.IO) {
