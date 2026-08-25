@@ -51,6 +51,8 @@ import com.whitedns.whiteaesther.EndpointOperation
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.IdentityMessage
 import com.whitedns.whiteaesther.data.AppSettings
+import com.whitedns.whiteaesther.data.LanNoticeLevel
+import com.whitedns.whiteaesther.data.LocalAddress
 import com.whitedns.whiteaesther.data.EndpointAddress
 import com.whitedns.whiteaesther.data.EndpointFamily
 import com.whitedns.whiteaesther.data.EndpointMode
@@ -310,7 +312,7 @@ fun HomeScreen(
                 FactRow("Addresses", if (settings.dualStack) "IPv4 + IPv6" else "IPv4 only")
                 if (settings.mode == EngineMode.PROXY) {
                     Divider()
-                    FactRow("Local proxy", "127.0.0.1:${settings.proxyPort}", mono = true)
+                    FactRow("Local proxy", settings.proxyBindLabel(), mono = true)
                 }
             } else {
                 FactRow("Profile", settings.activeProfile().label)
@@ -401,7 +403,7 @@ private fun homeAttention(settings: AppSettings, status: EngineStatus): Attentio
             tone = colors.cyan,
             title = "Proxy only: apps are not routed for you",
             body = "Nothing goes through the tunnel unless you point an app at " +
-                "127.0.0.1:${settings.proxyPort}. Choose Whole device under Traffic to cover everything.",
+                "${settings.proxyBindLabel()}. Choose Whole device under Traffic to cover everything.",
             actions = listOf("Change coverage" to AttentionTarget.TRAFFIC),
         )
         settings.endpointMode == EndpointMode.CUSTOM_ONLY -> Attention(
@@ -783,6 +785,11 @@ fun TrafficScreen(
 ) {
     var advanced by rememberSaveable(settings.showAdvanced) { mutableStateOf(settings.showAdvanced) }
     var portText by remember(settings.proxyPort) { mutableStateOf(settings.proxyPort.toString()) }
+    // Keyed on the switch, not on the stored value. Saving is a round trip
+    // through DataStore, so a field bound straight to settings is rewritten
+    // with the old text between keystrokes and cannot be typed into.
+    var lanUserText by remember(settings.lanSharing) { mutableStateOf(settings.lanUsername) }
+    var lanPassText by remember(settings.lanSharing) { mutableStateOf(settings.lanPassword) }
     val engineBusy = status.stage !in setOf(EngineStage.IDLE, EngineStage.ERROR)
     val colors = AetherTheme.colors
 
@@ -906,6 +913,84 @@ fun TrafficScreen(
 
                 Divider()
                 SettingRow(
+                    title = "Share with this network",
+                    subtitle = "Lets other devices on the same Wi-Fi use this tunnel " +
+                        "through the proxy above.",
+                ) {
+                    AetherSwitch(
+                        checked = settings.lanSharing,
+                        onCheckedChange = { onSettingsChange(settings.copy(lanSharing = it)) },
+                        modifier = Modifier.testTag("lan-sharing-switch"),
+                    )
+                }
+
+                if (settings.lanSharing) {
+                    Column(
+                        Modifier.padding(start = 11.dp, end = 11.dp, bottom = 11.dp),
+                        verticalArrangement = Arrangement.spacedBy(9.dp),
+                    ) {
+                        // The listener binds to every interface, so the address
+                        // a client needs is the phone's own -- and nobody can
+                        // guess it from a screen that only shows the port.
+                        val address = remember(settings.lanSharing) {
+                            LocalAddress.onLocalNetwork()
+                        }
+                        Text(
+                            text = if (address != null) {
+                                "Point other devices at $address:${settings.proxyPort} " +
+                                    "as a SOCKS5 proxy."
+                            } else {
+                                "Join a Wi-Fi network to get an address other devices can use."
+                            },
+                            style = AetherType.Small,
+                            color = colors.text2,
+                            modifier = Modifier.testTag("lan-sharing-address"),
+                        )
+
+                        settings.lanSharingNotice()?.let { notice ->
+                            Text(
+                                text = notice.text,
+                                style = AetherType.Small,
+                                color = when (notice.level) {
+                                    // Amber, not red: this one is a choice the
+                                    // user is allowed to keep, and the failure
+                                    // colour read as a field left unfilled.
+                                    LanNoticeLevel.CAUTION -> colors.signalWorking
+                                    LanNoticeLevel.PROBLEM -> colors.signalFailed
+                                },
+                                modifier = Modifier.testTag("lan-sharing-notice"),
+                            )
+                        }
+
+                        Text(
+                            text = "A password is optional. Leave both boxes empty to share " +
+                                "without one, or fill both to require it.",
+                            style = AetherType.Small,
+                            color = colors.text2,
+                        )
+                        LanCredentialField(
+                            label = "Username (optional)",
+                            value = lanUserText,
+                            tag = "lan-username-field",
+                            onValueChange = { entered ->
+                                lanUserText = entered
+                                onSettingsChange(settings.copy(lanUsername = entered))
+                            },
+                        )
+                        LanCredentialField(
+                            label = "Password (optional)",
+                            value = lanPassText,
+                            tag = "lan-password-field",
+                            onValueChange = { entered ->
+                                lanPassText = entered
+                                onSettingsChange(settings.copy(lanPassword = entered))
+                            },
+                        )
+                    }
+                }
+
+                Divider()
+                SettingRow(
                     title = "Check the connection works",
                     subtitle = "Sends one test request after connecting. Leave this on.",
                 ) {
@@ -962,6 +1047,42 @@ private val NOIZE_PROFILES = listOf(
     Triple("gfw", "Aggressive", "Heavier padding for networks that inspect closely."),
     Triple("none", "Off", "No obfuscation. Faster, but easier to block."),
 )
+
+/**
+ * One credential row for LAN sharing.
+ *
+ * Not password-masked. The user is reading this back to type it into another
+ * machine, and a field of dots would have to be revealed to be useful -- the
+ * threat here is somebody on the network, not somebody holding the phone.
+ */
+@Composable
+private fun LanCredentialField(
+    label: String,
+    value: String,
+    tag: String,
+    onValueChange: (String) -> Unit,
+) {
+    val colors = AetherTheme.colors
+    OutlinedTextField(
+        value = value,
+        // Whitespace is dropped as it is typed rather than trimmed on save: a
+        // trailing space in a password is invisible on screen and rejected by
+        // the engine, which looks like the password itself being wrong.
+        onValueChange = { entered -> onValueChange(entered.filterNot(Char::isWhitespace)) },
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(tag),
+        textStyle = AetherType.Data.copy(color = colors.text),
+        label = { Text(label, style = AetherType.Small) },
+        singleLine = true,
+        shape = RoundedCornerShape(14.dp),
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = colors.ink1,
+            unfocusedContainerColor = colors.ink1,
+            errorContainerColor = colors.ink1,
+        ),
+    )
+}
 
 // -------------------------------------------------------------- settings ----
 
@@ -1230,7 +1351,7 @@ fun AboutScreen(nativeVersion: String?, settings: AppSettings, onBack: () -> Uni
         AetherCard {
             CardHead("Privacy by default")
             Spacer(Modifier.height(6.dp))
-            FactRow("Proxy bind", "127.0.0.1:${settings.proxyPort}", mono = true)
+            FactRow("Proxy bind", settings.proxyBindLabel(), mono = true)
             Divider()
             FactRow("Backups", "Disabled")
             Divider()
@@ -1473,7 +1594,7 @@ private fun buildReport(
         appendLine(
             "settings profile=${settings.activeProfile().label} transport=${settings.transport.wireName} " +
                 "scan=${settings.scanStrategy.wireName} coverage=${settings.mode.wireName} " +
-                "noize=${settings.noizeProfile} port=${settings.proxyPort} dualStack=${settings.dualStack}",
+                "noize=${settings.noizeProfile} bind=${settings.proxyBindLabel()} lanAuth=${settings.lanCredentialsUsable()} dualStack=${settings.dualStack}",
         )
     }
     if (includeEvents) {

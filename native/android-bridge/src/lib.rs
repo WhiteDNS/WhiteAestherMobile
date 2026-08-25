@@ -45,6 +45,15 @@ struct BridgeConfig {
     config_path: String,
     #[serde(default = "default_proxy_port")]
     listen_port: u16,
+    /// Offer the proxy to the local network instead of this device only.
+    #[serde(default)]
+    lan_sharing: bool,
+    /// Demanded of every client when both are set. Empty means no password,
+    /// which the settings screen presents as the choice it is.
+    #[serde(default)]
+    lan_username: String,
+    #[serde(default)]
+    lan_password: String,
     peer: Option<String>,
     #[serde(default)]
     peer_fallback: bool,
@@ -106,6 +115,11 @@ impl BridgeConfig {
         if !(1_024..=65_535).contains(&config.listen_port) {
             return Err("listenPort must be between 1024 and 65535".into());
         }
+        // A half-filled pair would silently become no password at all, which
+        // is the opposite of what someone typing a username is asking for.
+        if config.lan_username.is_empty() != config.lan_password.is_empty() {
+            return Err("lanUsername and lanPassword must both be set, or neither".into());
+        }
         if !matches!(config.transport.as_str(), "h3" | "h2" | "wg" | "wiw") {
             return Err("transport must be h3, h2, wg or wiw".into());
         }
@@ -137,7 +151,15 @@ impl BridgeConfig {
         };
         Ok(aether::EmbeddedConfig {
             config_path: self.config_path.clone(),
-            listen: SocketAddr::from(([127, 0, 0, 1], self.listen_port)),
+            // Unspecified rather than a chosen interface: the phone's address
+            // on the local network changes with the network, and binding the
+            // one it had at connect time would stop answering after a roam.
+            listen: if self.lan_sharing {
+                SocketAddr::from(([0, 0, 0, 0], self.listen_port))
+            } else {
+                SocketAddr::from(([127, 0, 0, 1], self.listen_port))
+            },
+            access: self.access(),
             peer,
             peer_fallback: self.peer_fallback,
             scan_mode: self.scan_mode.clone(),
@@ -151,6 +173,22 @@ impl BridgeConfig {
                 _ => "masque".into(),
             },
         })
+    }
+
+    /// Credentials only mean anything to a client that is not this device.
+    ///
+    /// Kept out of the loopback case deliberately: a password there guards
+    /// nothing, and would break every local client that has none configured.
+    fn access(&self) -> aether::socks::Access {
+        let credentials = if self.lan_sharing && !self.lan_username.is_empty() {
+            Some(aether::socks::Credentials {
+                username: self.lan_username.clone(),
+                password: self.lan_password.clone(),
+            })
+        } else {
+            None
+        };
+        aether::socks::Access { credentials }
     }
 
     fn apply_environment(&self) {
@@ -697,6 +735,65 @@ fn call_engine_ready(vm: &JavaVM, listener: &GlobalRef) -> jni::errors::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn config(extra: &str) -> String {
+        format!(r#"{{"mode":"proxy","configPath":"aether.toml","listenPort":1819{extra}}}"#)
+    }
+
+    #[test]
+    fn the_listener_stays_on_loopback_until_sharing_is_asked_for() {
+        let plain = BridgeConfig::parse(&config("")).unwrap();
+        assert!(plain.embedded(None).unwrap().listen.ip().is_loopback());
+
+        // Every install that never touches the switch keeps the behaviour it
+        // had, which is the only reason the default is safe to leave alone.
+        let shared = BridgeConfig::parse(&config(r#","lanSharing":true"#)).unwrap();
+        assert!(!shared.embedded(None).unwrap().listen.ip().is_loopback());
+    }
+
+    #[test]
+    fn sharing_without_a_password_is_allowed_and_says_so() {
+        let shared = BridgeConfig::parse(&config(r#","lanSharing":true"#)).unwrap();
+
+        // A deliberate choice, not an oversight: on a network the user owns it
+        // saves configuring every client. socks::allowed_source still holds the
+        // listener to the local network.
+        assert!(shared.access().credentials.is_none());
+    }
+
+    #[test]
+    fn half_a_credential_pair_is_refused_rather_than_ignored() {
+        // Silently dropping one half would turn "I set a username" into no
+        // password at all -- the opposite of what was asked for.
+        assert!(BridgeConfig::parse(&config(r#","lanUsername":"phone""#)).is_err());
+        assert!(BridgeConfig::parse(&config(r#","lanPassword":"secret""#)).is_err());
+        assert!(
+            BridgeConfig::parse(&config(r#","lanUsername":"phone","lanPassword":"secret""#))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn credentials_are_ignored_while_the_proxy_is_private() {
+        let private =
+            BridgeConfig::parse(&config(r#","lanUsername":"phone","lanPassword":"secret""#))
+                .unwrap();
+
+        // Demanding a password on loopback would break every local client that
+        // has none configured, and guards nothing that was reachable anyway.
+        assert!(private.access().credentials.is_none());
+
+        let shared = BridgeConfig::parse(&config(
+            r#","lanSharing":true,"lanUsername":"phone","lanPassword":"secret""#,
+        ))
+        .unwrap();
+        let credentials = shared
+            .access()
+            .credentials
+            .expect("shared demands a password");
+        assert_eq!(credentials.username, "phone");
+        assert_eq!(credentials.password, "secret");
+    }
 
     #[test]
     fn validates_proxy_port_and_mode() {

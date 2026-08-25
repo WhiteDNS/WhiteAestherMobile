@@ -940,8 +940,16 @@ class AetherVpnService : VpnService() {
     private fun connectedMessage(mode: EngineMode, configJson: String): String = when (mode) {
         EngineMode.TUN -> "Whole-device traffic is protected"
         EngineMode.PROXY -> {
-            val port = runCatching { JSONObject(configJson).getInt("listenPort") }.getOrDefault(1819)
-            "SOCKS5 listening on 127.0.0.1:$port"
+            val config = runCatching { JSONObject(configJson) }.getOrNull()
+            val port = config?.optInt("listenPort", 1819) ?: 1819
+            // The notification is where a user checks what to point a client
+            // at. Saying loopback while the listener is on the network sends
+            // them to an address that refuses them.
+            if (config?.optBoolean("lanSharing") == true) {
+                "SOCKS5 shared on the local network, port $port"
+            } else {
+                "SOCKS5 listening on 127.0.0.1:$port"
+            }
         }
     }
 

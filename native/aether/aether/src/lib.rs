@@ -17,7 +17,9 @@ mod prober;
 mod quic;
 mod routing;
 mod socketprotect;
-mod socks;
+// Public for its access policy: the embedded caller decides who may use the
+// listener, and that type has to cross the crate boundary with the config.
+pub mod socks;
 mod sysprofile;
 mod tls;
 mod tunnelping;
@@ -146,6 +148,12 @@ pub struct EmbeddedConfig {
     /// Defaults to MASQUE when empty, because that is what every embedded
     /// caller wanted before there was a choice.
     pub protocol: String,
+    /// Who may use the SOCKS5 listener.
+    ///
+    /// Carried here rather than derived from [`Self::listen`]: whether a
+    /// password is demanded is the caller's decision, and a listener on the
+    /// local network is a deliberate one either way.
+    pub access: socks::Access,
 }
 
 impl EmbeddedConfig {
@@ -452,6 +460,10 @@ pub async fn run_embedded(
     endpoint: EmbeddedEndpoint,
     ready: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> Result<()> {
+    // Before any listener is bound. Every tunnel below reaches socks::serve by
+    // its own path, and none of them carries this.
+    socks::configure_access(config.access.clone());
+
     let peer = config
         .peer
         .ok_or_else(|| AetherError::Other("embedded peer is required".into()))?;

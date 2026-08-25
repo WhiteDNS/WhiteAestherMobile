@@ -87,6 +87,17 @@ enum class EndpointMode(val label: String) {
     CUSTOM_ONLY("Custom only"),
 }
 
+/** How much the LAN sharing notice is asking of the user. */
+enum class LanNoticeLevel {
+    /** A consequence of a choice that is allowed to stand. */
+    CAUTION,
+
+    /** A setup that will not start until it changes. */
+    PROBLEM,
+}
+
+data class LanNotice(val level: LanNoticeLevel, val text: String)
+
 enum class ThemeMode(val label: String) {
     SYSTEM("System"),
     LIGHT("Light"),
@@ -158,6 +169,24 @@ data class AppSettings(
     // than inside it -- mihomo's settings are not the engine's business.
     val chain: ChainSettings = ChainSettings(),
     /**
+     * Offer the local SOCKS5 proxy to the rest of the network, not just this
+     * phone.
+     *
+     * Proxy mode only. Whole-device mode has no listener to share: the tunnel
+     * is an interface, and another machine cannot route into it.
+     */
+    val lanSharing: Boolean = false,
+    /**
+     * Demanded of clients when both are set.
+     *
+     * Optional by choice. Without them anyone who can reach the port can use
+     * the tunnel, and on a network the user does not control -- a cafe, a
+     * hotel, a dormitory -- that is everyone on it, leaving with this device's
+     * identity. [lanSharingWarning] is what the screen says about it.
+     */
+    val lanUsername: String = "",
+    val lanPassword: String = "",
+    /**
      * Set once this device has been shown to ignore the standard exemption
      * request: the user opened the dialog and came back still not exempt.
      *
@@ -180,6 +209,53 @@ data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val showAdvanced: Boolean = false,
 ) {
+    /**
+     * True when a password will actually be demanded.
+     *
+     * Both halves or neither. One alone is not a weaker password, it is no
+     * password -- and the engine rejects the pair rather than quietly serving
+     * the network unguarded.
+     */
+    fun lanCredentialsUsable(): Boolean =
+        lanSharing && lanUsername.isNotBlank() && lanPassword.isNotBlank()
+
+    /**
+     * What the screen says about the current sharing setup, or null.
+     *
+     * Two different things, and telling them apart is the point. Sharing
+     * without a password is a choice with a consequence -- [LanNoticeLevel.
+     * CAUTION]. A half-filled credential pair is a setup the engine refuses to
+     * start -- [LanNoticeLevel.PROBLEM]. Rendering both in the failure colour
+     * made the optional one read as a field the user had forgotten to fill.
+     */
+    fun lanSharingNotice(): LanNotice? = when {
+        !lanSharing -> null
+        mode != EngineMode.PROXY -> LanNotice(
+            LanNoticeLevel.PROBLEM,
+            "Whole device mode has no proxy to share. Choose Proxy above first.",
+        )
+        lanUsername.isBlank() && lanPassword.isBlank() -> LanNotice(
+            LanNoticeLevel.CAUTION,
+            "Sharing without a password. Anyone on this Wi-Fi can use the tunnel " +
+                "with your identity — fine on a network you own, not in a cafe or hotel.",
+        )
+        !lanCredentialsUsable() -> LanNotice(
+            LanNoticeLevel.PROBLEM,
+            "Set both a username and a password, or clear both to share without one.",
+        )
+        else -> null
+    }
+
+    /**
+     * Where clients should point, for the screen and the notification to agree.
+     */
+    fun proxyBindLabel(): String =
+        if (lanSharing && mode == EngineMode.PROXY) {
+            "0.0.0.0:$proxyPort"
+        } else {
+            "127.0.0.1:$proxyPort"
+        }
+
     /**
      * What is actually carried, in one line.
      *
@@ -223,6 +299,9 @@ data class AppSettings(
             .put("mode", mode.wireName)
             .put("configPath", File(context.filesDir, "aether.toml").absolutePath)
             .put("listenPort", proxyPort)
+            .put("lanSharing", lanSharing && mode == EngineMode.PROXY)
+            .put("lanUsername", if (lanCredentialsUsable()) lanUsername else "")
+            .put("lanPassword", if (lanCredentialsUsable()) lanPassword else "")
             .put("scanMode", scanStrategy.wireName)
             .put("ipScan", if (dualStack) "both" else "v4")
             .put("transport", transport.wireName)

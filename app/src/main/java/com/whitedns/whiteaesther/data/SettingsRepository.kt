@@ -31,6 +31,9 @@ class SettingsRepository(private val context: Context) {
             encryptedHello = preferences[ENCRYPTED_HELLO] ?: false,
             chain = ChainSettings.decode(preferences[CHAIN]),
             splitTunnel = SplitTunnel.decode(preferences[SPLIT_TUNNEL]),
+            lanSharing = preferences[LAN_SHARING] ?: false,
+            lanUsername = preferences[LAN_USERNAME].orEmpty(),
+            lanPassword = preferences[LAN_PASSWORD].orEmpty(),
             batteryRequestIgnored = preferences[BATTERY_REQUEST_IGNORED] ?: false,
             batteryNoticeDismissed = preferences[BATTERY_NOTICE_DISMISSED] ?: false,
         )
@@ -54,6 +57,9 @@ class SettingsRepository(private val context: Context) {
             preferences[ENCRYPTED_HELLO] = settings.encryptedHello
             preferences[CHAIN] = settings.chain.encode()
             preferences[SPLIT_TUNNEL] = settings.splitTunnel.encode()
+            preferences[LAN_SHARING] = settings.lanSharing
+            preferences[LAN_USERNAME] = settings.lanUsername
+            preferences[LAN_PASSWORD] = settings.lanPassword
             preferences[BATTERY_REQUEST_IGNORED] = settings.batteryRequestIgnored
             preferences[BATTERY_NOTICE_DISMISSED] = settings.batteryNoticeDismissed
         }
@@ -81,6 +87,11 @@ class SettingsRepository(private val context: Context) {
         // of sources, which preferences have no type for.
         val CHAIN = stringPreferencesKey("chain")
         val SPLIT_TUNNEL = stringPreferencesKey("split_tunnel")
+        val LAN_SHARING = booleanPreferencesKey("lan_sharing")
+        // Stored as the user typed them: the engine needs the password itself
+        // to answer a client, so a hash here would be a hash it cannot use.
+        val LAN_USERNAME = stringPreferencesKey("lan_username")
+        val LAN_PASSWORD = stringPreferencesKey("lan_password")
         // Both survive a restart deliberately. The first is a fact about this
         // phone that re-asking cannot establish a second time, and the second
         // is an answer the user should not have to give again.
