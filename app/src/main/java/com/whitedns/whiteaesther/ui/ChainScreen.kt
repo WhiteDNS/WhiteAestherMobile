@@ -381,6 +381,7 @@ private fun NodesCard(
                         kind = node.kind,
                         delay = node.delay,
                         selected = node.name == live,
+                        supported = node.supported,
                         onClick = { onSelectNode(node.name) },
                     )
                 }
@@ -422,13 +423,16 @@ private fun NodeRow(
     kind: String,
     delay: Int?,
     selected: Boolean,
+    supported: Boolean,
     onClick: () -> Unit,
 ) {
     val colors = AetherTheme.colors
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            // Listed but not selectable. Choosing it would start a chain that
+            // cannot authenticate, and the failure would look like the node.
+            .clickable(enabled = supported, onClick = onClick)
             .padding(horizontal = 15.dp, vertical = 13.dp)
             .testTag("chain-node-$name"),
         verticalAlignment = Alignment.CenterVertically,
@@ -448,17 +452,34 @@ private fun NodeRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(kind, style = AetherType.Small, color = colors.text2)
+            Text(
+                if (supported) kind else "$kind · not supported",
+                style = AetherType.Small,
+                color = if (supported) colors.text2 else colors.signalWorking,
+            )
+            if (!supported) {
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    "This build's engine cannot authenticate with REALITY yet. The node " +
+                        "is fine and will work here again once the engine can.",
+                    style = AetherType.Small,
+                    color = colors.text3,
+                )
+            }
         }
         Text(
             // A node that has never been tested and one that failed its last
             // test are different, and a dash for both would hide the difference.
-            when (delay) {
-                null -> "—"
-                else -> "$delay ms"
+            when {
+                !supported -> "—"
+                else -> when (delay) {
+                    null -> "—"
+                    else -> "$delay ms"
+                }
             },
             style = AetherType.Data,
             color = when {
+                !supported -> colors.text3
                 delay == null -> colors.text3
                 delay < 400 -> colors.signalLive
                 delay < 1_200 -> colors.cyan

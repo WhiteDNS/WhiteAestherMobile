@@ -364,7 +364,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun testChainNodes() {
         if (chainJob?.isCompleted == false) return
-        val names = mutableChainState.value.nodes.map { it.name }
+        // Unsupported nodes are skipped rather than measured. A REALITY node
+        // fails the handshake, so its delay test times out and reports the node
+        // as slow when the engine simply cannot speak to it.
+        val names = mutableChainState.value.nodes.filter { it.supported }.map { it.name }
         if (names.isEmpty()) return
         chainJob = viewModelScope.launch {
             mutableChainState.value = mutableChainState.value.copy(busy = true, error = null)

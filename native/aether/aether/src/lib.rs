@@ -57,7 +57,24 @@ fn parse_local_v4(s: &str) -> Ipv4Addr {
         .unwrap_or(Ipv4Addr::UNSPECIFIED)
 }
 
-const TUNNEL_MTU: usize = 1280;
+/// What MASQUE can carry, and it is not ours to choose.
+///
+/// Cloudflare caps the payload, so this is a limit the tunnel is given rather
+/// than one it picks.
+const MASQUE_MTU: usize = 1280;
+
+/// What WireGuard can carry, which is a different question.
+///
+/// The 1280 above was applied to both for no better reason than sharing a
+/// constant, and it cost hysteria2 and tuic nodes behind the tunnel: they need
+/// a 1280-byte UDP payload, and 1280 inner leaves 1252 after the 28-byte outer
+/// header. WireGuard adds 32 bytes of its own, so 1340 inner goes out as a 1400
+/// byte datagram -- under the 1500 any ordinary path carries -- and leaves 1312
+/// for the payload, which is enough.
+///
+/// MASQUE cannot follow it there. The cap is Cloudflare's, so QUIC-based nodes
+/// stay impossible on that transport and the app says so.
+const WIREGUARD_MTU: usize = 1340;
 const INNER_MTU: usize = 1200;
 const DEFAULT_CONFIG: &str = "aether.toml";
 
@@ -541,7 +558,7 @@ async fn run_warp_in_warp_embedded(
 ) -> Result<()> {
     log::info!("[*] establishing outer WARP tunnel to {peer}...");
     let (outer_stack, mut outer_exit) =
-        establish_wg(primary, peer, TUNNEL_MTU, true, 5, "outer").await?;
+        establish_wg(primary, peer, WIREGUARD_MTU, true, 5, "outer").await?;
 
     let (forwarder, _forwarder_guard) = spawn_udp_forwarder(&outer_stack, peer).await?;
     log::info!("[+] inner endpoint tunneled through outer warp via {forwarder}");
@@ -718,7 +735,7 @@ async fn run_wireguard_tunnel_embedded(
             let stack = netstack::spawn(
                 &identity.ipv4,
                 &identity.ipv6,
-                TUNNEL_MTU,
+                WIREGUARD_MTU,
                 inbound_rx,
                 outbound_tx,
             )?;
@@ -886,7 +903,7 @@ async fn run_masque_tunnel_embedded(
             let stack = netstack::spawn(
                 &identity.ipv4,
                 &identity.ipv6,
-                TUNNEL_MTU,
+                MASQUE_MTU,
                 inbound_rx,
                 outbound_tx,
             )?;
@@ -1885,7 +1902,7 @@ async fn run_masque_tunnel(
     let stack = netstack::spawn(
         &identity.ipv4,
         &identity.ipv6,
-        TUNNEL_MTU,
+        MASQUE_MTU,
         inbound_rx,
         outbound_tx,
     )?;
@@ -2591,7 +2608,7 @@ async fn run_wireguard_tunnel(
     let stack = netstack::spawn(
         &identity.ipv4,
         &identity.ipv6,
-        TUNNEL_MTU,
+        WIREGUARD_MTU,
         inbound_rx,
         outbound_tx,
     )?;
@@ -2833,7 +2850,7 @@ async fn run_warp_in_warp(
 
     log::info!("[*] establishing outer WARP tunnel to {peer}...");
     let (outer_stack, mut outer_exit) =
-        establish_wg(&primary, peer, TUNNEL_MTU, true, 5, "outer").await?;
+        establish_wg(&primary, peer, WIREGUARD_MTU, true, 5, "outer").await?;
 
     let (forwarder, _forwarder_guard) = spawn_udp_forwarder(&outer_stack, inner_peer).await?;
     log::info!("[+] inner endpoint {inner_peer} tunneled through outer warp via {forwarder}");

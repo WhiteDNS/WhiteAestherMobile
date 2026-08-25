@@ -105,6 +105,11 @@ class ChainController(private val context: Context) {
         val group = proxies.optJSONObject(ChainConfig.EXIT_GROUP) ?: return ChainNodes()
         val members = group.optJSONArray("all") ?: return ChainNodes()
 
+        // Read from the provider files mihomo has already fetched, because it
+        // reports a node's protocol but not its security layer -- and a
+        // REALITY node arrives looking like any other VLESS one.
+        val reality = RealityNodes.detect(home)
+
         val nodes = buildList {
             for (index in 0 until members.length()) {
                 val name = members.optString(index).takeIf { it.isNotBlank() } ?: continue
@@ -118,6 +123,7 @@ class ChainController(private val context: Context) {
                                 history.optJSONObject(history.length() - 1)?.optInt("delay", 0)
                             }
                             ?.takeIf { it > 0 },
+                        supported = name !in reality,
                     ),
                 )
             }
@@ -292,4 +298,12 @@ data class ChainNode(
     val kind: String,
     /** Milliseconds through the tunnel, or null when the last test failed. */
     val delay: Int?,
+    /**
+     * False when this build's engine cannot authenticate with the node.
+     *
+     * REALITY, today. The node itself is fine and will work here again once
+     * the engine can speak it, which is why it is listed rather than hidden --
+     * a node quietly missing from a subscription reads as a broken link.
+     */
+    val supported: Boolean = true,
 )

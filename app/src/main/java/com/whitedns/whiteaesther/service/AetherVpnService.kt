@@ -245,6 +245,7 @@ class AetherVpnService : VpnService() {
                 prepared?.ipv4.orEmpty(),
                 prepared?.ipv6.orEmpty(),
                 useChain,
+                transportOf(engineConfig),
                 splitTunnel,
             )
             if (tun == null) {
@@ -640,6 +641,7 @@ class AetherVpnService : VpnService() {
         ipv4: String,
         ipv6: String,
         forChain: Boolean,
+        transport: String,
         splitTunnel: SplitTunnel = SplitTunnel(),
     ): ParcelFileDescriptor? {
         val configureIntent = PendingIntent.getActivity(
@@ -671,7 +673,16 @@ class AetherVpnService : VpnService() {
             builder.addDnsServer(ChainConfig.TUN_DNS)
             builder.addRoute("::", 0)
         } else {
-            builder.setMtu(1280)
+            // The interface has to advertise what the tunnel underneath can
+            // actually carry, or the kernel hands the engine packets it then
+            // has to fragment. 1280 is Cloudflare's cap on MASQUE and not
+            // ours to raise; WireGuard is limited by the path instead, and
+            // 1340 inner still leaves a 1400-byte datagram on the wire.
+            //
+            // This is what kept hysteria2 and tuic nodes from working behind
+            // the chain: they need a 1280-byte UDP payload, and 1280 here left
+            // 1252 of it.
+            builder.setMtu(mtuFor(transport))
             builder.addDnsServer("1.1.1.1")
             builder.addDnsServer("1.0.0.1")
             addAddress(builder, ipv4, 32)
@@ -809,6 +820,18 @@ class AetherVpnService : VpnService() {
             append(" peerPinned=").append(json.has("peer"))
         }
     }.getOrDefault("unavailable")
+
+    /**
+     * What the interface may advertise, given the tunnel carrying it.
+     *
+     * Keyed on the wire name the engine was actually given. Automatic has been
+     * resolved to a real transport by the time a tun is built, so there is no
+     * case here for it.
+     */
+    private fun mtuFor(transport: String): Int = when (transport) {
+        "wg", "wiw" -> WIREGUARD_MTU
+        else -> MASQUE_MTU
+    }
 
     private fun transportOf(configJson: String): String =
         runCatching { JSONObject(configJson).optString("transport", "h3") }.getOrDefault("h3")
@@ -960,6 +983,12 @@ class AetherVpnService : VpnService() {
     }
 
     companion object {
+        /** Cloudflare's cap on MASQUE. Not ours to raise. */
+        private const val MASQUE_MTU = 1280
+
+        /** What the path allows WireGuard, which is the larger question. */
+        private const val WIREGUARD_MTU = 1340
+
         private const val ACTION_START = "com.whitedns.whiteaesther.START"
         private const val ACTION_STOP = "com.whitedns.whiteaesther.STOP"
         private const val EXTRA_CONFIG = "config"
