@@ -1,31 +1,40 @@
 #![allow(dead_code)]
-mod account;
-mod aethernoize;
-mod apifront;
-mod cli;
-mod config;
-mod consts;
-mod dns;
-mod error;
-mod fragment;
-mod lastconn;
-mod masque;
-mod masque_h2;
-mod netstack;
-mod noize;
-mod prober;
-mod quic;
-mod routing;
+pub mod account;
+pub mod aethernoize;
+pub mod api;
+pub mod apifront;
+pub mod cli;
+pub mod config;
+pub mod consts;
+pub mod dns;
+pub mod error;
+// Upstream's own C API is deliberately not vendored. Nothing here calls it --
+// native/android-bridge is this project's FFI and predates it -- and its
+// spawn_job wrapper around run_with does not satisfy Send for our merged
+// engine, so carrying it would mean carrying a build failure for an interface
+// we do not ship.
+pub mod fragment;
+pub mod lastconn;
+pub mod masque;
+pub mod masque_h2;
+pub mod netstack;
+pub mod noize;
+pub mod prober;
+pub mod quic;
+pub mod routing;
+// Ours: the VpnService callback that keeps a socket out of the tunnel.
+pub mod sniff;
 mod socketprotect;
 // Public for its access policy: the embedded caller decides who may use the
 // listener, and that type has to cross the crate boundary with the config.
 pub mod socks;
-mod sysprofile;
-mod tls;
-mod tunnelping;
-mod wg_prober;
-mod wireguard;
-mod zerotrust;
+pub mod sysprofile;
+pub mod tls;
+pub mod tunnelping;
+pub mod upstream;
+pub mod wg_prober;
+pub mod wireguard;
+pub mod zerotrust;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -52,8 +61,12 @@ const TUNNEL_MTU: usize = 1280;
 const INNER_MTU: usize = 1200;
 const DEFAULT_CONFIG: &str = "aether.toml";
 
-pub async fn run_cli() -> Result<()> {
-    cli::parse_and_apply()?;
+pub async fn run() -> Result<()> {
+    run_with(std::env::args().skip(1).collect()).await
+}
+
+pub async fn run_with(args: Vec<String>) -> Result<()> {
+    cli::parse_args(args)?;
 
     let level = std::env::var("AETHER_LOG_LEVEL")
         .ok()
@@ -61,9 +74,10 @@ pub async fn run_cli() -> Result<()> {
         .filter(|v| matches!(v.as_str(), "error" | "warn" | "info" | "debug" | "trace"))
         .unwrap_or_else(|| "info".to_string());
     let default_filter = format!("info,aether={level}");
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_filter))
-        .format_timestamp_millis()
-        .init();
+    let _ =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_filter))
+            .format_timestamp_millis()
+            .try_init();
 
     log::info!("Aether v{}", env!("CARGO_PKG_VERSION"));
     sysprofile::log_summary();
@@ -967,6 +981,7 @@ async fn run_gool(
     listen: SocketAddr,
 ) -> Result<()> {
     let mut last_peer: Option<SocketAddr> = None;
+    let mut last_inner: Option<SocketAddr> = None;
     let mut consecutive_fails: u32 = 0;
     const MAX_CONSECUTIVE_FAILS: u32 = 2;
 
@@ -986,11 +1001,18 @@ async fn run_gool(
             None
         };
 
-        let peer = match peer {
-            Some(p) => p,
+        let pair = match peer {
+            Some(p) => Some((p, last_inner)),
             None => {
-                let p = match select_peer(&primary, Protocol::WireGuard).await {
-                    Ok(p) => p,
+                let mode_str = select_scan_mode_str().await;
+                let ip = select_ip_version().await;
+                match select_wg_peers(&primary, &mode_str, ip, 2).await {
+                    Ok(found) => {
+                        consecutive_fails = 0;
+                        let outer = found[0];
+                        let inner = found.get(1).copied();
+                        Some((outer, inner))
+                    }
                     Err(e) => {
                         log::warn!(
                             "[-] no usable outer WARP endpoint found: {e}; rescanning shortly"
@@ -998,16 +1020,33 @@ async fn run_gool(
                         tokio::time::sleep(wg_reconnect_delay()).await;
                         continue;
                     }
-                };
-                consecutive_fails = 0;
-                p
+                }
             }
         };
 
-        log::info!("[+] using cloudflare edge {peer} (outer)");
-        last_peer = Some(peer);
+        let (peer, inner_peer) = match pair {
+            Some(pair) => pair,
+            None => continue,
+        };
 
-        match run_warp_in_warp(primary.clone(), secondary.clone(), peer, listen).await {
+        let inner_peer = match inner_peer {
+            Some(inner) => inner,
+            None => {
+                log::warn!(
+                    "[-] the scan only turned up {peer}, so warp-in-warp would use one edge twice; rescanning"
+                );
+                last_peer = None;
+                last_inner = None;
+                tokio::time::sleep(wg_reconnect_delay()).await;
+                continue;
+            }
+        };
+
+        log::info!("[+] using cloudflare edge {peer} (outer) and {inner_peer} (inner)");
+        last_peer = Some(peer);
+        last_inner = Some(inner_peer);
+
+        match run_warp_in_warp(primary.clone(), secondary.clone(), peer, inner_peer, listen).await {
             Ok(()) => log::warn!("[-] gool tunnel closed; reconnecting"),
             Err(e) => log::warn!("[-] gool tunnel ended: {e}; reconnecting"),
         }
@@ -1306,6 +1345,13 @@ fn derive_sibling_path(base: &str, suffix: &str) -> String {
     }
 }
 
+fn keep_saved_identity() -> bool {
+    !matches!(
+        std::env::var("AETHER_REPROVISION").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 async fn load_or_provision_warp(config_path: &str) -> Result<account::Identity> {
     if let Some(identity) = config::load(config_path)? {
         // A certificate on this identity means a MASQUE key was enrolled onto
@@ -1358,21 +1404,41 @@ async fn load_or_provision_masque(config_path: &str) -> Result<account::Identity
     adopt_legacy_masque_identity(config_path)?;
     if let Some(identity) = config::load(config_path)? {
         log::info!("[+] loaded existing masque identity from {config_path}");
-        if identity.has_masque_credentials() {
+        let refused = if identity.has_masque_credentials() {
             let identity = adopt_team_profile(identity).await;
-            config::save(config_path, &identity)?;
-            return Ok(identity);
-        }
-        log::info!("[+] masque identity needs a certificate; enrolling masque key");
-        let enrollment = account::ensure_masque_enrolled(&identity).await?;
-        let identity = account::Identity {
-            cert_pem: enrollment.cert_pem,
-            key_pem: enrollment.key_pem,
-            cert_issued_at: enrollment.issued_at,
-            ..identity
+            if !identity.refused {
+                config::save(config_path, &identity)?;
+                return Ok(identity);
+            }
+            identity
+        } else {
+            log::info!("[+] masque identity needs a certificate; enrolling masque key");
+            match account::ensure_masque_enrolled(&identity).await {
+                Ok(enrollment) => {
+                    let identity = account::Identity {
+                        cert_pem: enrollment.cert_pem,
+                        key_pem: enrollment.key_pem,
+                        cert_issued_at: enrollment.issued_at,
+                        ..identity
+                    };
+                    config::save(config_path, &identity)?;
+                    return Ok(identity);
+                }
+                Err(AetherError::IdentityRefused(reason)) => {
+                    log::warn!("[-] the saved masque identity was refused: {reason}");
+                    account::Identity {
+                        refused: true,
+                        ..identity
+                    }
+                }
+                Err(error) => return Err(error),
+            }
         };
-        config::save(config_path, &identity)?;
-        return Ok(identity);
+
+        if !keep_saved_identity() {
+            return Ok(refused);
+        }
+        log::warn!("[*] registering a fresh masque account to replace the refused identity");
     }
 
     log::info!("[+] no masque identity found; provisioning dedicated masque account");
@@ -1438,36 +1504,54 @@ async fn select_peer(identity: &account::Identity, protocol: Protocol) -> Result
             Ok(SocketAddr::new(best.ip, best.port))
         }
         Protocol::WireGuard | Protocol::WarpInWarp => {
-            log::info!("[*] hunting for a working WireGuard endpoint (handshake + data-plane verification)");
-            let mode = wg_prober::WgScanMode::parse(&mode_str);
-
-            let private_key = identity.private_key_bytes()?;
-            let peer_public = identity.peer_public_key_bytes()?;
-
-            let probe = wg_prober::WgProbe {
-                private_key: std::sync::Arc::new(private_key),
-                peer_public_key: std::sync::Arc::new(peer_public),
-                client_id: identity.client_id.clone(),
-                local_ipv4: identity
-                    .ipv4
-                    .parse()
-                    .map_err(|_| AetherError::Other("invalid ipv4".into()))?,
-                aethernoize: aethernoize_config(),
-                ports: wireguard::WG_PORTS.to_vec(),
-                ip,
-                excluded: HashSet::new(),
-            };
-
-            let best = wg_prober::hunt_best_wg_endpoint(&probe, mode).await?;
-            log::info!(
-                "[+] selected WireGuard endpoint {}:{} (rtt {:?})",
-                best.ip,
-                best.port,
-                best.rtt
-            );
-            Ok(SocketAddr::new(best.ip, best.port))
+            let peers = select_wg_peers(identity, &mode_str, ip, 1).await?;
+            Ok(peers[0])
         }
     }
+}
+
+async fn select_wg_peers(
+    identity: &account::Identity,
+    mode_str: &str,
+    ip: prober::IpScan,
+    want: usize,
+) -> Result<Vec<SocketAddr>> {
+    log::info!(
+        "[*] hunting for {want} working WireGuard endpoint(s) (handshake + data-plane verification)"
+    );
+    let mode = wg_prober::WgScanMode::parse(mode_str);
+
+    let private_key = identity.private_key_bytes()?;
+    let peer_public = identity.peer_public_key_bytes()?;
+
+    let probe = wg_prober::WgProbe {
+        private_key: std::sync::Arc::new(private_key),
+        peer_public_key: std::sync::Arc::new(peer_public),
+        client_id: identity.client_id.clone(),
+        local_ipv4: identity
+            .ipv4
+            .parse()
+            .map_err(|_| AetherError::Other("invalid ipv4".into()))?,
+        aethernoize: aethernoize_config(),
+        ports: wireguard::WG_PORTS.to_vec(),
+        ip,
+        excluded: HashSet::new(),
+    };
+
+    let found = wg_prober::hunt_wg_endpoints(&probe, mode, want).await?;
+    for pr in &found {
+        log::info!(
+            "[+] selected WireGuard endpoint {}:{} (rtt {:?})",
+            pr.ip,
+            pr.port,
+            pr.rtt
+        );
+    }
+
+    Ok(found
+        .into_iter()
+        .map(|pr| SocketAddr::new(pr.ip, pr.port))
+        .collect())
 }
 
 async fn resolve_ech() -> Option<Vec<u8>> {
@@ -1807,9 +1891,11 @@ async fn run_masque_tunnel(
     )?;
     let _ctrl = ctrl_tx;
 
+    let mut tasks = TaskGuard::new();
+
     let (addr_tx, mut addr_rx) = tokio::sync::mpsc::channel::<quic::AssignedAddr>(8);
     let bridge_stack = stack.clone();
-    tokio::spawn(async move {
+    let bridge_task = tokio::spawn(async move {
         while let Some(a) = addr_rx.recv().await {
             let res = match a.ip {
                 IpAddr::V4(v4) => bridge_stack.set_addrs(Some((v4, a.prefix)), None).await,
@@ -1820,6 +1906,7 @@ async fn run_masque_tunnel(
             }
         }
     });
+    tasks.push(bridge_task.abort_handle());
 
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -1847,6 +1934,7 @@ async fn run_masque_tunnel(
         log::info!("[+] MASQUE transport: HTTP/3 (QUIC) to {}", peer);
         tokio::spawn(quic::run(cfg, internals, Some(addr_tx), Some(ready_tx)))
     };
+    tasks.push(tunnel_task.abort_handle());
 
     let startup_timeout = masque_startup_timeout();
     match tokio::time::timeout(startup_timeout, ready_rx).await {
@@ -1875,8 +1963,18 @@ async fn run_masque_tunnel(
         log::info!("[+] socks5 server listening on {listen}");
         socks::serve(listen, socks_stack).await
     });
+    tasks.push(socks_task.abort_handle());
+
+    let http_task = spawn_http_proxy(&stack);
+    if let Some(task) = &http_task {
+        tasks.push(task.abort_handle());
+    }
 
     let tunnel_result = tunnel_task.await;
+
+    if let Some(task) = &http_task {
+        task.abort();
+    }
     socks_task.abort();
 
     match tunnel_result {
@@ -2498,13 +2596,25 @@ async fn run_wireguard_tunnel(
         outbound_tx,
     )?;
 
+    let mut tasks = TaskGuard::new();
+
     let socks_stack = stack.clone();
     let socks_task = tokio::spawn(async move {
         log::info!("[+] socks5 server listening on {listen}");
         socks::serve(listen, socks_stack).await
     });
+    tasks.push(socks_task.abort_handle());
+
+    let http_task = spawn_http_proxy(&stack);
+    if let Some(task) = &http_task {
+        tasks.push(task.abort_handle());
+    }
 
     let tunnel_result = tunnel.run(outbound_rx).await;
+
+    if let Some(task) = &http_task {
+        task.abort();
+    }
 
     socks_task.abort();
     let _ = socks_task.await;
@@ -2524,6 +2634,30 @@ type TunnelExit = tokio::task::JoinHandle<Result<()>>;
 /// A tunnel that fronts a userspace TCP stack and one that is handed straight to
 /// an Android interface differ only in what consumes these, so they are taken
 /// out here rather than each caller rebuilding the tunnel.
+fn http_proxy_listen() -> Option<SocketAddr> {
+    let raw = std::env::var("AETHER_HTTP_PROXY").ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    match trimmed.parse::<SocketAddr>() {
+        Ok(addr) => Some(addr),
+        Err(_) => {
+            log::warn!("[-] ignoring an unparsable http proxy address: {trimmed}");
+            None
+        }
+    }
+}
+
+fn spawn_http_proxy(stack: &netstack::StackHandle) -> Option<TunnelExit> {
+    let listen = http_proxy_listen()?;
+    let stack = stack.clone();
+    Some(tokio::spawn(async move {
+        log::info!("[+] http proxy listening on {listen}");
+        socks::serve_http(listen, stack).await
+    }))
+}
+
 struct WgChannels {
     /// Packets arriving from the far end.
     inbound_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
@@ -2617,9 +2751,19 @@ async fn establish_wg_channels(
     })
 }
 
-struct ForwarderGuard(Vec<tokio::task::AbortHandle>);
+struct TaskGuard(Vec<tokio::task::AbortHandle>);
 
-impl Drop for ForwarderGuard {
+impl TaskGuard {
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    fn push(&mut self, handle: tokio::task::AbortHandle) {
+        self.0.push(handle);
+    }
+}
+
+impl Drop for TaskGuard {
     fn drop(&mut self) {
         for handle in self.0.drain(..) {
             handle.abort();
@@ -2630,7 +2774,7 @@ impl Drop for ForwarderGuard {
 async fn spawn_udp_forwarder(
     outer: &netstack::StackHandle,
     remote: SocketAddr,
-) -> Result<(SocketAddr, ForwarderGuard)> {
+) -> Result<(SocketAddr, TaskGuard)> {
     let sock = std::sync::Arc::new(tokio::net::UdpSocket::bind("127.0.0.1:0").await?);
     let local = sock.local_addr()?;
 
@@ -2668,7 +2812,7 @@ async fn spawn_udp_forwarder(
         }
     });
 
-    let guard = ForwarderGuard(vec![up_task.abort_handle(), down_task.abort_handle()]);
+    let guard = TaskGuard(vec![up_task.abort_handle(), down_task.abort_handle()]);
 
     Ok((local, guard))
 }
@@ -2677,20 +2821,29 @@ async fn run_warp_in_warp(
     primary: account::Identity,
     secondary: account::Identity,
     peer: SocketAddr,
+    inner_peer: SocketAddr,
     listen: SocketAddr,
 ) -> Result<()> {
+    if inner_peer.ip() == peer.ip() {
+        return Err(AetherError::Other(format!(
+            "warp-in-warp needs two separate edges but both hops landed on {}",
+            peer.ip()
+        )));
+    }
+
     log::info!("[*] establishing outer WARP tunnel to {peer}...");
     let (outer_stack, mut outer_exit) =
         establish_wg(&primary, peer, TUNNEL_MTU, true, 5, "outer").await?;
 
-    let (forwarder, _forwarder_guard) = spawn_udp_forwarder(&outer_stack, peer).await?;
-    log::info!("[+] inner endpoint tunneled through outer warp via {forwarder}");
+    let (forwarder, _forwarder_guard) = spawn_udp_forwarder(&outer_stack, inner_peer).await?;
+    log::info!("[+] inner endpoint {inner_peer} tunneled through outer warp via {forwarder}");
 
     log::info!("[*] establishing inner WARP tunnel (warp-in-warp)...");
     let (inner_stack, mut inner_exit) =
         establish_wg(&secondary, forwarder, INNER_MTU, false, 20, "inner").await?;
 
     log::info!("[+] socks5 server listening on {listen}");
+    let http_task = spawn_http_proxy(&inner_stack);
     let mut socks_task = tokio::spawn(async move { socks::serve(listen, inner_stack).await });
 
     let outcome = tokio::select! {
@@ -2699,6 +2852,9 @@ async fn run_warp_in_warp(
         result = &mut socks_task => join_outcome("socks5 server", result),
     };
 
+    if let Some(task) = &http_task {
+        task.abort();
+    }
     outer_exit.abort();
     inner_exit.abort();
     socks_task.abort();
@@ -2880,6 +3036,8 @@ mod identity_tests {
 
     fn sample_identity(device: &str) -> account::Identity {
         account::Identity {
+            // Upstream now records whether Cloudflare has refused this identity.
+            refused: false,
             device_id: device.into(),
             access_token: "token".into(),
             cert_pem: b"-----BEGIN CERTIFICATE-----".to_vec(),
@@ -3148,6 +3306,8 @@ mod identity_tests {
         // single identity, carrying the MASQUE certificate that was enrolled
         // onto it.
         let identity = account::Identity {
+            // Upstream now records whether Cloudflare has refused this identity.
+            refused: false,
             device_id: "device-from-the-shared-release".into(),
             access_token: "token".into(),
             cert_pem: b"-----BEGIN CERTIFICATE-----".to_vec(),
@@ -3187,6 +3347,8 @@ mod identity_tests {
         let base = base.to_str().unwrap();
 
         let current = account::Identity {
+            // Upstream now records whether Cloudflare has refused this identity.
+            refused: false,
             device_id: "current".into(),
             access_token: "token".into(),
             cert_pem: Vec::new(),

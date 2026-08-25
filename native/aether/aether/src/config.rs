@@ -97,6 +97,7 @@ impl TryFrom<PersistedIdentity> for Identity {
             organization: p.organization,
             gateway_proxy: p.gateway_proxy,
             assigned_endpoint: p.assigned_endpoint,
+            refused: false,
         })
     }
 }
@@ -294,6 +295,7 @@ mod tests {
             organization: "example-team".to_string(),
             gateway_proxy: "172.16.0.1:2480".to_string(),
             assigned_endpoint: "162.159.197.2".to_string(),
+            refused: false,
         }
     }
 

@@ -38,7 +38,7 @@ class SplitTunnelScreenTest {
                     settings = current,
                     engineStatus = EngineStatus(),
                     endpointScannerState = EndpointScannerState(),
-                    nativeVersion = "1.5.0+android.0.2.0",
+                    nativeVersion = "1.7.0+android.0.2.0",
                     onSettingsChange = { current = it; saved = it },
                     onConnect = {},
                     onStop = {},

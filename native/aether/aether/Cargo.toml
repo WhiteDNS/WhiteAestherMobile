@@ -1,17 +1,21 @@
 [package]
 name = "aether"
-version = "1.5.0"
+version = "1.7.0"
 edition = "2021"
 rust-version = "1.88"
-autobins = false
 
 [lib]
 name = "aether"
 path = "src/lib.rs"
+# Upstream also builds a cdylib and a staticlib to export src/ffi.rs as a C
+# API. That file is not vendored here -- native/android-bridge is this
+# project's FFI -- so those two would package a ~900 KB libaether.so per
+# ABI with no entry point anything loads.
+crate-type = ["lib"]
 
 [[bin]]
 name = "aether"
-path = "src/bin/aether.rs"
+path = "src/main.rs"
 
 [dependencies]
 quiche = { path = "../quiche/quiche", default-features = false, features = ["boringssl-boring-crate", "qlog"] }

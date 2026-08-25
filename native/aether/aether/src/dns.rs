@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use tokio::net::UdpSocket;
 use tokio::time::timeout_at;
 
 use crate::error::{AetherError, Result};
@@ -36,14 +35,7 @@ pub async fn fetch_ech_config() -> Result<Vec<u8>> {
 }
 
 async fn query_ech(server: SocketAddr, host: &str) -> Result<Vec<u8>> {
-    let bind = if server.is_ipv4() {
-        "0.0.0.0:0"
-    } else {
-        "[::]:0"
-    };
-    let sock = UdpSocket::bind(bind).await?;
-    crate::socketprotect::protect(&sock)?;
-    sock.connect(server).await?;
+    let (sock, _) = crate::upstream::bind_via_upstream(server).await?;
 
     let (query, id) = build_query(host, RR_HTTPS);
     sock.send(&query).await?;
