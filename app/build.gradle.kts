@@ -1,9 +1,30 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.gradle.api.tasks.Exec
+import org.gradle.api.provider.ValueSource
+import org.gradle.api.provider.ValueSourceParameters
+import org.gradle.process.ExecOperations
+import java.io.ByteArrayOutputStream
+import javax.inject.Inject
 
 val androidAbis = listOf("armeabi-v7a", "arm64-v8a", "x86_64")
 val appVersionCode = providers.gradleProperty("WHITEAESTHER_VERSION_CODE").orElse("1").map { it.toInt() }
-val appVersionName = providers.gradleProperty("WHITEAESTHER_VERSION_NAME").orElse("0.1.0")
+
+/**
+ * What the build calls itself when the release workflow has not said.
+ *
+ * Only that workflow passes WHITEAESTHER_VERSION_NAME, so every other build --
+ * local, CI, and every preview APK handed to someone to test -- used to claim
+ * 0.1.0, a version that has never been released. A tester reporting against it
+ * was reporting against a number nobody could match to a build, and the same
+ * string goes into the diagnostics report.
+ *
+ * `git describe` answers with the last tag plus the distance from it, so a
+ * build off main reads 1.2.1-5-g53ea192 and says exactly what it is. Outside a
+ * checkout there is no answer to give, and 0.0.0-unknown is at least not a
+ * claim to be a release.
+ */
+val describedVersion = providers.of(GitDescribeSource::class) {}.orElse("0.0.0-unknown")
+val appVersionName = providers.gradleProperty("WHITEAESTHER_VERSION_NAME").orElse(describedVersion)
 val abiSplitsEnabled = providers.gradleProperty("WHITEAESTHER_DISABLE_ABI_SPLITS")
     .map { !it.toBoolean() }
     .orElse(true)
@@ -227,3 +248,34 @@ tasks.matching { it.name.matches(Regex("merge(?:Preview|Stable)DebugJniLibFolder
     .configureEach { dependsOn(cargoBuildAndroidDebug) }
 tasks.matching { it.name.matches(Regex("merge(?:Preview|Stable)ReleaseJniLibFolders")) }
     .configureEach { dependsOn(cargoBuildAndroidRelease) }
+
+
+/**
+ * Reads the version out of git, without breaking a build that has no git.
+ *
+ * A ValueSource rather than a plain exec so the configuration cache stays
+ * usable: Gradle tracks this as an input instead of refusing to cache a build
+ * that shelled out during configuration.
+ */
+abstract class GitDescribeSource : ValueSource<String, ValueSourceParameters.None> {
+    @get:Inject
+    abstract val execOperations: ExecOperations
+
+    override fun obtain(): String? {
+        val stdout = ByteArrayOutputStream()
+        val result = runCatching {
+            execOperations.exec {
+                // No --dirty: an uncommitted tree is worth knowing about, but the
+                // version name is read by users in a footer, not by whoever
+                // built it, and "1.2.1-6-gabc1234-dirty" reads as a fault.
+                commandLine("git", "describe", "--tags", "--always")
+                standardOutput = stdout
+                errorOutput = ByteArrayOutputStream()
+                isIgnoreExitValue = true
+            }
+        }.getOrNull() ?: return null
+        if (result.exitValue != 0) return null
+        // The tag is written v1.2.1; the version name is not.
+        return stdout.toString(Charsets.UTF_8).trim().removePrefix("v").ifEmpty { null }
+    }
+}
