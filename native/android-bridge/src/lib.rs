@@ -821,6 +821,6 @@ mod tests {
     #[test]
     fn reports_core_version() {
         assert_eq!(BRIDGE_VERSION.split('.').count(), 3);
-        assert_eq!(aether::version(), "1.5.0");
+        assert_eq!(aether::version(), "1.7.0");
     }
 }

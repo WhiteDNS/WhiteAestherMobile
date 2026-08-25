@@ -167,7 +167,8 @@ fn spawn_reader(
         let mut buf = vec![0u8; 65535];
         loop {
             match sock.recv_from(&mut buf).await {
-                Ok((n, from)) => {
+                Ok((n, observed)) => {
+                    let from = crate::upstream::real_source(local, observed);
                     log::trace!("recv {n} bytes from {from}");
                     if tx.send((local, from, buf[..n].to_vec())).await.is_err() {
                         break;
@@ -198,6 +199,7 @@ pub async fn run(
     let mut validate_successes: u32 = 0;
 
     let init_sock = bind_udp_fast(bind_addr_for(&peer)).await?;
+    crate::upstream::attach_detour(&init_sock, peer).await?;
     let local = init_sock.local_addr()?;
     let init_sock = Arc::new(init_sock);
 
@@ -610,9 +612,11 @@ async fn flush(
         match conn.send(&mut out) {
             Ok((write, send_info)) => {
                 if let Some(sock) = sockets.get(&send_info.from) {
-                    sock.send_to(&out[..write], send_info.to).await?;
-                } else if let Some((_, sock)) = sockets.iter().next() {
-                    sock.send_to(&out[..write], send_info.to).await?;
+                    let to = crate::upstream::relay_target(send_info.from, send_info.to);
+                    sock.send_to(&out[..write], to).await?;
+                } else if let Some((local, sock)) = sockets.iter().next() {
+                    let to = crate::upstream::relay_target(*local, send_info.to);
+                    sock.send_to(&out[..write], to).await?;
                 }
             }
             Err(quiche::Error::Done) => break,
@@ -635,6 +639,7 @@ async fn do_migrate(
     }
 
     let new_sock = bind_udp_fast(bind_addr_for(&peer)).await?;
+    crate::upstream::attach_detour(&new_sock, peer).await?;
     let new_local = new_sock.local_addr()?;
     let new_sock = Arc::new(new_sock);
 
@@ -681,8 +686,10 @@ pub async fn verify_masque(p: &VerifyParams) -> Result<Duration> {
         "[::]:0".parse().unwrap()
     };
     let sock = bind_udp_fast(bind).await?;
-    sock.connect(p.peer).await?;
+    crate::upstream::attach_detour(&sock, p.peer).await?;
     let local = sock.local_addr()?;
+    sock.connect(crate::upstream::relay_target(local, p.peer))
+        .await?;
 
     let mut config = tls::build_config(&TlsParams {
         cert_pem: &p.cert_pem,

@@ -9,9 +9,19 @@ and the GPL-3.0 parts remain GPL-3.0.
 
 ## Aether — AGPL-3.0
 
-The native engine is vendored from `MatinSenPai/Aether` revision
-`21b9872d080bd185600b93ff20b87f3f3e1e7307`. The original license and revision
-record are included under `native/aether/`.
+The native engine is vendored from `CluvexStudio/Aether` revision
+`e05cbd78b8f17873abee553904a85610b88c0382`, released as `v1.7.0`. The original
+license and revision record are included under `native/aether/`.
+
+The project moved: earlier releases name `MatinSenPai/Aether`, which still
+carries the revision shipped up to v1.2.1 but stops at its own `v1.3.0`. Both
+hold identical objects for the tags they share.
+
+The vendored copy is not byte-identical to that revision. It is formatted with
+`cargo fmt`, its line endings are normalised to LF, and `aether/src/ffi.rs` is
+omitted -- nothing here calls upstream's C API, `native/android-bridge` serves
+that purpose, and the omitted file does not build against this tree. Source for
+the complete original is at the revision named above.
 
 Shipped as `libwhiteaesther_core.so`.
 

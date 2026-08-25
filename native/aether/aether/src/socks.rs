@@ -224,23 +224,69 @@ pub async fn serve(listen: SocketAddr, stack: StackHandle) -> Result<()> {
         },
     );
 
+    let mut clients = tokio::task::JoinSet::new();
     loop {
-        let (sock, peer) = listener.accept().await?;
-        if !allowed_source(bind_ip, peer.ip()) {
-            // Not a client with the wrong password: a client from somewhere
-            // the proxy was never meant to be reachable from. Logged loudly
-            // because on a phone it means the listener is exposed to a network
-            // nobody chose to share with.
-            log::warn!("socks5 refused {peer}: not on this device's local network");
-            continue;
-        }
-        let stack = stack.clone();
-        let access = access.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handle_client(sock, stack, bind_ip, &access).await {
-                log::debug!("socks client {peer} ended: {e}");
+        tokio::select! {
+            accept = listener.accept() => {
+                let (sock, peer) = match accept {
+                    Ok(accepted) => accepted,
+                    Err(error) => {
+                        if let Some(delay) = accept_backoff(&error) {
+                            log::warn!(
+                                "socks5 accept failed: {error}; the listener stays open and retries"
+                            );
+                            tokio::time::sleep(delay).await;
+                            continue;
+                        }
+                        log::error!("socks5 listener cannot continue: {error}");
+                        return Err(error.into());
+                    }
+                };
+                if !allowed_source(bind_ip, peer.ip()) {
+                    // Not a client with the wrong password: a client from
+                    // somewhere the proxy was never meant to be reachable
+                    // from. Logged loudly because on a phone it means the
+                    // listener is exposed to a network nobody chose to share
+                    // with.
+                    log::warn!("socks5 refused {peer}: not on this device's local network");
+                    continue;
+                }
+                let stack = stack.clone();
+                let access = access.clone();
+                clients.spawn(async move {
+                    if let Err(e) = handle_client(sock, stack, bind_ip, &access).await {
+                        log::debug!("socks client {peer} ended: {e}");
+                    }
+                });
             }
-        });
+            // Reap finished clients so JoinSet does not grow without bound.
+            Some(_) = clients.join_next(), if !clients.is_empty() => {}
+        }
+    }
+}
+
+pub fn accept_backoff(error: &std::io::Error) -> Option<std::time::Duration> {
+    use std::io::ErrorKind;
+    use std::time::Duration;
+
+    if matches!(
+        error.kind(),
+        ErrorKind::ConnectionAborted
+            | ErrorKind::ConnectionReset
+            | ErrorKind::ConnectionRefused
+            | ErrorKind::Interrupted
+            | ErrorKind::WouldBlock
+            | ErrorKind::TimedOut
+            | ErrorKind::PermissionDenied
+    ) {
+        return Some(Duration::ZERO);
+    }
+
+    match error.raw_os_error() {
+        Some(libc::EMFILE) | Some(libc::ENFILE) | Some(libc::ENOBUFS) | Some(libc::ENOMEM) => {
+            Some(Duration::from_millis(100))
+        }
+        _ => None,
     }
 }
 
@@ -582,21 +628,85 @@ fn skip_name(buf: &[u8], mut pos: usize) -> Option<usize> {
     }
 }
 
+fn decide_route(set: &RuleSet, target: &Target, sniffed: Option<&str>, port: u16) -> Action {
+    match sniffed {
+        Some(name) => match set.decide(Host::Domain(name), port) {
+            Action::Proxy => set.decide(host_of(target), port),
+            decided => decided,
+        },
+        None => set.decide(host_of(target), port),
+    }
+}
+
+fn sniff_enabled() -> bool {
+    !matches!(
+        std::env::var("AETHER_ROUTE_SNIFF").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+fn sniff_window() -> Duration {
+    let ms = std::env::var("AETHER_ROUTE_SNIFF_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|&value| value > 0)
+        .unwrap_or(400);
+    Duration::from_millis(ms)
+}
+
+async fn read_sniff_head(sock: &mut TcpStream) -> Option<Vec<u8>> {
+    let mut head = vec![0u8; crate::sniff::PEEK_BUDGET];
+    match tokio::time::timeout(sniff_window(), sock.read(&mut head)).await {
+        Ok(Ok(0)) => None,
+        Ok(Ok(read)) => {
+            head.truncate(read);
+            Some(head)
+        }
+        Ok(Err(_)) => None,
+        Err(_) => Some(Vec::new()),
+    }
+}
+
 async fn handle_connect(
     mut sock: TcpStream,
     stack: StackHandle,
     target: Target,
     port: u16,
 ) -> Result<()> {
-    match routes().decide(host_of(&target), port) {
+    let mut head = Vec::new();
+    let mut replied = false;
+    let mut named: Option<String> = None;
+
+    if matches!(target, Target::Ip(_)) && sniff_enabled() && routes().has_domain_rules() {
+        reply_bound(&mut sock, "0.0.0.0:0".parse().unwrap()).await?;
+        replied = true;
+
+        head = match read_sniff_head(&mut sock).await {
+            Some(bytes) => bytes,
+            None => return Ok(()),
+        };
+
+        if head.is_empty() {
+            log::trace!("[route] {target}:{port} sent nothing to read a name from");
+        } else {
+            named = crate::sniff::hostname(&head);
+            if let Some(name) = &named {
+                log::debug!("[route] {target}:{port} announced itself as {name}");
+            }
+        }
+    }
+
+    match decide_route(routes(), &target, named.as_deref(), port) {
         Action::Block => {
             log::debug!("[route] block tcp {target}:{port}");
-            let _ = reply(&mut sock, REP_NOT_ALLOWED).await;
+            if !replied {
+                let _ = reply(&mut sock, REP_NOT_ALLOWED).await;
+            }
             return Ok(());
         }
         Action::Direct => {
             log::debug!("[route] direct tcp {target}:{port}");
-            return handle_direct(sock, target, port).await;
+            return handle_direct(sock, target, port, head, replied).await;
         }
         Action::Proxy => {}
     }
@@ -657,9 +767,16 @@ async fn handle_connect(
         }
     };
 
-    reply_bound(&mut sock, "0.0.0.0:0".parse().unwrap()).await?;
+    if !replied {
+        reply_bound(&mut sock, "0.0.0.0:0".parse().unwrap()).await?;
+    }
 
     let (sender, mut from_stack, leftover) = conn;
+
+    if !head.is_empty() && sender.send(head).await.is_err() {
+        return Ok(());
+    }
+
     let (mut rd, mut wr) = sock.into_split();
 
     if !leftover.is_empty() && wr.write_all(&leftover).await.is_err() {
@@ -722,29 +839,46 @@ fn udp_source_allowed(expected_ip: IpAddr, latched: Option<SocketAddr>, from: So
     }
 }
 
-async fn handle_direct(mut sock: TcpStream, target: Target, port: u16) -> Result<()> {
+async fn handle_direct(
+    mut sock: TcpStream,
+    target: Target,
+    port: u16,
+    head: Vec<u8>,
+    replied: bool,
+) -> Result<()> {
     let address = match &target {
         Target::Domain(name) => format!("{name}:{port}"),
         Target::Ip(ip) => SocketAddr::new(*ip, port).to_string(),
     };
 
-    let upstream =
+    let mut upstream =
         match tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(&address)).await {
             Ok(Ok(stream)) => stream,
             Ok(Err(error)) => {
                 log::debug!("[route] direct connect to {address} failed: {error}");
-                let _ = reply(&mut sock, REP_GENERAL).await;
+                if !replied {
+                    let _ = reply(&mut sock, REP_GENERAL).await;
+                }
                 return Ok(());
             }
             Err(_) => {
                 log::debug!("[route] direct connect to {address} timed out");
-                let _ = reply(&mut sock, REP_GENERAL).await;
+                if !replied {
+                    let _ = reply(&mut sock, REP_GENERAL).await;
+                }
                 return Ok(());
             }
         };
 
     let _ = upstream.set_nodelay(true);
-    reply_bound(&mut sock, "0.0.0.0:0".parse().unwrap()).await?;
+
+    if !head.is_empty() && upstream.write_all(&head).await.is_err() {
+        return Ok(());
+    }
+
+    if !replied {
+        reply_bound(&mut sock, "0.0.0.0:0".parse().unwrap()).await?;
+    }
 
     let (mut client_rd, mut client_wr) = sock.into_split();
     let (mut remote_rd, mut remote_wr) = upstream.into_split();
@@ -994,6 +1128,52 @@ fn build_udp_reply(src: SocketAddr, data: &[u8]) -> Vec<u8> {
     pkt.extend_from_slice(&src.port().to_be_bytes());
     pkt.extend_from_slice(data);
     pkt
+}
+
+#[cfg(test)]
+mod accept_tests {
+    use super::accept_backoff;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn a_dropped_client_never_takes_the_listener_down() {
+        for kind in [
+            ErrorKind::ConnectionAborted,
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionRefused,
+            ErrorKind::Interrupted,
+            ErrorKind::WouldBlock,
+            ErrorKind::TimedOut,
+            ErrorKind::PermissionDenied,
+        ] {
+            assert!(
+                accept_backoff(&Error::from(kind)).is_some(),
+                "{kind:?} should keep the listener alive"
+            );
+        }
+    }
+
+    #[test]
+    fn running_out_of_descriptors_backs_off_instead_of_spinning() {
+        for code in [libc::EMFILE, libc::ENFILE, libc::ENOBUFS, libc::ENOMEM] {
+            let delay = accept_backoff(&Error::from_raw_os_error(code))
+                .expect("resource exhaustion should be survivable");
+            assert!(
+                !delay.is_zero(),
+                "os error {code} should pause before retrying"
+            );
+        }
+    }
+
+    #[test]
+    fn a_broken_listener_is_still_fatal() {
+        for kind in [ErrorKind::InvalidInput, ErrorKind::AddrNotAvailable] {
+            assert!(
+                accept_backoff(&Error::from(kind)).is_none(),
+                "{kind:?} should stop the listener"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1320,5 +1500,467 @@ mod tests {
                 QTYPE_A
             ));
         }
+    }
+}
+
+const HTTP_HEAD_LIMIT: usize = 16 * 1024;
+
+pub async fn serve_http(listen: SocketAddr, stack: StackHandle) -> Result<()> {
+    let listener = TcpListener::bind(listen).await?;
+    log::info!("http proxy listening on {listen}");
+
+    loop {
+        let (sock, peer) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                if let Some(delay) = accept_backoff(&error) {
+                    log::warn!(
+                        "http proxy accept failed: {error}; the listener stays open and retries"
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                log::error!("http proxy listener cannot continue: {error}");
+                return Err(error.into());
+            }
+        };
+
+        let stack = stack.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handle_http_client(sock, stack).await {
+                log::debug!("http proxy client {peer} ended: {e}");
+            }
+        });
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct HttpRequestLine {
+    pub method: String,
+    pub authority: String,
+    pub port: u16,
+    pub rewritten: Option<String>,
+}
+
+pub fn parse_authority(raw: &str, default_port: u16) -> Option<(String, u16)> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    if let Some(rest) = raw.strip_prefix('[') {
+        let (host, tail) = rest.split_once(']')?;
+        if host.is_empty() {
+            return None;
+        }
+        let port = match tail.strip_prefix(':') {
+            Some(value) => value.parse().ok()?,
+            None => default_port,
+        };
+        return Some((host.to_string(), port));
+    }
+
+    match raw.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') => {
+            if host.is_empty() {
+                return None;
+            }
+            Some((host.to_string(), port.parse().ok()?))
+        }
+        _ => Some((raw.to_string(), default_port)),
+    }
+}
+
+pub fn parse_request_line(line: &str) -> Option<HttpRequestLine> {
+    let mut parts = line.split_whitespace();
+    let method = parts.next()?.to_string();
+    let target = parts.next()?;
+    let version = parts.next().unwrap_or("HTTP/1.1");
+
+    if method.eq_ignore_ascii_case("CONNECT") {
+        let (authority, port) = parse_authority(target, 443)?;
+        return Some(HttpRequestLine {
+            method,
+            authority,
+            port,
+            rewritten: None,
+        });
+    }
+
+    let without_scheme = target
+        .strip_prefix("http://")
+        .or_else(|| target.strip_prefix("HTTP://"))?;
+    let (authority_part, path) = match without_scheme.find('/') {
+        Some(index) => (&without_scheme[..index], &without_scheme[index..]),
+        None => (without_scheme, "/"),
+    };
+    let (authority, port) = parse_authority(authority_part, 80)?;
+
+    Some(HttpRequestLine {
+        method: method.clone(),
+        authority,
+        port,
+        rewritten: Some(format!("{method} {path} {version}\r\n")),
+    })
+}
+
+async fn read_head(sock: &mut TcpStream) -> Result<Vec<u8>> {
+    let mut head = Vec::with_capacity(1024);
+    let mut byte = [0u8; 1];
+
+    loop {
+        let read = sock.read(&mut byte).await?;
+        if read == 0 {
+            return Err(AetherError::Other(
+                "the http client closed before sending a request".into(),
+            ));
+        }
+        head.push(byte[0]);
+
+        if head.len() >= 4 && head[head.len() - 4..] == *b"\r\n\r\n" {
+            return Ok(head);
+        }
+        if head.len() > HTTP_HEAD_LIMIT {
+            return Err(AetherError::Other("http request head too large".into()));
+        }
+    }
+}
+
+async fn open_tunneled(stack: &StackHandle, target: Target, port: u16) -> Result<GatewayChannel> {
+    let via_gateway = gateway_proxy().filter(|_| should_use_gateway(port));
+
+    if let Some(proxy) = via_gateway {
+        let authority = match &target {
+            Target::Domain(name) => name.clone(),
+            Target::Ip(ip) => ip.to_string(),
+        };
+        match open_through_gateway(stack, proxy, &authority, port).await {
+            Ok(conn) => return Ok(conn),
+            Err(e) => retire_gateway(&e.to_string()),
+        }
+    }
+
+    let ip = resolve(stack, target).await?;
+    let conn = stack.open_tcp(SocketAddr::new(ip, port)).await?;
+    let (sender, from_stack) = conn.into_split();
+    Ok((sender, from_stack, Vec::new()))
+}
+
+async fn handle_http_client(mut sock: TcpStream, stack: StackHandle) -> Result<()> {
+    let head = read_head(&mut sock).await?;
+    let text = String::from_utf8_lossy(&head).to_string();
+    let first_line = text.lines().next().unwrap_or_default();
+
+    let request = match parse_request_line(first_line) {
+        Some(value) => value,
+        None => {
+            let _ = sock
+                .write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+                .await;
+            return Err(AetherError::Other(format!(
+                "unsupported http proxy request: {first_line}"
+            )));
+        }
+    };
+
+    let target = match request.authority.parse::<IpAddr>() {
+        Ok(ip) => Target::Ip(ip),
+        Err(_) => Target::Domain(request.authority.clone()),
+    };
+
+    let channel = match routes().decide(host_of(&target), request.port) {
+        Action::Block => {
+            log::debug!("[route] block http {}:{}", request.authority, request.port);
+            let _ = sock
+                .write_all(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+                .await;
+            return Ok(());
+        }
+        Action::Direct => {
+            log::debug!("[route] direct http {}:{}", request.authority, request.port);
+            return relay_http_direct(sock, &request, &head).await;
+        }
+        Action::Proxy => match open_tunneled(&stack, target, request.port).await {
+            Ok(channel) => channel,
+            Err(error) => {
+                let _ = sock
+                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
+                    .await;
+                return Err(error);
+            }
+        },
+    };
+
+    let (sender, mut from_stack, leftover) = channel;
+
+    let preamble = match &request.rewritten {
+        Some(line) => {
+            let rest = text.split_once("\r\n").map(|(_, tail)| tail).unwrap_or("");
+            Some(format!("{line}{rest}").into_bytes())
+        }
+        None => None,
+    };
+
+    if request.rewritten.is_none() {
+        sock.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            .await?;
+    }
+
+    let (mut rd, mut wr) = sock.into_split();
+
+    if !leftover.is_empty() && wr.write_all(&leftover).await.is_err() {
+        return Ok(());
+    }
+    if let Some(bytes) = preamble {
+        if sender.send(bytes).await.is_err() {
+            return Ok(());
+        }
+    }
+
+    let up = tokio::spawn(async move {
+        let mut buf = vec![0u8; 16384];
+        loop {
+            match rd.read(&mut buf).await {
+                Ok(0) => {
+                    sender.close().await;
+                    break;
+                }
+                Ok(n) => {
+                    if sender.send(buf[..n].to_vec()).await.is_err() {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    sender.close().await;
+                    break;
+                }
+            }
+        }
+    });
+
+    while let Some(chunk) = from_stack.recv().await {
+        if wr.write_all(&chunk).await.is_err() {
+            break;
+        }
+    }
+
+    let _ = wr.shutdown().await;
+    up.abort();
+    Ok(())
+}
+
+async fn relay_http_direct(
+    mut sock: TcpStream,
+    request: &HttpRequestLine,
+    head: &[u8],
+) -> Result<()> {
+    let upstream = tokio::net::TcpStream::connect((request.authority.as_str(), request.port)).await;
+
+    let mut upstream = match upstream {
+        Ok(stream) => stream,
+        Err(error) => {
+            let _ = sock
+                .write_all(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
+                .await;
+            return Err(error.into());
+        }
+    };
+
+    match &request.rewritten {
+        Some(line) => {
+            let text = String::from_utf8_lossy(head).to_string();
+            let rest = text.split_once("\r\n").map(|(_, tail)| tail).unwrap_or("");
+            upstream
+                .write_all(format!("{line}{rest}").as_bytes())
+                .await?;
+        }
+        None => {
+            sock.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                .await?;
+        }
+    }
+
+    let _ = tokio::io::copy_bidirectional(&mut sock, &mut upstream).await;
+    Ok(())
+}
+
+#[cfg(test)]
+mod http_proxy_tests {
+    use super::{parse_authority, parse_request_line};
+
+    #[test]
+    fn a_connect_request_carries_the_host_and_port() {
+        let parsed = parse_request_line("CONNECT ipwho.is:443 HTTP/1.1").expect("parsed");
+        assert_eq!(parsed.method, "CONNECT");
+        assert_eq!(parsed.authority, "ipwho.is");
+        assert_eq!(parsed.port, 443);
+        assert!(parsed.rewritten.is_none());
+    }
+
+    #[test]
+    fn a_connect_request_without_a_port_defaults_to_https() {
+        let parsed = parse_request_line("CONNECT example.com HTTP/1.1").expect("parsed");
+        assert_eq!(parsed.port, 443);
+    }
+
+    #[test]
+    fn an_absolute_get_is_rewritten_to_origin_form() {
+        let parsed = parse_request_line("GET http://ip-api.com/json/?fields=query HTTP/1.1")
+            .expect("parsed");
+        assert_eq!(parsed.authority, "ip-api.com");
+        assert_eq!(parsed.port, 80);
+        assert_eq!(
+            parsed.rewritten.as_deref(),
+            Some("GET /json/?fields=query HTTP/1.1\r\n")
+        );
+    }
+
+    #[test]
+    fn an_absolute_url_without_a_path_gets_a_root_path() {
+        let parsed = parse_request_line("GET http://example.com HTTP/1.1").expect("parsed");
+        assert_eq!(parsed.rewritten.as_deref(), Some("GET / HTTP/1.1\r\n"));
+    }
+
+    #[test]
+    fn an_explicit_port_in_an_absolute_url_is_honoured() {
+        let parsed = parse_request_line("GET http://example.com:8080/x HTTP/1.1").expect("parsed");
+        assert_eq!(parsed.port, 8080);
+        assert_eq!(parsed.authority, "example.com");
+    }
+
+    #[test]
+    fn ipv6_authorities_are_understood() {
+        let parsed = parse_request_line("CONNECT [2606:4700::1]:443 HTTP/1.1").expect("parsed");
+        assert_eq!(parsed.authority, "2606:4700::1");
+        assert_eq!(parsed.port, 443);
+
+        let bare = parse_authority("[2606:4700::1]", 443).expect("parsed");
+        assert_eq!(bare, ("2606:4700::1".to_string(), 443));
+    }
+
+    #[test]
+    fn origin_form_requests_are_refused_because_a_proxy_needs_the_host() {
+        assert!(parse_request_line("GET /json HTTP/1.1").is_none());
+    }
+
+    #[test]
+    fn https_absolute_urls_are_refused_since_clients_must_use_connect() {
+        assert!(parse_request_line("GET https://example.com/ HTTP/1.1").is_none());
+    }
+
+    #[test]
+    fn a_malformed_line_is_rejected() {
+        assert!(parse_request_line("").is_none());
+        assert!(parse_request_line("CONNECT").is_none());
+    }
+}
+
+#[cfg(test)]
+mod sniff_route_tests {
+    use super::*;
+
+    fn ip(value: &str) -> Target {
+        Target::Ip(value.parse().unwrap())
+    }
+
+    #[test]
+    fn a_domain_rule_reaches_traffic_that_arrived_as_an_address() {
+        let set = RuleSet::parse("ads.example", "");
+        assert_eq!(
+            decide_route(&set, &ip("93.184.216.34"), None, 443),
+            Action::Proxy
+        );
+        assert_eq!(
+            decide_route(&set, &ip("93.184.216.34"), Some("ads.example"), 443),
+            Action::Block
+        );
+        assert_eq!(
+            decide_route(&set, &ip("93.184.216.34"), Some("tracker.ads.example"), 443),
+            Action::Block
+        );
+    }
+
+    #[test]
+    fn a_sniffed_name_can_send_traffic_direct() {
+        let set = RuleSet::parse("", "internal.example");
+        assert_eq!(
+            decide_route(&set, &ip("10.1.2.3"), Some("internal.example"), 443),
+            Action::Direct
+        );
+    }
+
+    #[test]
+    fn an_address_rule_still_applies_when_the_name_says_nothing() {
+        let set = RuleSet::parse("10.0.0.0/8", "");
+        assert_eq!(
+            decide_route(&set, &ip("10.1.2.3"), Some("unlisted.example"), 443),
+            Action::Block
+        );
+    }
+
+    #[test]
+    fn a_name_that_matches_nothing_leaves_the_address_decision_alone() {
+        let set = RuleSet::parse("ads.example", "private");
+        assert_eq!(
+            decide_route(&set, &ip("192.168.1.5"), Some("unlisted.example"), 443),
+            Action::Direct
+        );
+    }
+
+    #[test]
+    fn a_domain_target_is_decided_on_its_own_name() {
+        let set = RuleSet::parse("ads.example", "");
+        let target = Target::Domain("ads.example".to_string());
+        assert_eq!(decide_route(&set, &target, None, 443), Action::Block);
+    }
+
+    #[tokio::test]
+    async fn a_server_speaks_first_protocol_survives_the_sniff_window() {
+        std::env::set_var("AETHER_ROUTE_SNIFF_MS", "50");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let quiet = tokio::spawn(async move {
+            let _client = tokio::net::TcpStream::connect(address).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(400)).await;
+        });
+
+        let (mut server, _) = listener.accept().await.unwrap();
+        let head = read_sniff_head(&mut server).await;
+        std::env::remove_var("AETHER_ROUTE_SNIFF_MS");
+
+        assert_eq!(
+            head,
+            Some(Vec::new()),
+            "a client that waits for a greeting must not be treated as gone"
+        );
+        quiet.abort();
+    }
+
+    #[tokio::test]
+    async fn a_client_that_hangs_up_is_reported_as_gone() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let client = tokio::net::TcpStream::connect(address).await.unwrap();
+            drop(client);
+        });
+
+        let (mut server, _) = listener.accept().await.unwrap();
+        assert_eq!(read_sniff_head(&mut server).await, None);
+    }
+
+    #[test]
+    fn sniffing_is_on_unless_it_is_turned_off() {
+        std::env::remove_var("AETHER_ROUTE_SNIFF");
+        assert!(sniff_enabled());
+        std::env::set_var("AETHER_ROUTE_SNIFF", "0");
+        assert!(!sniff_enabled());
+        std::env::set_var("AETHER_ROUTE_SNIFF", "off");
+        assert!(!sniff_enabled());
+        std::env::set_var("AETHER_ROUTE_SNIFF", "1");
+        assert!(sniff_enabled());
+        std::env::remove_var("AETHER_ROUTE_SNIFF");
     }
 }

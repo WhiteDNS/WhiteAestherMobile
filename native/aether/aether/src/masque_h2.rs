@@ -21,32 +21,6 @@ use crate::tls;
 const H2_ALPN: &[u8] = b"\x02h2";
 const CHROME_GROUPS: &str = "P-256:X25519:P-384";
 
-async fn connect_tcp(peer: SocketAddr) -> Result<TcpStream> {
-    use socket2::{Domain, Protocol, Socket, Type};
-
-    let domain = if peer.is_ipv4() {
-        Domain::IPV4
-    } else {
-        Domain::IPV6
-    };
-    let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP)).map_err(AetherError::Io)?;
-    socket.set_nonblocking(true).map_err(AetherError::Io)?;
-    crate::socketprotect::protect(&socket)?;
-    match socket.connect(&peer.into()) {
-        Ok(()) => {}
-        Err(error)
-            if error.kind() == std::io::ErrorKind::WouldBlock
-                || error.raw_os_error() == Some(libc::EINPROGRESS) => {}
-        Err(error) => return Err(AetherError::Io(error)),
-    }
-    let stream = TcpStream::from_std(socket.into()).map_err(AetherError::Io)?;
-    stream.writable().await.map_err(AetherError::Io)?;
-    if let Some(error) = stream.take_error().map_err(AetherError::Io)? {
-        return Err(AetherError::Io(error));
-    }
-    Ok(stream)
-}
-
 struct AbortOnDrop(tokio::task::JoinHandle<()>);
 
 impl Drop for AbortOnDrop {
@@ -199,13 +173,23 @@ fn build_connect_request(cfg: &H2TunnelConfig) -> Result<http::Request<()>> {
         .map_err(|e| AetherError::Masque(format!("build request: {e}")))
 }
 
+pub async fn dial(peer: std::net::SocketAddr) -> Result<TcpStream> {
+    match crate::upstream::configured() {
+        Some(proxy) => proxy.connect(peer).await,
+        // Not TcpStream::connect: the socket has to be protected before the
+        // SYN leaves, or on Android it goes out through the tunnel this
+        // connection is being made to build.
+        None => crate::socketprotect::connect_tcp(peer).await,
+    }
+}
+
 pub async fn verify_h2(cfg: &H2TunnelConfig, timeout: Duration) -> Result<Duration> {
     let start = Instant::now();
     let data_check = data_check_enabled();
 
     let attempt = async {
         let tls_config = build_tls(cfg)?;
-        let tcp = connect_tcp(cfg.peer).await?;
+        let tcp = dial(cfg.peer).await?;
         let _ = tcp.set_nodelay(true);
         let fragment = FragmentingStream::new(tcp, FragmentConfig::from_env());
         let tls = tokio_boring::connect(tls_config, &cfg.sni, fragment)
@@ -316,7 +300,7 @@ pub async fn run(
     let tls_config = build_tls(&cfg)?;
 
     log_or_debug(quiet, format!("[h2] connecting tcp to {}", cfg.peer));
-    let tcp = connect_tcp(cfg.peer).await?;
+    let tcp = dial(cfg.peer).await?;
     let _ = tcp.set_nodelay(true);
 
     let frag_cfg = FragmentConfig::from_env();

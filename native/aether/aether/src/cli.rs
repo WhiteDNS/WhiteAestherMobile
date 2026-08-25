@@ -5,6 +5,8 @@ Usage: aether [OPTIONS]
 
 Connection:
   --bind <addr>            local SOCKS5 listen address (default 127.0.0.1:1819)
+  --http-proxy <addr>      also expose an HTTP CONNECT proxy on this address
+                           (off by default, e.g. 127.0.0.1:1820)
   --quick-reconnect        auto-accept reconnecting with the last known working gateway
   --no-quick-reconnect     always scan fresh, ignore any saved last-connection gateway
   -4                       scan/connect over IPv4 only (default)
@@ -94,7 +96,10 @@ Advanced:
 ";
 
 pub fn parse_and_apply() -> crate::error::Result<()> {
-    let args: Vec<String> = env::args().skip(1).collect();
+    parse_args(env::args().skip(1).collect())
+}
+
+pub fn parse_args(args: Vec<String>) -> crate::error::Result<()> {
     let mut i = 0;
 
     while i < args.len() {
@@ -121,6 +126,8 @@ pub fn parse_and_apply() -> crate::error::Result<()> {
             }
 
             "--bind" => set("AETHER_SOCKS", next_value!()),
+            "--http-proxy" => set("AETHER_HTTP_PROXY", next_value!()),
+            "--upstream" => set("AETHER_UPSTREAM", next_value!()),
             "--quick-reconnect" => set("AETHER_QUICK_RECONNECT", "1"),
             "--no-quick-reconnect" => set("AETHER_QUICK_RECONNECT", "0"),
 
