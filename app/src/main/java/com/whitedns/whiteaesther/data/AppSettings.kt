@@ -157,6 +157,25 @@ data class AppSettings(
     // The second hop. Carried to the service beside the engine config rather
     // than inside it -- mihomo's settings are not the engine's business.
     val chain: ChainSettings = ChainSettings(),
+    /**
+     * Set once this device has been shown to ignore the standard exemption
+     * request: the user opened the dialog and came back still not exempt.
+     *
+     * Not a manufacturer check. Several OEMs keep their own battery policy
+     * beside Android's and grant only that one, and the class names their
+     * settings live behind are undocumented and move between versions. What
+     * the request did is observable; who built the phone does not have to be.
+     */
+    val batteryRequestIgnored: Boolean = false,
+    /**
+     * The user said they have handled it themselves.
+     *
+     * Needed because on a phone that ignores the request there is nothing left
+     * to read: the platform answer stays false however well the user has
+     * excluded the app in the manufacturer's own settings, so a notice that
+     * only clears itself would never clear.
+     */
+    val batteryNoticeDismissed: Boolean = false,
     // Presentation only -- deliberately absent from toNativeJson.
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val showAdvanced: Boolean = false,

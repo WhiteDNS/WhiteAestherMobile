@@ -37,6 +37,15 @@ class MainActivity : ComponentActivity() {
     private var pendingSettings: AppSettings? = null
     private var batteryExempt by mutableStateOf(true)
 
+    /**
+     * True between opening the exemption dialog and coming back from it.
+     *
+     * The dialog reports nothing, so returning while still not exempt is the
+     * only evidence that this phone did not act on the request. Without it,
+     * a user who simply declined would be told their phone is at fault.
+     */
+    private var batteryRequestOpen = false
+
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) {
@@ -79,6 +88,17 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         batteryExempt = isIgnoringBatteryOptimizations()
+        if (batteryRequestOpen) {
+            batteryRequestOpen = false
+            // Exempt now means the standard path worked here, which is worth
+            // recording too: a phone that once honoured the request should not
+            // be accused later if the user revokes the exemption by hand.
+            val settings = viewModel.settings.value
+            val ignored = !batteryExempt
+            if (settings.batteryRequestIgnored != ignored) {
+                viewModel.save(settings.copy(batteryRequestIgnored = ignored))
+            }
+        }
     }
 
     private fun isIgnoringBatteryOptimizations(): Boolean =
@@ -92,9 +112,26 @@ class MainActivity : ComponentActivity() {
     private fun requestBatteryExemption() {
         val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
             .setData(Uri.parse("package:$packageName"))
+        batteryRequestOpen = true
         runCatching { startActivity(intent) }.onFailure {
             runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                .onFailure { batteryRequestOpen = false }
         }
+    }
+
+    /**
+     * This app's own page in system settings, where every manufacturer puts
+     * its battery policy somewhere.
+     *
+     * Deliberately not an OEM-specific screen. The activities those live
+     * behind are internal, unstable across versions, and reached by class
+     * name; one that has been renamed throws, and one that has been removed
+     * opens nothing. This intent is part of the platform and always resolves.
+     */
+    private fun openAppSettings() {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            .setData(Uri.parse("package:$packageName"))
+        runCatching { startActivity(intent) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -133,6 +170,7 @@ class MainActivity : ComponentActivity() {
                     onClearLog = EngineLog::clear,
                     batteryExempt = batteryExempt,
                     onRequestBatteryExemption = ::requestBatteryExemption,
+                    onOpenAppSettings = ::openAppSettings,
                 )
             }
         }

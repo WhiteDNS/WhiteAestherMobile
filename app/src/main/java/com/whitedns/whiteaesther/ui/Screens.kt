@@ -971,6 +971,7 @@ fun SettingsScreen(
     onSettingsChange: (AppSettings) -> Unit,
     batteryExempt: Boolean,
     onRequestBatteryExemption: () -> Unit,
+    onOpenAppSettings: () -> Unit,
     onGoToDiagnostics: () -> Unit,
     onGoToAbout: () -> Unit,
     onGoToIdentity: () -> Unit,
@@ -1003,23 +1004,57 @@ fun SettingsScreen(
         }
 
         // Doze and OEM battery managers drop the tunnel with the screen off.
-        // Only offered when it is actually needed.
-        if (!batteryExempt) {
+        // Only offered when it is actually needed, and dropped for good once
+        // the user says they have dealt with it -- on a phone that ignores the
+        // request there is no platform answer left to wait for.
+        if (!batteryExempt && !settings.batteryNoticeDismissed) {
             Spacer(Modifier.height(12.dp))
             AetherCard {
-                CardHead(
-                    "Keep running in the background",
-                    "Android is allowed to suspend WhiteAesther while the screen is off, " +
-                        "which drops the connection. Excluding it from battery optimisation stops that.",
-                )
-                Box(Modifier.padding(11.dp)) {
-                    PrimaryButton(
-                        text = "Allow background running",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("battery-exemption-button"),
-                        onClick = onRequestBatteryExemption,
+                if (settings.batteryRequestIgnored) {
+                    // The dialog was opened and changed nothing, so repeating
+                    // it is the one thing already known not to work here.
+                    CardHead(
+                        "Set this in your phone's settings",
+                        "This phone keeps its own battery rules beside Android's, and the " +
+                            "prompt did not change them. Open Settings, find Battery for " +
+                            "WhiteAesther, and choose the unrestricted option.",
                     )
+                    Column(
+                        Modifier.padding(11.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        PrimaryButton(
+                            text = "Open app settings",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("battery-app-settings-button"),
+                            onClick = onOpenAppSettings,
+                        )
+                        OutlineButton(
+                            text = "I've done this",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("battery-dismiss-button"),
+                            onClick = {
+                                onSettingsChange(settings.copy(batteryNoticeDismissed = true))
+                            },
+                        )
+                    }
+                } else {
+                    CardHead(
+                        "Keep running in the background",
+                        "Android is allowed to suspend WhiteAesther while the screen is off, " +
+                            "which drops the connection. Excluding it from battery optimisation stops that.",
+                    )
+                    Box(Modifier.padding(11.dp)) {
+                        PrimaryButton(
+                            text = "Allow background running",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("battery-exemption-button"),
+                            onClick = onRequestBatteryExemption,
+                        )
+                    }
                 }
             }
         }

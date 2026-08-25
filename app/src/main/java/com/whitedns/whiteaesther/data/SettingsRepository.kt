@@ -31,6 +31,8 @@ class SettingsRepository(private val context: Context) {
             encryptedHello = preferences[ENCRYPTED_HELLO] ?: false,
             chain = ChainSettings.decode(preferences[CHAIN]),
             splitTunnel = SplitTunnel.decode(preferences[SPLIT_TUNNEL]),
+            batteryRequestIgnored = preferences[BATTERY_REQUEST_IGNORED] ?: false,
+            batteryNoticeDismissed = preferences[BATTERY_NOTICE_DISMISSED] ?: false,
         )
     }
 
@@ -52,6 +54,8 @@ class SettingsRepository(private val context: Context) {
             preferences[ENCRYPTED_HELLO] = settings.encryptedHello
             preferences[CHAIN] = settings.chain.encode()
             preferences[SPLIT_TUNNEL] = settings.splitTunnel.encode()
+            preferences[BATTERY_REQUEST_IGNORED] = settings.batteryRequestIgnored
+            preferences[BATTERY_NOTICE_DISMISSED] = settings.batteryNoticeDismissed
         }
     }
 
@@ -77,5 +81,10 @@ class SettingsRepository(private val context: Context) {
         // of sources, which preferences have no type for.
         val CHAIN = stringPreferencesKey("chain")
         val SPLIT_TUNNEL = stringPreferencesKey("split_tunnel")
+        // Both survive a restart deliberately. The first is a fact about this
+        // phone that re-asking cannot establish a second time, and the second
+        // is an answer the user should not have to give again.
+        val BATTERY_REQUEST_IGNORED = booleanPreferencesKey("battery_request_ignored")
+        val BATTERY_NOTICE_DISMISSED = booleanPreferencesKey("battery_notice_dismissed")
     }
 }
