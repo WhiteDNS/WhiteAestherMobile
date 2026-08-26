@@ -169,7 +169,7 @@ dependencies {
     // android.jar ships org.json as stubs that throw, so anything that touches
     // JSON is untestable on the JVM without a real one. This is the same
     // implementation Android itself uses.
-    testImplementation("org.json:json:20250517")
+    testImplementation("org.json:json:20260814")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.11.4")
