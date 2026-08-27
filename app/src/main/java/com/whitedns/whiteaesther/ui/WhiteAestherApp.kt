@@ -99,6 +99,7 @@ fun WhiteAestherApp(
     addresses: AddressPair = AddressPair(),
     traffic: TrafficSample = TrafficSample(),
     update: UpdateChecker.Available? = null,
+    onLiftBlock: () -> Unit = {},
     onOpenUpdate: (String) -> Unit = {},
     onDismissUpdate: () -> Unit = {},
     batteryExempt: Boolean = true,
@@ -124,6 +125,7 @@ fun WhiteAestherApp(
                     traffic = traffic,
                     chainSelection = chainState.selected,
                     update = update,
+                    onLiftBlock = onLiftBlock,
                     onOpenUpdate = onOpenUpdate,
                     onDismissUpdate = onDismissUpdate,
                     // STOPPING is deliberately not actionable. The service takes

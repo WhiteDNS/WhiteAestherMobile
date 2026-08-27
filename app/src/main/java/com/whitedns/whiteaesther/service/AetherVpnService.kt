@@ -59,6 +59,14 @@ class AetherVpnService : VpnService() {
         var restartPolicy = START_NOT_STICKY
         when (intent?.action) {
             ACTION_STOP -> stopFromUser()
+            ACTION_LIFT_BLOCK -> {
+                dropBlackhole()
+                blockAfterStop = false
+                EngineStatusStore.update(EngineStatus())
+                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                stopSelf(startId)
+                return START_NOT_STICKY
+            }
             ACTION_START -> {
                 val configJson = intent.getStringExtra(EXTRA_CONFIG)
                 if (configJson == null) {
@@ -68,6 +76,10 @@ class AetherVpnService : VpnService() {
                 }
                 val chainSettings = intent.getStringExtra(EXTRA_CHAIN)
                 val splitSettings = intent.getStringExtra(EXTRA_SPLIT)
+                // Held for the life of the session: giveUp runs long after
+                // this, and is not a place that can read DataStore.
+                blockOnFailure = intent.getBooleanExtra(EXTRA_KILL_SWITCH, false)
+                blockAfterStop = intent.getBooleanExtra(EXTRA_STRICT_KILL, false)
                 if (JSONObject(configJson).optString("mode") == "tun") {
                     preferences.edit {
                         putString(LAST_TUN_CONFIG, configJson)
@@ -114,6 +126,7 @@ class AetherVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        dropBlackhole()
         generation += 1
         runCatching { chain.stop() }
         NativeAetherBridge.stop()
@@ -484,6 +497,8 @@ class AetherVpnService : VpnService() {
     }
 
     private fun reportConnected(mode: EngineMode, peer: String?, message: String) {
+        // A working tunnel is the answer to whatever the blocking was for.
+        dropBlackhole()
         // The session's byte counting starts here, not when a screen opens, so
         // the totals cover the whole session however late somebody looks.
         TrafficMeter.start()
@@ -637,6 +652,55 @@ class AetherVpnService : VpnService() {
         EngineLog.record(LogLevel.INFO, "split", "coverage ${rules.summary().lowercase()}")
     }
 
+    /**
+     * An interface that carries the default routes and forwards nothing.
+     *
+     * The whole feature in one idea: a VpnService interface exists whether or
+     * not anything reads from its descriptor, and while one is up with a
+     * default route the kernel sends traffic into it rather than out of the
+     * phone. So packets stop here instead of resuming over the ordinary route
+     * the moment a tunnel dies.
+     *
+     * No DNS server is offered, which matters more than it looks: a resolver
+     * left over from the real session would be reachable outside the tunnel
+     * and would answer, leaking exactly the names the tunnel was hiding.
+     */
+    private fun raiseBlackhole(reason: String): Boolean {
+        if (blackhole != null) return true
+        val configureIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val builder = Builder()
+            .setSession("WhiteAesther blocking")
+            .setConfigureIntent(configureIntent)
+            .setMtu(MASQUE_MTU)
+            .addAddress(BLACKHOLE_IPV4, 32)
+            .addRoute("0.0.0.0", 0)
+            .addRoute("::", 0)
+        // This app is always excluded. Left inside its own blackhole it could
+        // not reach Cloudflare to reconnect, so the switch would block the one
+        // thing able to lift it.
+        runCatching { builder.addDisallowedApplication(packageName) }
+        blackhole = runCatching { builder.establish() }.getOrNull()
+        if (blackhole == null) {
+            EngineLog.record(LogLevel.ERROR, "killswitch", "could not raise the blocking interface")
+            return false
+        }
+        EngineLog.record(LogLevel.WARN, "killswitch", "blocking all traffic: $reason")
+        return true
+    }
+
+    /** Lets traffic out again. Called on a deliberate lift and on a reconnect. */
+    private fun dropBlackhole() {
+        val open = blackhole ?: return
+        blackhole = null
+        runCatching { open.close() }
+        EngineLog.record(LogLevel.INFO, "killswitch", "blocking lifted")
+    }
+
     private fun establishTun(
         ipv4: String,
         ipv6: String,
@@ -741,6 +805,17 @@ class AetherVpnService : VpnService() {
             // Rates go to zero, totals stay: what a session cost is asked
             // after it ended, not while it is running.
             TrafficMeter.stop()
+            // Strict keeps blocking across the gap between sessions, so the
+            // service and its interface outlive the tunnel deliberately. Said
+            // plainly in the notification, or a user who forgot they turned it
+            // on has a phone with no internet and no reason given.
+            if (blockAfterStop && raiseBlackhole("disconnected with strict blocking on")) {
+                EngineStatusStore.update(
+                    EngineStatus(EngineStage.IDLE, message = "Traffic is blocked"),
+                )
+                startForegroundNow("Traffic is blocked", "Strict blocking is on. Tap to open and lift.")
+                return@launch
+            }
             EngineStatusStore.update(EngineStatus())
             ServiceCompat.stopForeground(this@AetherVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
@@ -923,12 +998,28 @@ class AetherVpnService : VpnService() {
     private fun giveUp(mode: EngineMode, reason: String) {
         generation += 1
         preferences.edit { remove(LAST_TUN_CONFIG) }
-        reportError(mode, "$reason. Stopped after $MAX_RECONNECT_ATTEMPTS attempts.")
+        // The moment the feature exists for: every retry is spent, the tunnel
+        // is not coming back on its own, and without this the phone resumes
+        // over the ordinary route without saying anything.
+        val blocking = blockOnFailure && raiseBlackhole(reason)
+        reportError(
+            mode,
+            if (blocking) {
+                "$reason. Stopped after $MAX_RECONNECT_ATTEMPTS attempts, and traffic is blocked."
+            } else {
+                "$reason. Stopped after $MAX_RECONNECT_ATTEMPTS attempts."
+            },
+        )
         serviceScope.launch {
             runCatching { chain.stop() }
             runCatching { NativeAetherBridge.stop() }
             clearSocketProtector(generation)
             sessionJob = null
+            if (blocking) {
+                // The service stays up because the interface belongs to it.
+                startForegroundNow("Traffic is blocked", "The tunnel failed. Tap to open and lift.")
+                return@launch
+            }
             ServiceCompat.stopForeground(this@AetherVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
@@ -989,11 +1080,18 @@ class AetherVpnService : VpnService() {
         /** What the path allows WireGuard, which is the larger question. */
         private const val WIREGUARD_MTU = 1340
 
+        /** Any address will do; nothing is ever sent from it. */
+        private const val BLACKHOLE_IPV4 = "10.111.222.1"
+
+        const val ACTION_LIFT_BLOCK = "com.whitedns.whiteaesther.LIFT_BLOCK"
+
         private const val ACTION_START = "com.whitedns.whiteaesther.START"
         private const val ACTION_STOP = "com.whitedns.whiteaesther.STOP"
         private const val EXTRA_CONFIG = "config"
         private const val EXTRA_CHAIN = "chain"
         private const val EXTRA_SPLIT = "split"
+        private const val EXTRA_KILL_SWITCH = "killSwitch"
+        private const val EXTRA_STRICT_KILL = "strictKillSwitch"
         private const val LAST_TUN_CONFIG = "last_tun_config"
         private const val LAST_CHAIN_CONFIG = "last_chain_config"
         private const val LAST_SPLIT_CONFIG = "last_split_config"
@@ -1016,6 +1114,8 @@ class AetherVpnService : VpnService() {
             configJson: String,
             chainJson: String? = null,
             splitJson: String? = null,
+            killSwitch: Boolean = false,
+            strictKillSwitch: Boolean = false,
         ) {
             ContextCompat.startForegroundService(
                 context,
@@ -1023,8 +1123,17 @@ class AetherVpnService : VpnService() {
                     .setAction(ACTION_START)
                     .putExtra(EXTRA_CONFIG, configJson)
                     .putExtra(EXTRA_CHAIN, chainJson)
-                    .putExtra(EXTRA_SPLIT, splitJson),
+                    .putExtra(EXTRA_SPLIT, splitJson)
+                    .putExtra(EXTRA_KILL_SWITCH, killSwitch)
+                    .putExtra(EXTRA_STRICT_KILL, strictKillSwitch),
             )
+        }
+
+        fun liftBlockIntent(context: Context): Intent =
+            Intent(context, AetherVpnService::class.java).setAction(ACTION_LIFT_BLOCK)
+
+        fun liftBlock(context: Context) {
+            context.startService(liftBlockIntent(context))
         }
 
         fun stopIntent(context: Context): Intent = Intent(context, AetherVpnService::class.java)
@@ -1034,6 +1143,19 @@ class AetherVpnService : VpnService() {
             context.startService(stopIntent(context))
         }
     }
+
+    /**
+     * The blocking interface, while one is up.
+     *
+     * Held rather than re-derived: closing the descriptor is what lets traffic
+     * out again, so losing the handle would mean a phone that stays blocked
+     * until the process dies.
+     */
+    private var blackhole: ParcelFileDescriptor? = null
+
+    /** Block when the tunnel fails, and block between sessions. */
+    private var blockOnFailure = false
+    private var blockAfterStop = false
 
     private val preferences by lazy {
         getSharedPreferences("aether_service", MODE_PRIVATE)

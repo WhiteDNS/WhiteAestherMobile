@@ -160,6 +160,7 @@ fun HomeScreen(
     traffic: TrafficSample,
     chainSelection: String?,
     update: UpdateChecker.Available?,
+    onLiftBlock: () -> Unit,
     onOpenUpdate: (String) -> Unit,
     onDismissUpdate: () -> Unit,
     onToggleConnection: () -> Unit,
@@ -306,6 +307,28 @@ fun HomeScreen(
                         "%02d:%02d:%02d".format(elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60),
                         style = AetherType.DataLarge,
                         color = colors.text,
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+
+        // Only route out of a blocked phone. Reached from the notification
+        // too, but a user who opens the app first should not have to find the
+        // notification again to undo something the app is doing.
+        if (status.message == "Traffic is blocked") {
+            AetherCard {
+                CardHead(
+                    "Traffic is blocked",
+                    "Nothing reaches the internet until you connect again or lift this.",
+                )
+                Box(Modifier.padding(11.dp)) {
+                    OutlineButton(
+                        text = "Lift the block",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("lift-block-button"),
+                        onClick = onLiftBlock,
                     )
                 }
             }
@@ -1181,6 +1204,36 @@ fun TrafficScreen(
                         label = { "$it s" },
                         onSelect = { onSettingsChange(settings.copy(wgKeepalive = it)) },
                     )
+                }
+
+                Divider()
+                SettingRow(
+                    title = "Block traffic if the tunnel fails",
+                    subtitle = "When every retry is spent, hold a blocking interface up " +
+                        "instead of letting the phone resume unprotected.",
+                ) {
+                    AetherSwitch(
+                        checked = settings.killSwitch,
+                        onCheckedChange = { onSettingsChange(settings.copy(killSwitch = it)) },
+                        modifier = Modifier.testTag("kill-switch"),
+                    )
+                }
+
+                if (settings.killSwitch) {
+                    Divider()
+                    SettingRow(
+                        title = "Keep blocking after you disconnect",
+                        subtitle = "Nothing reaches the internet between sessions until you " +
+                            "lift it. The app says so while it is on.",
+                    ) {
+                        AetherSwitch(
+                            checked = settings.strictKillSwitch,
+                            onCheckedChange = {
+                                onSettingsChange(settings.copy(strictKillSwitch = it))
+                            },
+                            modifier = Modifier.testTag("strict-kill-switch"),
+                        )
+                    }
                 }
 
                 Divider()

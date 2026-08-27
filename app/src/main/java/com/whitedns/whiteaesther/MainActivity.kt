@@ -209,6 +209,7 @@ class MainActivity : ComponentActivity() {
                     addresses = viewModel.addresses.collectAsStateWithLifecycle().value,
                     traffic = viewModel.traffic.collectAsStateWithLifecycle().value,
                     update = viewModel.update.collectAsStateWithLifecycle().value,
+                    onLiftBlock = { AetherVpnService.liftBlock(this) },
                     onOpenUpdate = ::openReleasePage,
                     onDismissUpdate = viewModel::dismissUpdate,
                     batteryExempt = batteryExempt,
@@ -315,6 +316,8 @@ class MainActivity : ComponentActivity() {
             settings.toNativeJson(this),
             settings.chain.encode(),
             settings.splitTunnel.encode(),
+            settings.killSwitch,
+            settings.strictKillSwitch,
         )
     }
 }

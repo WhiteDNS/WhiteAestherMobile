@@ -34,6 +34,8 @@ class SettingsRepository(private val context: Context) {
             lanSharing = preferences[LAN_SHARING] ?: false,
             lanUsername = preferences[LAN_USERNAME].orEmpty(),
             lanPassword = preferences[LAN_PASSWORD].orEmpty(),
+            killSwitch = preferences[KILL_SWITCH] ?: false,
+            strictKillSwitch = preferences[STRICT_KILL_SWITCH] ?: false,
             wgKeepalive = preferences[WG_KEEPALIVE]?.coerceIn(0, 300) ?: 25,
             upstreamProxy = preferences[UPSTREAM_PROXY].orEmpty(),
             dnsServers = preferences[DNS_SERVERS].orEmpty(),
@@ -67,6 +69,8 @@ class SettingsRepository(private val context: Context) {
             preferences[LAN_SHARING] = settings.lanSharing
             preferences[LAN_USERNAME] = settings.lanUsername
             preferences[LAN_PASSWORD] = settings.lanPassword
+            preferences[KILL_SWITCH] = settings.killSwitch
+            preferences[STRICT_KILL_SWITCH] = settings.strictKillSwitch
             preferences[WG_KEEPALIVE] = settings.wgKeepalive
             preferences[UPSTREAM_PROXY] = settings.upstreamProxy
             preferences[DNS_SERVERS] = settings.dnsServers
@@ -101,6 +105,9 @@ class SettingsRepository(private val context: Context) {
         // of sources, which preferences have no type for.
         val CHAIN = stringPreferencesKey("chain")
         val SPLIT_TUNNEL = stringPreferencesKey("split_tunnel")
+        val KILL_SWITCH = booleanPreferencesKey("kill_switch")
+        val STRICT_KILL_SWITCH = booleanPreferencesKey("strict_kill_switch")
+
         // Seven settings the engine has always read and the app never sent.
         val WG_KEEPALIVE = intPreferencesKey("wg_keepalive")
         val UPSTREAM_PROXY = stringPreferencesKey("upstream_proxy")

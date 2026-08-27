@@ -187,6 +187,25 @@ data class AppSettings(
     val lanUsername: String = "",
     val lanPassword: String = "",
     /**
+     * Hold a blocking interface up when the tunnel drops unexpectedly.
+     *
+     * Without it, a tunnel that dies takes its interface with it and the phone
+     * quietly resumes over the ordinary route -- which is the one moment the
+     * user most needs it not to. The blocking interface carries the default
+     * routes and forwards nothing, so traffic stops rather than escapes.
+     */
+    val killSwitch: Boolean = false,
+    /**
+     * Keep blocking after a deliberate disconnect too, until it is lifted.
+     *
+     * Separate from [killSwitch] because it is a different promise: one is
+     * about a failure, this is about the gap between sessions. It has to be
+     * lifted by hand, or a user who forgets is left with a phone that has no
+     * internet and no obvious reason why -- so the app says so plainly while it
+     * is on.
+     */
+    val strictKillSwitch: Boolean = false,
+    /**
      * Seconds between WireGuard keepalives.
      *
      * The engine's own default is 5, which is far below the 25 WireGuard

@@ -70,6 +70,8 @@ class AetherTileService : TileService() {
                 settings.toNativeJson(applicationContext),
                 settings.chain.encode(),
                 settings.splitTunnel.encode(),
+                settings.killSwitch,
+                settings.strictKillSwitch,
             )
         }
     }
