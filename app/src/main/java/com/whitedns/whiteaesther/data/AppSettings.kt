@@ -187,6 +187,40 @@ data class AppSettings(
     val lanUsername: String = "",
     val lanPassword: String = "",
     /**
+     * Seconds between WireGuard keepalives.
+     *
+     * The engine's own default is 5, which is far below the 25 WireGuard
+     * recommends and wakes a phone's radio twelve times a minute -- on mobile
+     * data each wake costs more in radio tail than the packet it carries. 25 is
+     * the standard because most NAT mappings survive 30 seconds; a network with
+     * a shorter one needs a lower value, which is why this is a setting and not
+     * a constant.
+     */
+    val wgKeepalive: Int = 25,
+    /**
+     * A proxy already running on this device to dial out through.
+     *
+     * `socks5://host:port`, with optional credentials, or an HTTP proxy. Empty
+     * dials directly.
+     */
+    val upstreamProxy: String = "",
+    /** Resolvers inside the tunnel, comma separated. Empty keeps the engine's. */
+    val dnsServers: String = "",
+    /**
+     * Read the hostname from a flow's first bytes.
+     *
+     * Matters more here than on a desktop: this app is always a tun front end,
+     * so a flow reaches the engine as a bare address and a rule written against
+     * a domain would otherwise never match anything.
+     */
+    val routeSniff: Boolean = true,
+    /** Register a fresh identity when Cloudflare refuses the saved one. */
+    val autoReprovision: Boolean = true,
+    /** Engine log verbosity. Empty leaves the engine's own default. */
+    val engineLogLevel: String = "",
+    /** TLS key groups, which change the shape of the handshake. */
+    val tlsGroups: String = "",
+    /**
      * Set once this device has been shown to ignore the standard exemption
      * request: the user opened the dialog and came back still not exempt.
      *
@@ -302,6 +336,13 @@ data class AppSettings(
             .put("lanSharing", lanSharing && mode == EngineMode.PROXY)
             .put("lanUsername", if (lanCredentialsUsable()) lanUsername else "")
             .put("lanPassword", if (lanCredentialsUsable()) lanPassword else "")
+            .put("wgKeepalive", wgKeepalive)
+            .put("upstreamProxy", upstreamProxy.trim())
+            .put("dnsServers", dnsServers.trim())
+            .put("routeSniff", routeSniff)
+            .put("autoReprovision", autoReprovision)
+            .put("logLevel", engineLogLevel)
+            .put("tlsGroups", tlsGroups.trim())
             .put("scanMode", scanStrategy.wireName)
             .put("ipScan", if (dualStack) "both" else "v4")
             .put("transport", transport.wireName)

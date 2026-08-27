@@ -34,6 +34,13 @@ class SettingsRepository(private val context: Context) {
             lanSharing = preferences[LAN_SHARING] ?: false,
             lanUsername = preferences[LAN_USERNAME].orEmpty(),
             lanPassword = preferences[LAN_PASSWORD].orEmpty(),
+            wgKeepalive = preferences[WG_KEEPALIVE]?.coerceIn(0, 300) ?: 25,
+            upstreamProxy = preferences[UPSTREAM_PROXY].orEmpty(),
+            dnsServers = preferences[DNS_SERVERS].orEmpty(),
+            routeSniff = preferences[ROUTE_SNIFF] ?: true,
+            autoReprovision = preferences[AUTO_REPROVISION] ?: true,
+            engineLogLevel = preferences[ENGINE_LOG_LEVEL].orEmpty(),
+            tlsGroups = preferences[TLS_GROUPS].orEmpty(),
             batteryRequestIgnored = preferences[BATTERY_REQUEST_IGNORED] ?: false,
             batteryNoticeDismissed = preferences[BATTERY_NOTICE_DISMISSED] ?: false,
         )
@@ -60,6 +67,13 @@ class SettingsRepository(private val context: Context) {
             preferences[LAN_SHARING] = settings.lanSharing
             preferences[LAN_USERNAME] = settings.lanUsername
             preferences[LAN_PASSWORD] = settings.lanPassword
+            preferences[WG_KEEPALIVE] = settings.wgKeepalive
+            preferences[UPSTREAM_PROXY] = settings.upstreamProxy
+            preferences[DNS_SERVERS] = settings.dnsServers
+            preferences[ROUTE_SNIFF] = settings.routeSniff
+            preferences[AUTO_REPROVISION] = settings.autoReprovision
+            preferences[ENGINE_LOG_LEVEL] = settings.engineLogLevel
+            preferences[TLS_GROUPS] = settings.tlsGroups
             preferences[BATTERY_REQUEST_IGNORED] = settings.batteryRequestIgnored
             preferences[BATTERY_NOTICE_DISMISSED] = settings.batteryNoticeDismissed
         }
@@ -87,6 +101,15 @@ class SettingsRepository(private val context: Context) {
         // of sources, which preferences have no type for.
         val CHAIN = stringPreferencesKey("chain")
         val SPLIT_TUNNEL = stringPreferencesKey("split_tunnel")
+        // Seven settings the engine has always read and the app never sent.
+        val WG_KEEPALIVE = intPreferencesKey("wg_keepalive")
+        val UPSTREAM_PROXY = stringPreferencesKey("upstream_proxy")
+        val DNS_SERVERS = stringPreferencesKey("dns_servers")
+        val ROUTE_SNIFF = booleanPreferencesKey("route_sniff")
+        val AUTO_REPROVISION = booleanPreferencesKey("auto_reprovision")
+        val ENGINE_LOG_LEVEL = stringPreferencesKey("engine_log_level")
+        val TLS_GROUPS = stringPreferencesKey("tls_groups")
+
         val LAN_SHARING = booleanPreferencesKey("lan_sharing")
         // Stored as the user typed them: the engine needs the password itself
         // to answer a client, so a hash here would be a hash it cannot use.

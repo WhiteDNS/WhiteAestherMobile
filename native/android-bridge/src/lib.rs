@@ -54,6 +54,31 @@ struct BridgeConfig {
     lan_username: String,
     #[serde(default)]
     lan_password: String,
+    /// Seconds between WireGuard keepalives, or 0 for the engine's own default.
+    ///
+    /// Worth exposing because the engine's default is 5, which is far below the
+    /// 25 WireGuard itself recommends, and on a phone every one of those wakes
+    /// the radio.
+    #[serde(default)]
+    wg_keepalive: u16,
+    /// A proxy already running on this device to dial out through.
+    #[serde(default)]
+    upstream_proxy: String,
+    /// Resolvers to use inside the tunnel. Empty leaves the engine's own.
+    #[serde(default)]
+    dns_servers: String,
+    /// Read the hostname from a flow's first bytes so domain rules can match.
+    #[serde(default = "default_true")]
+    route_sniff: bool,
+    /// Register a fresh identity when Cloudflare refuses the saved one.
+    #[serde(default = "default_true")]
+    auto_reprovision: bool,
+    /// One of error, warn, info, debug, trace. Empty leaves the default.
+    #[serde(default)]
+    log_level: String,
+    /// TLS key groups, which change the shape of the handshake.
+    #[serde(default)]
+    tls_groups: String,
     peer: Option<String>,
     #[serde(default)]
     peer_fallback: bool,
@@ -119,6 +144,19 @@ impl BridgeConfig {
         // is the opposite of what someone typing a username is asking for.
         if config.lan_username.is_empty() != config.lan_password.is_empty() {
             return Err("lanUsername and lanPassword must both be set, or neither".into());
+        }
+        // 0 means the engine's default. Above 300 the mapping most NATs hold
+        // has long since expired, so the tunnel would sit dead between packets.
+        if config.wg_keepalive > 300 {
+            return Err("wgKeepalive must be 300 seconds or less".into());
+        }
+        if !config.log_level.is_empty()
+            && !matches!(
+                config.log_level.as_str(),
+                "error" | "warn" | "info" | "debug" | "trace"
+            )
+        {
+            return Err("logLevel must be error, warn, info, debug or trace".into());
         }
         if !matches!(config.transport.as_str(), "h3" | "h2" | "wg" | "wiw") {
             return Err("transport must be h3, h2, wg or wiw".into());
@@ -192,6 +230,15 @@ impl BridgeConfig {
     }
 
     fn apply_environment(&self) {
+        fn set_or_clear(name: &str, value: &str) {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                std::env::remove_var(name);
+            } else {
+                std::env::set_var(name, trimmed);
+            }
+        }
+
         std::env::set_var("AETHER_NOIZE", &self.noize);
         if self.transport == "h2" {
             std::env::set_var("AETHER_MASQUE_HTTP2", "1");
@@ -217,6 +264,38 @@ impl BridgeConfig {
             std::env::remove_var("AETHER_MASQUE_NO_DATA_CHECK");
         } else {
             std::env::set_var("AETHER_MASQUE_NO_DATA_CHECK", "1");
+        }
+
+        // Everything below was already read by the engine and never set by this
+        // app, so the features existed in the shipped binary with no way to
+        // reach them.
+
+        // Zero means "say nothing and let the engine choose", which keeps the
+        // one default in the engine rather than copying it here to drift.
+        if self.wg_keepalive > 0 {
+            std::env::set_var("AETHER_WG_KEEPALIVE", self.wg_keepalive.to_string());
+        } else {
+            std::env::remove_var("AETHER_WG_KEEPALIVE");
+        }
+
+        // Through the environment rather than an argument: any app on the phone
+        // can read /proc/<pid>/cmdline, and this string can carry a password.
+        set_or_clear("AETHER_UPSTREAM", &self.upstream_proxy);
+        set_or_clear("AETHER_DNS", &self.dns_servers);
+        set_or_clear("AETHER_TLS_GROUPS", &self.tls_groups);
+        set_or_clear("AETHER_LOG_LEVEL", &self.log_level);
+
+        // Both default to on in the engine and are switched off by the literal
+        // "0", so the variable is only worth setting to turn one off.
+        if self.route_sniff {
+            std::env::remove_var("AETHER_ROUTE_SNIFF");
+        } else {
+            std::env::set_var("AETHER_ROUTE_SNIFF", "0");
+        }
+        if self.auto_reprovision {
+            std::env::remove_var("AETHER_REPROVISION");
+        } else {
+            std::env::set_var("AETHER_REPROVISION", "0");
         }
     }
 }
@@ -738,6 +817,36 @@ mod tests {
 
     fn config(extra: &str) -> String {
         format!(r#"{{"mode":"proxy","configPath":"aether.toml","listenPort":1819{extra}}}"#)
+    }
+
+    #[test]
+    fn the_engine_flags_the_app_never_sent_are_validated() {
+        // Seven settings the engine has always read. The app sent none of them,
+        // so the features shipped in the binary with no way to reach them.
+        assert!(BridgeConfig::parse(&config(r#","wgKeepalive":25"#)).is_ok());
+        assert!(BridgeConfig::parse(&config(r#","wgKeepalive":0"#)).is_ok());
+        // Past the point any ordinary NAT still holds the mapping, the tunnel
+        // would sit dead between packets rather than merely idle.
+        assert!(BridgeConfig::parse(&config(r#","wgKeepalive":301"#)).is_err());
+
+        assert!(BridgeConfig::parse(&config(r#","logLevel":"debug""#)).is_ok());
+        assert!(BridgeConfig::parse(&config(r#","logLevel":"""#)).is_ok());
+        assert!(BridgeConfig::parse(&config(r#","logLevel":"chatty""#)).is_err());
+    }
+
+    #[test]
+    fn the_two_default_on_flags_are_only_set_to_turn_them_off() {
+        // Both read as on unless the value is literally "0", so writing the
+        // variable when the setting is on would be describing the default back
+        // to the engine -- and getting the polarity wrong there is silent.
+        let on = BridgeConfig::parse(&config("")).unwrap();
+        assert!(on.route_sniff);
+        assert!(on.auto_reprovision);
+
+        let off =
+            BridgeConfig::parse(&config(r#","routeSniff":false,"autoReprovision":false"#)).unwrap();
+        assert!(!off.route_sniff);
+        assert!(!off.auto_reprovision);
     }
 
     #[test]

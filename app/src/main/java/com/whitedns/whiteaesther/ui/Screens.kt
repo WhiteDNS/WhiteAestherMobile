@@ -921,6 +921,8 @@ fun TrafficScreen(
     // Keyed on the switch, not on the stored value. Saving is a round trip
     // through DataStore, so a field bound straight to settings is rewritten
     // with the old text between keystrokes and cannot be typed into.
+    var upstreamText by remember(settings.upstreamProxy) { mutableStateOf(settings.upstreamProxy) }
+    var dnsText by remember(settings.dnsServers) { mutableStateOf(settings.dnsServers) }
     var lanUserText by remember(settings.lanSharing) { mutableStateOf(settings.lanUsername) }
     var lanPassText by remember(settings.lanSharing) { mutableStateOf(settings.lanPassword) }
     val engineBusy = status.stage !in setOf(EngineStage.IDLE, EngineStage.ERROR)
@@ -1123,6 +1125,91 @@ fun TrafficScreen(
                 }
 
                 Divider()
+                Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
+                    Text("DNS inside the tunnel", style = AetherType.RowTitle, color = colors.text)
+                    Text(
+                        "Comma separated. Leave empty for the engine's own (1.1.1.1, " +
+                            "1.0.0.1). Entries that are not an address are ignored.",
+                        style = AetherType.Small,
+                        color = colors.text2,
+                    )
+                    Spacer(Modifier.height(9.dp))
+                    PlainField(
+                        value = dnsText,
+                        tag = "dns-servers-field",
+                        onValueChange = { entered ->
+                            dnsText = entered
+                            onSettingsChange(settings.copy(dnsServers = entered))
+                        },
+                    )
+                }
+
+                Divider()
+                Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
+                    Text("Dial out through a proxy", style = AetherType.RowTitle, color = colors.text)
+                    Text(
+                        "Send everything the tunnel dials through a proxy already running " +
+                            "on this phone: socks5://127.0.0.1:1080, or an http:// one.",
+                        style = AetherType.Small,
+                        color = colors.text2,
+                    )
+                    Spacer(Modifier.height(9.dp))
+                    PlainField(
+                        value = upstreamText,
+                        tag = "upstream-proxy-field",
+                        onValueChange = { entered ->
+                            upstreamText = entered
+                            onSettingsChange(settings.copy(upstreamProxy = entered))
+                        },
+                    )
+                }
+
+                Divider()
+                Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
+                    Text("WireGuard keepalive", style = AetherType.RowTitle, color = colors.text)
+                    Text(
+                        "Seconds between the packets that hold the connection open. " +
+                            "25 is the standard; lower survives a network that forgets " +
+                            "faster, and costs battery.",
+                        style = AetherType.Small,
+                        color = colors.text2,
+                    )
+                    Spacer(Modifier.height(9.dp))
+                    SegGroup(
+                        options = listOf(5, 15, 25),
+                        selected = settings.wgKeepalive,
+                        label = { "$it s" },
+                        onSelect = { onSettingsChange(settings.copy(wgKeepalive = it)) },
+                    )
+                }
+
+                Divider()
+                SettingRow(
+                    title = "Match rules on domain names",
+                    subtitle = "Reads the name from a connection's first bytes. Without it a " +
+                        "rule written against a domain never matches on this platform.",
+                ) {
+                    AetherSwitch(
+                        checked = settings.routeSniff,
+                        onCheckedChange = { onSettingsChange(settings.copy(routeSniff = it)) },
+                        modifier = Modifier.testTag("route-sniff-switch"),
+                    )
+                }
+
+                Divider()
+                SettingRow(
+                    title = "Replace a refused identity",
+                    subtitle = "If Cloudflare stops accepting the saved identity, register a " +
+                        "fresh one instead of holding a tunnel that carries nothing.",
+                ) {
+                    AetherSwitch(
+                        checked = settings.autoReprovision,
+                        onCheckedChange = { onSettingsChange(settings.copy(autoReprovision = it)) },
+                        modifier = Modifier.testTag("auto-reprovision-switch"),
+                    )
+                }
+
+                Divider()
                 SettingRow(
                     title = "Check the connection works",
                     subtitle = "Sends one test request after connecting. Leave this on.",
@@ -1257,6 +1344,37 @@ private fun RateColumn(
             overflow = TextOverflow.Ellipsis,
         )
     }
+}
+
+/**
+ * A single-line text field bound to a caller-held value.
+ *
+ * The caller keeps the text: settings are saved through DataStore, which is a
+ * round trip, and a field bound straight to that is rewritten with the previous
+ * value between keystrokes and cannot be typed into.
+ */
+@Composable
+private fun PlainField(
+    value: String,
+    tag: String,
+    onValueChange: (String) -> Unit,
+) {
+    val colors = AetherTheme.colors
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(tag),
+        textStyle = AetherType.Data.copy(color = colors.text),
+        singleLine = true,
+        shape = RoundedCornerShape(14.dp),
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = colors.ink1,
+            unfocusedContainerColor = colors.ink1,
+            errorContainerColor = colors.ink1,
+        ),
+    )
 }
 
 // -------------------------------------------------------------- settings ----
