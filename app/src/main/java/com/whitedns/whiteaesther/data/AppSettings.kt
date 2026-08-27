@@ -134,6 +134,8 @@ object EndpointAddress {
     }
 }
 
+private const val NEWLINE = '\n'
+
 data class AppSettings(
     val mode: EngineMode = EngineMode.TUN,
     val proxyPort: Int = 1819,
@@ -186,6 +188,22 @@ data class AppSettings(
      */
     val lanUsername: String = "",
     val lanPassword: String = "",
+    /**
+     * Destinations to refuse outright, one per line.
+     *
+     * `ads.example.com`, `cidr:10.0.0.0/8`, `keyword:tracker`, `port:25`,
+     * `regexp:^ad[0-9]`, or `private` for the local network. A line starting
+     * with `#` is a note.
+     */
+    val routeBlock: String = "",
+    /**
+     * Destinations to reach without the tunnel, same grammar as [routeBlock].
+     *
+     * Useful for a bank or a domestic service that refuses foreign addresses.
+     * Traffic named here leaves with this device's real address, which is the
+     * point and also the risk.
+     */
+    val routeDirect: String = "",
     /**
      * Hold a blocking interface up when the tunnel drops unexpectedly.
      *
@@ -310,6 +328,28 @@ data class AppSettings(
         }
 
     /**
+     * The rules in one line, counting only what the engine would accept.
+     *
+     * Blank lines and notes are dropped, so a list that reads as five rules
+     * does not summarise as eight.
+     */
+    fun routingSummary(): String {
+        val block = ruleCount(routeBlock)
+        val direct = ruleCount(routeDirect)
+        return when {
+            block == 0 && direct == 0 -> "Everything goes through the tunnel"
+            direct == 0 -> "$block blocked"
+            block == 0 -> "$direct skipping the tunnel"
+            else -> "$block blocked · $direct skipping the tunnel"
+        }
+    }
+
+    private fun ruleCount(raw: String): Int =
+        raw.split(NEWLINE, ',', ';')
+            .map(String::trim)
+            .count { it.isNotEmpty() && !it.startsWith("#") }
+
+    /**
      * What is actually carried, in one line.
      *
      * Coverage used to be read from [mode] alone, which said "Whole device"
@@ -359,6 +399,8 @@ data class AppSettings(
             .put("upstreamProxy", upstreamProxy.trim())
             .put("dnsServers", dnsServers.trim())
             .put("routeSniff", routeSniff)
+            .put("routeBlock", routeBlock.trim())
+            .put("routeDirect", routeDirect.trim())
             .put("autoReprovision", autoReprovision)
             .put("logLevel", engineLogLevel)
             .put("tlsGroups", tlsGroups.trim())

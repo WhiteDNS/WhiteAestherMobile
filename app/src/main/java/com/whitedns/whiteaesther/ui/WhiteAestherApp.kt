@@ -65,6 +65,7 @@ private enum class Destination(val tab: Tab) {
     ROUTES(Tab.ROUTES),
     ENDPOINT(Tab.ROUTES),
     CHAIN(Tab.ROUTES),
+    ROUTING_RULES(Tab.ROUTES),
     TRAFFIC(Tab.TRAFFIC),
     SPLIT_TUNNEL(Tab.TRAFFIC),
     SETTINGS(Tab.SETTINGS),
@@ -148,6 +149,7 @@ fun WhiteAestherApp(
                     onSettingsChange = onSettingsChange,
                     onGoToEndpoint = { destination = Destination.ENDPOINT },
                     onGoToChain = { destination = Destination.CHAIN },
+                    onGoToRoutingRules = { destination = Destination.ROUTING_RULES },
                 )
                 Destination.CHAIN -> ChainScreen(
                     settings = settings,
@@ -179,6 +181,11 @@ fun WhiteAestherApp(
                     settings = settings,
                     onSettingsChange = onSettingsChange,
                     onBack = { destination = Destination.TRAFFIC },
+                )
+                Destination.ROUTING_RULES -> RoutingRulesScreen(
+                    settings = settings,
+                    onSettingsChange = onSettingsChange,
+                    onBack = { destination = Destination.ROUTES },
                 )
                 Destination.SETTINGS -> SettingsScreen(
                     settings = settings,

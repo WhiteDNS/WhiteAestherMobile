@@ -57,4 +57,36 @@ class KillSwitchSettingsTest {
         assertTrue(settings.upstreamProxy.isEmpty())
         assertTrue(settings.dnsServers.isEmpty())
     }
+
+    @Test
+    fun theRulesSummaryCountsOnlyWhatTheEngineWouldAccept() {
+        // Blank lines and notes are dropped by the engine's own parser, so a
+        // list that reads as two rules must not summarise as four.
+        val settings = AppSettings(
+            routeBlock = "ads.example.com\n\n# a note\nkeyword:tracker\n",
+            routeDirect = "",
+        )
+
+        assertTrue(settings.routingSummary() == "2 blocked")
+    }
+
+    @Test
+    fun bothSidesAreNamedWhenBothAreUsed() {
+        val settings = AppSettings(
+            routeBlock = "ads.example.com",
+            routeDirect = "bank.example.ir;private",
+        )
+
+        // Semicolons and commas separate too, which is what makes a pasted
+        // one-line list work.
+        assertTrue(settings.routingSummary().contains("1 blocked"))
+        assertTrue(settings.routingSummary().contains("2 skipping"))
+    }
+
+    @Test
+    fun noRulesSaysSoRatherThanShowingZero() {
+        assertTrue(
+            AppSettings().routingSummary() == "Everything goes through the tunnel",
+        )
+    }
 }

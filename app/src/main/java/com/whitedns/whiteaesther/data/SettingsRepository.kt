@@ -34,6 +34,8 @@ class SettingsRepository(private val context: Context) {
             lanSharing = preferences[LAN_SHARING] ?: false,
             lanUsername = preferences[LAN_USERNAME].orEmpty(),
             lanPassword = preferences[LAN_PASSWORD].orEmpty(),
+            routeBlock = preferences[ROUTE_BLOCK].orEmpty(),
+            routeDirect = preferences[ROUTE_DIRECT].orEmpty(),
             killSwitch = preferences[KILL_SWITCH] ?: false,
             strictKillSwitch = preferences[STRICT_KILL_SWITCH] ?: false,
             wgKeepalive = preferences[WG_KEEPALIVE]?.coerceIn(0, 300) ?: 25,
@@ -69,6 +71,8 @@ class SettingsRepository(private val context: Context) {
             preferences[LAN_SHARING] = settings.lanSharing
             preferences[LAN_USERNAME] = settings.lanUsername
             preferences[LAN_PASSWORD] = settings.lanPassword
+            preferences[ROUTE_BLOCK] = settings.routeBlock
+            preferences[ROUTE_DIRECT] = settings.routeDirect
             preferences[KILL_SWITCH] = settings.killSwitch
             preferences[STRICT_KILL_SWITCH] = settings.strictKillSwitch
             preferences[WG_KEEPALIVE] = settings.wgKeepalive
@@ -105,6 +109,8 @@ class SettingsRepository(private val context: Context) {
         // of sources, which preferences have no type for.
         val CHAIN = stringPreferencesKey("chain")
         val SPLIT_TUNNEL = stringPreferencesKey("split_tunnel")
+        val ROUTE_BLOCK = stringPreferencesKey("route_block")
+        val ROUTE_DIRECT = stringPreferencesKey("route_direct")
         val KILL_SWITCH = booleanPreferencesKey("kill_switch")
         val STRICT_KILL_SWITCH = booleanPreferencesKey("strict_kill_switch")
 

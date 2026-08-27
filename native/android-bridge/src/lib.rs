@@ -70,6 +70,12 @@ struct BridgeConfig {
     /// Read the hostname from a flow's first bytes so domain rules can match.
     #[serde(default = "default_true")]
     route_sniff: bool,
+    /// Destinations to refuse, one per line.
+    #[serde(default)]
+    route_block: String,
+    /// Destinations to reach without the tunnel.
+    #[serde(default)]
+    route_direct: String,
     /// Register a fresh identity when Cloudflare refuses the saved one.
     #[serde(default = "default_true")]
     auto_reprovision: bool,
@@ -283,6 +289,8 @@ impl BridgeConfig {
         set_or_clear("AETHER_UPSTREAM", &self.upstream_proxy);
         set_or_clear("AETHER_DNS", &self.dns_servers);
         set_or_clear("AETHER_TLS_GROUPS", &self.tls_groups);
+        set_or_clear("AETHER_ROUTE_BLOCK", &self.route_block);
+        set_or_clear("AETHER_ROUTE_DIRECT", &self.route_direct);
         set_or_clear("AETHER_LOG_LEVEL", &self.log_level);
 
         // Both default to on in the engine and are switched off by the literal

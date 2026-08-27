@@ -580,6 +580,7 @@ fun RoutesScreen(
     onSettingsChange: (AppSettings) -> Unit,
     onGoToEndpoint: () -> Unit,
     onGoToChain: () -> Unit = {},
+    onGoToRoutingRules: () -> Unit = {},
 ) {
     var advanced by rememberSaveable(settings.showAdvanced) { mutableStateOf(settings.showAdvanced) }
     val active = settings.activeProfile()
@@ -642,6 +643,14 @@ fun RoutesScreen(
                 subtitle = settings.chainSummary(),
                 iconTint = AetherTheme.colors.brand,
                 onClick = onGoToChain,
+            )
+            Divider()
+            RowCard(
+                icon = AetherIcons.Routes,
+                title = "Routing rules",
+                subtitle = settings.routingSummary(),
+                iconTint = AetherTheme.colors.cyan,
+                onClick = onGoToRoutingRules,
             )
         }
 
@@ -1421,6 +1430,130 @@ private fun PlainField(
             .testTag(tag),
         textStyle = AetherType.Data.copy(color = colors.text),
         singleLine = true,
+        shape = RoundedCornerShape(14.dp),
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = colors.ink1,
+            unfocusedContainerColor = colors.ink1,
+            errorContainerColor = colors.ink1,
+        ),
+    )
+}
+
+/**
+ * Which destinations bypass the tunnel, and which are refused outright.
+ *
+ * Two free-text lists rather than a row editor. The engine's grammar is richer
+ * than a row of dropdowns would expose -- suffixes, keywords, regular
+ * expressions, CIDR blocks and port ranges -- and a list is also something a
+ * user can paste, share and keep, which a table of rows is not.
+ */
+@Composable
+fun RoutingRulesScreen(
+    settings: AppSettings,
+    onSettingsChange: (AppSettings) -> Unit,
+    onBack: () -> Unit,
+) {
+    val colors = AetherTheme.colors
+    var blockText by remember(settings.routeBlock) { mutableStateOf(settings.routeBlock) }
+    var directText by remember(settings.routeDirect) { mutableStateOf(settings.routeDirect) }
+
+    ScreenColumn {
+        CrumbBar("Routes · Rules", onBack = onBack)
+        PageTitle(
+            "Routing rules",
+            "Everything not named here goes through the tunnel.",
+        )
+
+        if (!settings.routeSniff) {
+            AetherCard {
+                CardHead(
+                    "Domain rules will not match",
+                    "This app is always a tun front end, so a connection arrives as a bare " +
+                        "address. Turn on \"Match rules on domain names\" under Traffic, or " +
+                        "only the address rules below will do anything.",
+                )
+                Spacer(Modifier.height(11.dp))
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+
+        AetherCard {
+            CardHead(
+                "Never connect",
+                "Refused before anything is dialled. One rule per line.",
+            )
+            Box(Modifier.padding(11.dp)) {
+                RuleField(
+                    value = blockText,
+                    tag = "route-block-field",
+                    placeholder = "ads.example.com\nkeyword:tracker\nport:25",
+                    onValueChange = { entered ->
+                        blockText = entered
+                        onSettingsChange(settings.copy(routeBlock = entered))
+                    },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        AetherCard {
+            CardHead(
+                "Skip the tunnel",
+                "Reached with this device's real address. For a bank or a domestic " +
+                    "service that refuses foreign ones.",
+            )
+            Box(Modifier.padding(11.dp)) {
+                RuleField(
+                    value = directText,
+                    tag = "route-direct-field",
+                    placeholder = "bank.example.ir\nprivate\ncidr:10.0.0.0/8",
+                    onValueChange = { entered ->
+                        directText = entered
+                        onSettingsChange(settings.copy(routeDirect = entered))
+                    },
+                )
+            }
+        }
+
+        Note(
+            "A plain name matches it and everything under it. Prefixes narrow that: " +
+                "full: exactly, keyword: anywhere in the name, regexp: a pattern, cidr: an " +
+                "address block, port: a number or range, private: the local network. " +
+                "A line starting with # is a note.",
+        )
+
+        if (settings.routeDirect.isNotBlank()) {
+            Text(
+                "Anything under Skip the tunnel leaves with your real address. That is what " +
+                    "it is for, and it is also what makes it worth keeping short.",
+                style = AetherType.Small,
+                color = colors.signalWorking,
+                modifier = Modifier.padding(horizontal = 2.dp, vertical = 8.dp),
+            )
+        }
+    }
+}
+
+/** A multi-line rule list. Monospaced, because these are patterns, not prose. */
+@Composable
+private fun RuleField(
+    value: String,
+    tag: String,
+    placeholder: String,
+    onValueChange: (String) -> Unit,
+) {
+    val colors = AetherTheme.colors
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 108.dp)
+            .testTag(tag),
+        textStyle = AetherType.Data.copy(color = colors.text),
+        placeholder = {
+            Text(placeholder, style = AetherType.Data, color = colors.text3)
+        },
         shape = RoundedCornerShape(14.dp),
         colors = TextFieldDefaults.colors(
             focusedContainerColor = colors.ink1,
