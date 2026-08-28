@@ -12,6 +12,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -118,7 +119,10 @@ class MainActivity : ComponentActivity() {
         batteryRequestOpen = true
         runCatching { startActivity(intent) }.onFailure {
             runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
-                .onFailure { batteryRequestOpen = false }
+                .onFailure {
+                    batteryRequestOpen = false
+                    explainUnavailable("Battery settings are not available on this device.")
+                }
         }
     }
 
@@ -139,7 +143,10 @@ class MainActivity : ComponentActivity() {
      * against, and the user should see where the file comes from.
      */
     private fun openReleasePage(url: String) {
-        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+        openExternal(
+            Intent(Intent.ACTION_VIEW, Uri.parse(url)),
+            "No app on this device can open the download page.",
+        )
     }
 
     /**
@@ -151,7 +158,11 @@ class MainActivity : ComponentActivity() {
      */
     private fun offerQuickSettingsTile() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        val manager = getSystemService(android.app.StatusBarManager::class.java) ?: return
+        val manager = getSystemService(android.app.StatusBarManager::class.java)
+        if (manager == null) {
+            explainUnavailable("This device could not open the tile setup.")
+            return
+        }
         runCatching {
             manager.requestAddTileService(
                 android.content.ComponentName(
@@ -160,16 +171,23 @@ class MainActivity : ComponentActivity() {
                 ),
                 getString(R.string.app_name),
                 android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_notification),
-                {},
-                {},
+                mainExecutor,
+                { result ->
+                    if (
+                        result != android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED &&
+                        result != android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED
+                    ) {
+                        explainUnavailable("This device could not add the tile.")
+                    }
+                },
             )
-        }
+        }.onFailure { explainUnavailable("This device could not open the tile setup.") }
     }
 
     private fun openAppSettings() {
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
             .setData(Uri.parse("package:$packageName"))
-        runCatching { startActivity(intent) }
+        openExternal(intent, "App settings are not available on this device.")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -201,7 +219,13 @@ class MainActivity : ComponentActivity() {
                         // Any type: pickers vary in whether they know .toml, and
                         // a file the user cannot select is worse than one the
                         // engine rejects with a reason.
-                        identityImportSource.launch(arrayOf("*/*"))
+                        val type = arrayOf("*/*")
+                        val intent = ActivityResultContracts.OpenDocument().createIntent(this, type)
+                        if (intent.resolveActivity(packageManager) == null) {
+                            explainUnavailable("No file picker is available on this device.")
+                        } else {
+                            identityImportSource.launch(type)
+                        }
                     },
                     onShareReport = ::shareReport,
                     onCopyReport = ::copyReport,
@@ -270,7 +294,14 @@ class MainActivity : ComponentActivity() {
             putExtra(Intent.EXTRA_SUBJECT, "WhiteAesther diagnostics")
             putExtra(Intent.EXTRA_TEXT, report)
         }
-        startActivity(Intent.createChooser(intent, "Send diagnostics"))
+        if (intent.resolveActivity(packageManager) == null) {
+            explainUnavailable("No app on this device can send the report.")
+            return
+        }
+        openExternal(
+            Intent.createChooser(intent, "Send diagnostics"),
+            "No app on this device can send the report.",
+        )
     }
 
     /**
@@ -282,8 +313,15 @@ class MainActivity : ComponentActivity() {
      */
     private fun exportIdentity() {
         val payload = viewModel.exportIdentity() ?: return
+        val name = "whiteaesther-identity.toml"
+        val intent = ActivityResultContracts.CreateDocument("application/toml")
+            .createIntent(this, name)
+        if (intent.resolveActivity(packageManager) == null) {
+            explainUnavailable("No file picker is available on this device.")
+            return
+        }
         pendingIdentityExport = payload
-        identityExportTarget.launch("whiteaesther-identity.toml")
+        identityExportTarget.launch(name)
     }
 
     private fun writeIdentityBackup(uri: Uri, payload: String) {
@@ -308,6 +346,18 @@ class MainActivity : ComponentActivity() {
     private fun copyReport(report: String) {
         val clipboard = getSystemService(ClipboardManager::class.java) ?: return
         clipboard.setPrimaryClip(ClipData.newPlainText("WhiteAesther diagnostics", report))
+    }
+
+    private fun openExternal(intent: Intent, unavailable: String) {
+        if (intent.resolveActivity(packageManager) == null) {
+            explainUnavailable(unavailable)
+            return
+        }
+        runCatching { startActivity(intent) }.onFailure { explainUnavailable(unavailable) }
+    }
+
+    private fun explainUnavailable(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
     private fun startService(settings: AppSettings) {

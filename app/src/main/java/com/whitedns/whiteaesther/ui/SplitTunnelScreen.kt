@@ -1,8 +1,9 @@
 package com.whitedns.whiteaesther.ui
 
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -40,6 +42,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -90,7 +93,7 @@ fun SplitTunnelScreen(
     }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize().imePadding(),
+        modifier = Modifier.fillMaxSize().imePadding().testTag("split-app-list"),
         contentPadding = PaddingValues(horizontal = 18.dp),
     ) {
         item(key = "header") {
@@ -223,6 +226,8 @@ fun SplitTunnelScreen(
 private fun AppRow(app: InstalledApp, checked: Boolean, onToggle: (Boolean) -> Unit) {
     val colors = AetherTheme.colors
     val context = LocalContext.current
+    val interaction = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(14.dp)
 
     // Fetched when the row appears, not when the screen opens. Rasterising an
     // adaptive icon is not free, and doing it for two hundred apps the user
@@ -241,7 +246,14 @@ private fun AppRow(app: InstalledApp, checked: Boolean, onToggle: (Boolean) -> U
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable { onToggle(!checked) }
+            .toggleable(
+                value = checked,
+                interactionSource = interaction,
+                indication = LocalIndication.current,
+                role = Role.Switch,
+                onValueChange = onToggle,
+            )
+            .controllerFocus(interaction, shape)
             .padding(horizontal = 15.dp, vertical = 11.dp)
             .testTag("split-app-${app.packageName}"),
         verticalAlignment = Alignment.CenterVertically,
@@ -289,7 +301,7 @@ private fun AppRow(app: InstalledApp, checked: Boolean, onToggle: (Boolean) -> U
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        AetherSwitch(checked = checked, onCheckedChange = onToggle)
+        AetherSwitch(checked = checked, onCheckedChange = null)
     }
     Divider()
 }

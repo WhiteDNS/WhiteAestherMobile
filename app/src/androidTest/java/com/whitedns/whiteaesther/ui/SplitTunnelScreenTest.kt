@@ -1,14 +1,28 @@
 package com.whitedns.whiteaesther.ui
 
+import android.app.Activity
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.test.platform.app.InstrumentationRegistry
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.data.AppSettings
@@ -20,6 +34,7 @@ import com.whitedns.whiteaesther.ui.theme.WhiteAestherTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -65,6 +80,15 @@ class SplitTunnelScreenTest {
     }
 
     @Test
+    fun leanbackOnlyAppsAreIncludedOncePerPackage() {
+        val fixturePackage = InstrumentationRegistry.getInstrumentation().context.packageName
+
+        val matches = InstalledApps.launchable(context).filter { it.packageName == fixturePackage }
+
+        assertEquals(1, matches.size)
+    }
+
+    @Test
     fun thisAppIsNeverOfferedAsSomethingToRoute() {
         setApp(AppSettings(splitTunnel = SplitTunnel(mode = SplitTunnelMode.ONLY)))
 
@@ -102,13 +126,62 @@ class SplitTunnelScreenTest {
 
     @Test
     fun pickingAnAppRecordsIt() {
+        val testPackage = InstrumentationRegistry.getInstrumentation().context.packageName
         val target = InstalledApps.launchable(context)
-            .first { it.packageName != context.packageName }
+            .first { it.packageName != context.packageName && it.packageName != testPackage }
         setApp(AppSettings(splitTunnel = SplitTunnel(mode = SplitTunnelMode.EXCEPT)))
 
-        compose.onNodeWithTag("split-app-${target.packageName}").performScrollTo().performClick()
+        compose.onNodeWithTag("split-app-list")
+            .performScrollToNode(hasTestTag("split-app-${target.packageName}"))
+        compose.onNodeWithTag("split-app-${target.packageName}")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
+            .performClick()
 
         assertTrue(saved?.splitTunnel?.packages?.contains(target.packageName) == true)
         assertFalse(saved?.splitTunnel?.packages?.contains(context.packageName) == true)
     }
+
+    @Test
+    fun tvAppRowIsOneRemoteToggleTarget() {
+        assumeTrue(TvUiPolicy.isTelevision(context.resources.configuration.uiMode))
+        val testPackage = InstrumentationRegistry.getInstrumentation().context.packageName
+        val target = InstalledApps.launchable(context)
+            .first { it.packageName != context.packageName && it.packageName != testPackage }
+        setApp(AppSettings(splitTunnel = SplitTunnel(mode = SplitTunnelMode.EXCEPT)))
+
+        compose.onNodeWithTag("split-app-list")
+            .performScrollToNode(hasTestTag("split-app-${target.packageName}"))
+        compose.onNodeWithTag("split-app-${target.packageName}")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
+            .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
+            .assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionCenter) }
+
+        assertTrue(saved?.splitTunnel?.packages?.contains(target.packageName) == true)
+    }
+
+    @Test
+    fun dpadFocusScrollsThroughTheLazyAppList() {
+        assumeTrue(TvUiPolicy.isTelevision(context.resources.configuration.uiMode))
+        val apps = InstalledApps.launchable(context).filterNot { it.packageName == context.packageName }
+        val first = apps.first()
+        val last = apps.last()
+        setApp(AppSettings(splitTunnel = SplitTunnel(mode = SplitTunnelMode.EXCEPT)))
+
+        compose.onNodeWithTag("split-app-list")
+            .performScrollToNode(hasTestTag("split-app-${first.packageName}"))
+        compose.onNodeWithTag("split-app-${first.packageName}")
+            .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
+            .performKeyInput {
+                repeat(apps.lastIndex) { pressKey(Key.DirectionDown) }
+            }
+
+        compose.onNodeWithTag("split-app-${last.packageName}")
+            .assertIsFocused()
+            .assertIsDisplayed()
+    }
 }
+
+class LeanbackFixtureOneActivity : Activity()
+
+class LeanbackFixtureTwoActivity : Activity()

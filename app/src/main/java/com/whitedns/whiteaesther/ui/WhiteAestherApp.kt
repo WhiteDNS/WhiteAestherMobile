@@ -2,9 +2,12 @@ package com.whitedns.whiteaesther.ui
 
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,10 +24,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,7 +38,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -107,18 +115,81 @@ fun WhiteAestherApp(
     onRequestBatteryExemption: () -> Unit = {},
     onOpenAppSettings: () -> Unit = {},
     onAddTile: () -> Unit = {},
+    television: Boolean? = null,
 ) {
     var destination by rememberSaveable { mutableStateOf(Destination.HOME) }
     val colors = AetherTheme.colors
+    val isTelevision = television ?: TvUiPolicy.isTelevision(LocalConfiguration.current.uiMode)
+    val connectFocus = remember { FocusRequester() }
+    val endpointFocus = remember { FocusRequester() }
+    val chainFocus = remember { FocusRequester() }
+    val rulesFocus = remember { FocusRequester() }
+    val appsFocus = remember { FocusRequester() }
+    val identityFocus = remember { FocusRequester() }
+    val diagnosticsFocus = remember { FocusRequester() }
+    val aboutFocus = remember { FocusRequester() }
+    var returnDestination by remember { mutableStateOf<Destination?>(null) }
+    var returnFocus by remember { mutableStateOf<FocusRequester?>(null) }
 
-    Column(
+    fun parentOf(detail: Destination): Destination? = when (detail) {
+        Destination.CHAIN, Destination.ENDPOINT, Destination.ROUTING_RULES -> Destination.ROUTES
+        Destination.SPLIT_TUNNEL -> Destination.TRAFFIC
+        Destination.DIAGNOSTICS, Destination.IDENTITY, Destination.ABOUT -> Destination.SETTINGS
+        else -> null
+    }
+
+    fun openDetail(detail: Destination, requester: FocusRequester) {
+        returnDestination = parentOf(detail)
+        returnFocus = requester
+        destination = detail
+    }
+
+    fun goBack() {
+        parentOf(destination)?.let { destination = it }
+    }
+
+    LaunchedEffect(isTelevision) {
+        if (isTelevision && destination == Destination.HOME) connectFocus.requestFocus()
+    }
+
+    LaunchedEffect(destination) {
+        if (destination == returnDestination) {
+            returnFocus?.requestFocus()
+            returnDestination = null
+            returnFocus = null
+        }
+    }
+
+    BackHandler(enabled = parentOf(destination) != null, onBack = ::goBack)
+
+    Box(
         Modifier
             .fillMaxSize()
             .background(colors.ink1)
-            .statusBarsPadding(),
+            .then(
+                if (isTelevision) {
+                    Modifier.padding(
+                        horizontal = TvUiPolicy.safeHorizontalInset,
+                        vertical = TvUiPolicy.safeVerticalInset,
+                    )
+                } else {
+                    Modifier.statusBarsPadding()
+                },
+            ),
     ) {
-        Box(Modifier.weight(1f)) {
-            when (destination) {
+        Column(
+            Modifier
+                .align(Alignment.TopCenter)
+                .then(
+                    if (isTelevision) {
+                        Modifier.widthIn(max = TvUiPolicy.maxContentWidth).fillMaxSize()
+                    } else {
+                        Modifier.fillMaxSize()
+                    },
+                ),
+        ) {
+            Box(Modifier.weight(1f)) {
+                when (destination) {
                 Destination.HOME -> HomeScreen(
                     settings = settings,
                     status = engineStatus,
@@ -141,15 +212,26 @@ fun WhiteAestherApp(
                         }
                     },
                     onGoToRoutes = { destination = Destination.ROUTES },
-                    onGoToEndpoint = { destination = Destination.ENDPOINT },
+                    onGoToEndpoint = {
+                        openDetail(Destination.ENDPOINT, endpointFocus)
+                    },
                     onGoToTraffic = { destination = Destination.TRAFFIC },
+                    connectModifier = Modifier.focusRequester(connectFocus),
+                    compact = isTelevision,
                 )
                 Destination.ROUTES -> RoutesScreen(
                     settings = settings,
                     onSettingsChange = onSettingsChange,
-                    onGoToEndpoint = { destination = Destination.ENDPOINT },
-                    onGoToChain = { destination = Destination.CHAIN },
-                    onGoToRoutingRules = { destination = Destination.ROUTING_RULES },
+                    onGoToEndpoint = {
+                        openDetail(Destination.ENDPOINT, endpointFocus)
+                    },
+                    onGoToChain = { openDetail(Destination.CHAIN, chainFocus) },
+                    onGoToRoutingRules = {
+                        openDetail(Destination.ROUTING_RULES, rulesFocus)
+                    },
+                    endpointModifier = Modifier.focusRequester(endpointFocus),
+                    chainModifier = Modifier.focusRequester(chainFocus),
+                    routingRulesModifier = Modifier.focusRequester(rulesFocus),
                 )
                 Destination.CHAIN -> ChainScreen(
                     settings = settings,
@@ -159,7 +241,7 @@ fun WhiteAestherApp(
                     onRefreshNodes = onRefreshChainNodes,
                     onSelectNode = onSelectChainNode,
                     onTestNodes = onTestChainNodes,
-                    onBack = { destination = Destination.ROUTES },
+                    onBack = ::goBack,
                 )
                 Destination.ENDPOINT -> EndpointScreen(
                     settings = settings,
@@ -169,23 +251,26 @@ fun WhiteAestherApp(
                     onScanEndpoints = onScanEndpoints,
                     onTestEndpoint = onTestEndpoint,
                     onCancelEndpointScan = onCancelEndpointScan,
-                    onBack = { destination = Destination.ROUTES },
+                    onBack = ::goBack,
                 )
                 Destination.TRAFFIC -> TrafficScreen(
                     settings = settings,
                     status = engineStatus,
                     onSettingsChange = onSettingsChange,
-                    onGoToSplitTunnel = { destination = Destination.SPLIT_TUNNEL },
+                    onGoToSplitTunnel = {
+                        openDetail(Destination.SPLIT_TUNNEL, appsFocus)
+                    },
+                    appsModifier = Modifier.focusRequester(appsFocus),
                 )
                 Destination.SPLIT_TUNNEL -> SplitTunnelScreen(
                     settings = settings,
                     onSettingsChange = onSettingsChange,
-                    onBack = { destination = Destination.TRAFFIC },
+                    onBack = ::goBack,
                 )
                 Destination.ROUTING_RULES -> RoutingRulesScreen(
                     settings = settings,
                     onSettingsChange = onSettingsChange,
-                    onBack = { destination = Destination.ROUTES },
+                    onBack = ::goBack,
                 )
                 Destination.SETTINGS -> SettingsScreen(
                     settings = settings,
@@ -194,16 +279,26 @@ fun WhiteAestherApp(
                     onRequestBatteryExemption = onRequestBatteryExemption,
                     onOpenAppSettings = onOpenAppSettings,
                     onAddTile = onAddTile,
-                    onGoToDiagnostics = { destination = Destination.DIAGNOSTICS },
-                    onGoToAbout = { destination = Destination.ABOUT },
-                    onGoToIdentity = { destination = Destination.IDENTITY },
+                    onGoToDiagnostics = {
+                        openDetail(Destination.DIAGNOSTICS, diagnosticsFocus)
+                    },
+                    onGoToAbout = {
+                        openDetail(Destination.ABOUT, aboutFocus)
+                    },
+                    onGoToIdentity = {
+                        openDetail(Destination.IDENTITY, identityFocus)
+                    },
+                    isTelevision = isTelevision,
+                    identityModifier = Modifier.focusRequester(identityFocus),
+                    diagnosticsModifier = Modifier.focusRequester(diagnosticsFocus),
+                    aboutModifier = Modifier.focusRequester(aboutFocus),
                 )
                 Destination.DIAGNOSTICS -> DiagnosticsScreen(
                     settings = settings,
                     status = engineStatus,
                     nativeVersion = nativeVersion,
                     entries = logEntries,
-                    onBack = { destination = Destination.SETTINGS },
+                    onBack = ::goBack,
                     onShare = onShareReport,
                     onCopy = onCopyReport,
                     onClear = onClearLog,
@@ -213,27 +308,31 @@ fun WhiteAestherApp(
                     message = identityMessage,
                     onExport = onExportIdentity,
                     onImport = onImportIdentity,
-                    onBack = { destination = Destination.SETTINGS },
+                    onBack = ::goBack,
                 )
                 Destination.ABOUT -> AboutScreen(
                     nativeVersion = nativeVersion,
                     settings = settings,
-                    onBack = { destination = Destination.SETTINGS },
+                    onBack = ::goBack,
                 )
-            }
-        }
-
-        TabBar(
-            selected = destination.tab,
-            onSelect = { tab ->
-                destination = when (tab) {
-                    Tab.HOME -> Destination.HOME
-                    Tab.ROUTES -> Destination.ROUTES
-                    Tab.TRAFFIC -> Destination.TRAFFIC
-                    Tab.SETTINGS -> Destination.SETTINGS
                 }
-            },
-        )
+            }
+
+            TabBar(
+                selected = destination.tab,
+                isTelevision = isTelevision,
+                onSelect = { tab ->
+                    returnDestination = null
+                    returnFocus = null
+                    destination = when (tab) {
+                        Tab.HOME -> Destination.HOME
+                        Tab.ROUTES -> Destination.ROUTES
+                        Tab.TRAFFIC -> Destination.TRAFFIC
+                        Tab.SETTINGS -> Destination.SETTINGS
+                    }
+                },
+            )
+        }
     }
 }
 
@@ -242,13 +341,13 @@ fun WhiteAestherApp(
  * so the icon and its label share the cell's exact centre line.
  */
 @Composable
-private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit) {
+private fun TabBar(selected: Tab, isTelevision: Boolean, onSelect: (Tab) -> Unit) {
     val colors = AetherTheme.colors
     Column(
         Modifier
             .fillMaxWidth()
             .background(colors.ink1)
-            .navigationBarsPadding(),
+            .then(if (isTelevision) Modifier else Modifier.navigationBarsPadding()),
     ) {
         Box(
             Modifier
@@ -281,15 +380,17 @@ private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit) {
                     .background(colors.brand.copy(alpha = 0.12f))
                     .border(1.dp, colors.brand.copy(alpha = 0.26f), RoundedCornerShape(14.dp)),
             )
-            Row(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxSize().focusGroup()) {
                 Tab.entries.forEach { tab ->
                     val active = tab == selected
                     val interaction = remember { MutableInteractionSource() }
+                    val shape = RoundedCornerShape(14.dp)
                     Column(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxSize()
-                            .clickable(interaction, indication = null) { onSelect(tab) }
+                            .clickable(interaction, LocalIndication.current) { onSelect(tab) }
+                            .controllerFocus(interaction, shape)
                             .testTag("tab-${tab.label.lowercase()}"),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,

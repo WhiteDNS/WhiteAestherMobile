@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.whitedns.whiteaesther.ui.theme.AetherTheme
 import com.whitedns.whiteaesther.ui.theme.AetherType
@@ -68,6 +69,7 @@ fun ConnectOrb(
     caption: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    diameter: Dp = 262.dp,
     onClick: () -> Unit,
 ) {
     val colors = AetherTheme.colors
@@ -120,9 +122,10 @@ fun ConnectOrb(
 
     Box(
         modifier = modifier
-            .size(262.dp)
+            .size(diameter)
             .scale(press)
             .clickable(interaction, indication = null, enabled = enabled, onClick = onClick)
+            .controllerFocus(interaction, CircleShape, enabled)
             .testTag("connect-orb"),
         contentAlignment = Alignment.Center,
     ) {
@@ -173,7 +176,7 @@ fun ConnectOrb(
 
         Column(
             modifier = Modifier
-                .size((R_CORE * 2 / VIEWBOX * 262).dp)
+                .size(diameter * (R_CORE * 2 / VIEWBOX))
                 .clip(CircleShape)
                 .background(
                     Brush.radialGradient(
