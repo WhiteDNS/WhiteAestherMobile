@@ -181,6 +181,8 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
     var draft by rememberSaveable { mutableStateOf("") }
     var pasting by rememberSaveable { mutableStateOf(false) }
     var manual by rememberSaveable(chain.manual) { mutableStateOf(chain.manual) }
+    val sourceInteraction = remember { MutableInteractionSource() }
+    val manualInteraction = remember { MutableInteractionSource() }
 
     AetherCard {
         CardHead("Where your nodes come from", "A subscription link, or nodes pasted by hand.")
@@ -189,6 +191,15 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
             Divider()
             SettingRow(title = source.name, subtitle = source.url) {
                 val removeInteraction = remember(source.url) { MutableInteractionSource() }
+                val removeSource = {
+                    onSettingsChange(
+                        settings.copy(
+                            chain = chain.copy(
+                                sources = chain.sources.filterIndexed { at, _ -> at != index },
+                            ),
+                        ),
+                    )
+                }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -211,15 +222,12 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
                         Modifier
                             .clip(CircleShape)
                             .border(1.dp, colors.line, CircleShape)
-                            .clickable(removeInteraction, LocalIndication.current) {
-                                onSettingsChange(
-                                    settings.copy(
-                                        chain = chain.copy(
-                                            sources = chain.sources.filterIndexed { at, _ -> at != index },
-                                        ),
-                                    ),
-                                )
-                            }
+                            .tvControllerActivation(onClick = removeSource)
+                            .clickable(
+                                removeInteraction,
+                                LocalIndication.current,
+                                onClick = removeSource,
+                            )
                             .controllerFocus(removeInteraction, CircleShape)
                             .padding(horizontal = 11.dp, vertical = 6.dp),
                     ) {
@@ -238,7 +246,9 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
                 onValueChange = { draft = it.take(512) },
                 modifier = Modifier
                     .fillMaxWidth()
+                    .tvTextFieldSupport(sourceInteraction)
                     .testTag("chain-source-field"),
+                interactionSource = sourceInteraction,
                 placeholder = {
                     Text("https://…", style = AetherType.Data, color = colors.text3)
                 },
@@ -292,7 +302,9 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 120.dp)
+                        .tvTextFieldSupport(manualInteraction)
                         .testTag("chain-manual-field"),
+                    interactionSource = manualInteraction,
                     placeholder = {
                         Text("vless://…", style = AetherType.Data, color = colors.text3)
                     },
@@ -433,6 +445,7 @@ private fun NodeRow(
             .fillMaxWidth()
             // Listed but not selectable. Choosing it would start a chain that
             // cannot authenticate, and the failure would look like the node.
+            .tvControllerActivation(enabled = supported, onClick = onClick)
             .clickable(
                 interactionSource = interaction,
                 indication = LocalIndication.current,

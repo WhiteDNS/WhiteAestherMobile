@@ -750,6 +750,7 @@ fun EndpointScreen(
     val custom = settings.endpointMode != EndpointMode.AUTOMATIC
     var endpointText by rememberSaveable { mutableStateOf(settings.customEndpoint) }
     var focused by remember { mutableStateOf(false) }
+    val endpointInteraction = remember { MutableInteractionSource() }
     LaunchedEffect(settings.customEndpoint) {
         if (!focused && settings.customEndpoint != endpointText) endpointText = settings.customEndpoint
     }
@@ -816,8 +817,10 @@ fun EndpointScreen(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
+                            .tvTextFieldSupport(endpointInteraction)
                             .onFocusChanged { focused = it.isFocused }
                             .testTag("custom-endpoint-field"),
+                        interactionSource = endpointInteraction,
                         placeholder = { Text("162.159.197.3:443", style = AetherType.Data, color = colors.text3) },
                         textStyle = AetherType.Data.copy(color = colors.text),
                         supportingText = {
@@ -905,20 +908,22 @@ fun EndpointScreen(
                 val selected = custom && normalized == result.peer
                 val interaction = remember(result.peer) { MutableInteractionSource() }
                 val shape = RoundedCornerShape(14.dp)
+                val selectResult = {
+                    endpointText = result.peer
+                    onSettingsChange(
+                        settings.copy(
+                            endpointMode = EndpointMode.CUSTOM_FIRST,
+                            customEndpoint = result.peer,
+                            customEndpointProtocol = settings.transport,
+                        ),
+                    )
+                }
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .background(if (selected) colors.brand.copy(alpha = 0.08f) else Color.Transparent)
-                        .clickable(interaction, LocalIndication.current) {
-                            endpointText = result.peer
-                            onSettingsChange(
-                                settings.copy(
-                                    endpointMode = EndpointMode.CUSTOM_FIRST,
-                                    customEndpoint = result.peer,
-                                    customEndpointProtocol = settings.transport,
-                                ),
-                            )
-                        }
+                        .tvControllerActivation(onClick = selectResult)
+                        .clickable(interaction, LocalIndication.current, onClick = selectResult)
                         .controllerFocus(interaction, shape)
                         .padding(horizontal = 15.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1060,6 +1065,7 @@ fun TrafficScreen(
 
                 Divider()
                 Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
+                    val portInteraction = remember { MutableInteractionSource() }
                     Text("Local proxy port", style = AetherType.RowTitle, color = colors.text)
                     Text(
                         "Where proxy-only mode listens on this device.",
@@ -1079,7 +1085,9 @@ fun TrafficScreen(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
+                            .tvTextFieldSupport(portInteraction)
                             .testTag("proxy-port-field"),
+                        interactionSource = portInteraction,
                         textStyle = AetherType.Data.copy(color = colors.text),
                         supportingText = { Text("Between 1024 and 65535", style = AetherType.Small) },
                         isError = portText.toIntOrNull() !in 1_024..65_535,
@@ -1337,6 +1345,7 @@ private fun LanCredentialField(
     onValueChange: (String) -> Unit,
 ) {
     val colors = AetherTheme.colors
+    val interaction = remember { MutableInteractionSource() }
     OutlinedTextField(
         value = value,
         // Whitespace is dropped as it is typed rather than trimmed on save: a
@@ -1345,7 +1354,9 @@ private fun LanCredentialField(
         onValueChange = { entered -> onValueChange(entered.filterNot(Char::isWhitespace)) },
         modifier = Modifier
             .fillMaxWidth()
+            .tvTextFieldSupport(interaction)
             .testTag(tag),
+        interactionSource = interaction,
         textStyle = AetherType.Data.copy(color = colors.text),
         label = { Text(label, style = AetherType.Small) },
         singleLine = true,
@@ -1414,12 +1425,15 @@ private fun PlainField(
     onValueChange: (String) -> Unit,
 ) {
     val colors = AetherTheme.colors
+    val interaction = remember { MutableInteractionSource() }
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         modifier = Modifier
             .fillMaxWidth()
+            .tvTextFieldSupport(interaction)
             .testTag(tag),
+        interactionSource = interaction,
         textStyle = AetherType.Data.copy(color = colors.text),
         singleLine = true,
         shape = RoundedCornerShape(14.dp),
@@ -1535,13 +1549,16 @@ private fun RuleField(
     onValueChange: (String) -> Unit,
 ) {
     val colors = AetherTheme.colors
+    val interaction = remember { MutableInteractionSource() }
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 108.dp)
+            .tvTextFieldSupport(interaction)
             .testTag(tag),
+        interactionSource = interaction,
         textStyle = AetherType.Data.copy(color = colors.text),
         placeholder = {
             Text(placeholder, style = AetherType.Data, color = colors.text3)
@@ -1713,6 +1730,9 @@ private fun CommunityFooter() {
     val uriHandler = LocalUriHandler.current
     val interaction = remember { MutableInteractionSource() }
     var unavailable by rememberSaveable { mutableStateOf(false) }
+    val openCommunity = {
+        unavailable = runCatching { uriHandler.openUri("https://t.me/whitedns") }.isFailure
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1722,9 +1742,8 @@ private fun CommunityFooter() {
                 .clip(CircleShape)
                 .background(colors.cyan.copy(alpha = 0.10f))
                 .border(1.dp, colors.cyan.copy(alpha = 0.34f), CircleShape)
-                .clickable(interaction, LocalIndication.current) {
-                    unavailable = runCatching { uriHandler.openUri("https://t.me/whitedns") }.isFailure
-                }
+                .tvControllerActivation(onClick = openCommunity)
+                .clickable(interaction, LocalIndication.current, onClick = openCommunity)
                 .controllerFocus(interaction, CircleShape)
                 .testTag("telegram-link")
                 .padding(start = 16.dp, end = 20.dp, top = 11.dp, bottom = 11.dp),
@@ -2050,6 +2069,7 @@ private fun CheckRow(
             .then(
                 if (onCheckedChange != null) {
                     Modifier
+                        .tvControllerActivation { onCheckedChange(!checked) }
                         .toggleable(
                             value = checked,
                             interactionSource = interaction,

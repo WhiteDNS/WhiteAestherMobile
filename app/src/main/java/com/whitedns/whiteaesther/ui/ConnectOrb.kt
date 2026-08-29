@@ -124,6 +124,7 @@ fun ConnectOrb(
         modifier = modifier
             .size(diameter)
             .scale(press)
+            .tvControllerActivation(enabled = enabled, onClick = onClick)
             .clickable(interaction, indication = null, enabled = enabled, onClick = onClick)
             .controllerFocus(interaction, CircleShape, enabled)
             .testTag("connect-orb"),

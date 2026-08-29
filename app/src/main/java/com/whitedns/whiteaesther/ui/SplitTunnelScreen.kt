@@ -87,6 +87,7 @@ fun SplitTunnelScreen(
     }
 
     var query by rememberSaveable { mutableStateOf("") }
+    val searchInteraction = remember { MutableInteractionSource() }
     val visible = remember(apps, query) {
         val all = apps.orEmpty()
         if (query.isBlank()) all else all.filter { it.label.contains(query, ignoreCase = true) }
@@ -167,7 +168,11 @@ fun SplitTunnelScreen(
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                modifier = Modifier.fillMaxWidth().testTag("split-search"),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .tvTextFieldSupport(searchInteraction)
+                    .testTag("split-search"),
+                interactionSource = searchInteraction,
                 placeholder = { Text("Search apps", style = AetherType.Body, color = colors.text3) },
                 textStyle = AetherType.Body.copy(color = colors.text),
                 singleLine = true,
@@ -246,6 +251,7 @@ private fun AppRow(app: InstalledApp, checked: Boolean, onToggle: (Boolean) -> U
     Row(
         Modifier
             .fillMaxWidth()
+            .tvControllerActivation { onToggle(!checked) }
             .toggleable(
                 value = checked,
                 interactionSource = interaction,
