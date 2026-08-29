@@ -21,10 +21,13 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.test.espresso.Espresso.pressBack
+import com.whitedns.whiteaesther.AddressPair
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EndpointMode
+import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatus
+import com.whitedns.whiteaesther.service.TrafficSample
 import com.whitedns.whiteaesther.ui.theme.WhiteAestherTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -41,13 +44,16 @@ class WhiteAestherAppTest {
         onSettings: (AppSettings) -> Unit = {},
         onConnect: () -> Unit = {},
         television: Boolean? = null,
+        engineStatus: EngineStatus = EngineStatus(),
+        addresses: AddressPair = AddressPair(),
+        traffic: TrafficSample = TrafficSample(),
     ) {
         compose.setContent {
             WhiteAestherTheme {
                 var current by remember { mutableStateOf(initial) }
                 WhiteAestherApp(
                     settings = current,
-                    engineStatus = EngineStatus(),
+                    engineStatus = engineStatus,
                     endpointScannerState = EndpointScannerState(),
                     nativeVersion = "1.7.0+android.0.2.0",
                     onSettingsChange = { current = it; onSettings(it) },
@@ -56,6 +62,8 @@ class WhiteAestherAppTest {
                     onScanEndpoints = { onScan() },
                     onTestEndpoint = {},
                     onCancelEndpointScan = {},
+                    addresses = addresses,
+                    traffic = traffic,
                     batteryExempt = true,
                     television = television,
                 )
@@ -131,6 +139,35 @@ class WhiteAestherAppTest {
             .performKeyInput { pressKey(Key.DirectionCenter) }
 
         compose.runOnIdle { assertEquals(1, requests) }
+    }
+
+    @Test
+    fun tvCanFocusAndScrollPastConnectedTimeToTheLastHomeCard() {
+        setApp(
+            television = true,
+            engineStatus = EngineStatus(
+                stage = EngineStage.CONNECTED,
+                message = "Whole-device traffic is protected",
+                connectedAtMillis = System.currentTimeMillis() - 65_000,
+            ),
+            addresses = AddressPair(real = "198.51.100.10", tunnel = "203.0.113.20"),
+            traffic = TrafficSample(received = 4_096, sent = 2_048),
+        )
+
+        compose.onNodeWithTag("connect-orb")
+            .assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        compose.onNodeWithTag("home-connected-for").assertIsFocused()
+
+        compose.onNodeWithTag("home-connected-for")
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        compose.onNodeWithTag("home-address").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        compose.onNodeWithTag("home-session").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        compose.onNodeWithTag("home-connection-details")
+            .assertIsFocused()
+            .assertIsDisplayed()
     }
 
     @Test

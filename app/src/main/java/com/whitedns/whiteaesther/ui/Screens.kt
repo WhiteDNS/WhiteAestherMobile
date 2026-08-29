@@ -307,7 +307,10 @@ fun HomeScreen(
         }
 
         if (status.stage == EngineStage.CONNECTED) {
-            AetherCard {
+            AetherCard(
+                modifier = Modifier.testTag("home-connected-for"),
+                tvFocusable = true,
+            ) {
                 Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
                     SectionLabel("Connected for")
                     Spacer(Modifier.height(3.dp))
@@ -373,7 +376,10 @@ fun HomeScreen(
         }
 
         if (status.stage == EngineStage.CONNECTED || addresses.real != null) {
-            AetherCard {
+            AetherCard(
+                modifier = Modifier.testTag("home-address"),
+                tvFocusable = true,
+            ) {
                 CardHead("Your address")
                 Spacer(Modifier.height(6.dp))
                 FactRow(
@@ -415,7 +421,10 @@ fun HomeScreen(
         }
 
         if (status.stage == EngineStage.CONNECTED || traffic.received > 0 || traffic.sent > 0) {
-            AetherCard {
+            AetherCard(
+                modifier = Modifier.testTag("home-session"),
+                tvFocusable = true,
+            ) {
                 CardHead("This session")
                 Spacer(Modifier.height(6.dp))
                 if (!traffic.supported) {
@@ -465,7 +474,10 @@ fun HomeScreen(
             Spacer(Modifier.height(12.dp))
         }
 
-        AetherCard {
+        AetherCard(
+            modifier = Modifier.testTag("home-connection-details"),
+            tvFocusable = true,
+        ) {
             if (status.stage == EngineStage.CONNECTED) {
                 FactRow("Transport", settings.transport.label)
                 Divider()
