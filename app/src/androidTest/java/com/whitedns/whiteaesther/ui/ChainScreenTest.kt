@@ -5,12 +5,19 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.pressKey
+import androidx.test.platform.app.InstrumentationRegistry
 import com.whitedns.whiteaesther.ChainState
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.core.ChainNode
@@ -22,6 +29,7 @@ import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatus
 import com.whitedns.whiteaesther.ui.theme.WhiteAestherTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -164,6 +172,7 @@ class ChainScreenTest {
                 nodes = listOf(
                     ChainNode("tokyo-01", "Vless", 180),
                     ChainNode("osaka-02", "Trojan", null),
+                    ChainNode("reality-03", "Vless Reality", null, supported = false),
                 ),
                 selected = "tokyo-01",
             ),
@@ -174,6 +183,34 @@ class ChainScreenTest {
         compose.onNodeWithText("180 ms").assertExists()
         compose.onNodeWithTag("chain-node-osaka-02").performScrollTo().performClick()
         assertEquals("osaka-02", selected)
+        compose.onNodeWithTag("chain-node-reality-03").performScrollTo().assertIsNotEnabled()
+    }
+
+    @Test
+    fun tvRemoteCanPickASupportedNode() {
+        val configuration = InstrumentationRegistry.getInstrumentation().targetContext.resources.configuration
+        assumeTrue(TvUiPolicy.isTelevision(configuration.uiMode))
+        setApp(
+            initial = AppSettings(
+                chain = ChainSettings(
+                    enabled = true,
+                    sources = listOf(ChainSource("Test", "https://example.invalid/sub")),
+                ),
+            ),
+            status = EngineStatus(EngineStage.CONNECTED, EngineMode.TUN),
+            chainState = ChainState(
+                available = true,
+                nodes = listOf(ChainNode("tokyo-01", "Vless", 180)),
+            ),
+        )
+        openChain()
+
+        compose.onNodeWithTag("chain-node-tokyo-01")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
+            .assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionCenter) }
+        assertEquals("tokyo-01", selected)
     }
 
     @Test

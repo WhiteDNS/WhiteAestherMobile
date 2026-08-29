@@ -1,8 +1,10 @@
 package com.whitedns.whiteaesther.ui
 
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
@@ -42,6 +45,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -167,6 +171,8 @@ fun HomeScreen(
     onGoToRoutes: () -> Unit,
     onGoToEndpoint: () -> Unit,
     onGoToTraffic: () -> Unit,
+    connectModifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
     val colors = AetherTheme.colors
     val state = status.stage.toConnectState()
@@ -202,6 +208,8 @@ fun HomeScreen(
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             ConnectOrb(
                 state = state,
+                modifier = connectModifier,
+                diameter = if (compact) 210.dp else 262.dp,
                 enabled = status.stage != EngineStage.STOPPING,
                 caption = when (status.stage) {
                     EngineStage.IDLE -> "Tap to connect"
@@ -581,6 +589,9 @@ fun RoutesScreen(
     onGoToEndpoint: () -> Unit,
     onGoToChain: () -> Unit = {},
     onGoToRoutingRules: () -> Unit = {},
+    endpointModifier: Modifier = Modifier,
+    chainModifier: Modifier = Modifier,
+    routingRulesModifier: Modifier = Modifier,
 ) {
     var advanced by rememberSaveable(settings.showAdvanced) { mutableStateOf(settings.showAdvanced) }
     val active = settings.activeProfile()
@@ -634,6 +645,7 @@ fun RoutesScreen(
                 title = "Endpoint",
                 subtitle = settings.endpointSummary(),
                 iconTint = AetherTheme.colors.cyan,
+                modifier = endpointModifier.testTag("routes-endpoint"),
                 onClick = onGoToEndpoint,
             )
             Divider()
@@ -642,6 +654,7 @@ fun RoutesScreen(
                 title = "Exit chain",
                 subtitle = settings.chainSummary(),
                 iconTint = AetherTheme.colors.brand,
+                modifier = chainModifier.testTag("routes-chain"),
                 onClick = onGoToChain,
             )
             Divider()
@@ -650,6 +663,7 @@ fun RoutesScreen(
                 title = "Routing rules",
                 subtitle = settings.routingSummary(),
                 iconTint = AetherTheme.colors.cyan,
+                modifier = routingRulesModifier.testTag("routes-routing-rules"),
                 onClick = onGoToRoutingRules,
             )
         }
@@ -736,6 +750,7 @@ fun EndpointScreen(
     val custom = settings.endpointMode != EndpointMode.AUTOMATIC
     var endpointText by rememberSaveable { mutableStateOf(settings.customEndpoint) }
     var focused by remember { mutableStateOf(false) }
+    val endpointInteraction = remember { MutableInteractionSource() }
     LaunchedEffect(settings.customEndpoint) {
         if (!focused && settings.customEndpoint != endpointText) endpointText = settings.customEndpoint
     }
@@ -802,8 +817,10 @@ fun EndpointScreen(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
+                            .tvTextFieldSupport(endpointInteraction)
                             .onFocusChanged { focused = it.isFocused }
                             .testTag("custom-endpoint-field"),
+                        interactionSource = endpointInteraction,
                         placeholder = { Text("162.159.197.3:443", style = AetherType.Data, color = colors.text3) },
                         textStyle = AetherType.Data.copy(color = colors.text),
                         supportingText = {
@@ -828,22 +845,19 @@ fun EndpointScreen(
                     )
                 }
                 Divider(Modifier.padding(top = 6.dp))
-                SettingRow(
+                ToggleSettingRow(
                     title = "Fall back automatically",
                     subtitle = "If this address stops working, search for another instead of failing.",
-                ) {
-                    AetherSwitch(
-                        checked = settings.endpointMode == EndpointMode.CUSTOM_FIRST,
-                        onCheckedChange = {
-                            onSettingsChange(
-                                settings.copy(
-                                    endpointMode = if (it) EndpointMode.CUSTOM_FIRST else EndpointMode.CUSTOM_ONLY,
-                                ),
-                            )
-                        },
-                        modifier = Modifier.testTag("endpoint-fallback-switch"),
-                    )
-                }
+                    checked = settings.endpointMode == EndpointMode.CUSTOM_FIRST,
+                    onCheckedChange = {
+                        onSettingsChange(
+                            settings.copy(
+                                endpointMode = if (it) EndpointMode.CUSTOM_FIRST else EndpointMode.CUSTOM_ONLY,
+                            ),
+                        )
+                    },
+                    modifier = Modifier.testTag("endpoint-fallback-switch"),
+                )
             }
         }
 
@@ -892,20 +906,25 @@ fun EndpointScreen(
             scannerState.results.forEach { result ->
                 Divider()
                 val selected = custom && normalized == result.peer
+                val interaction = remember(result.peer) { MutableInteractionSource() }
+                val shape = RoundedCornerShape(14.dp)
+                val selectResult = {
+                    endpointText = result.peer
+                    onSettingsChange(
+                        settings.copy(
+                            endpointMode = EndpointMode.CUSTOM_FIRST,
+                            customEndpoint = result.peer,
+                            customEndpointProtocol = settings.transport,
+                        ),
+                    )
+                }
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .background(if (selected) colors.brand.copy(alpha = 0.08f) else Color.Transparent)
-                        .clickable {
-                            endpointText = result.peer
-                            onSettingsChange(
-                                settings.copy(
-                                    endpointMode = EndpointMode.CUSTOM_FIRST,
-                                    customEndpoint = result.peer,
-                                    customEndpointProtocol = settings.transport,
-                                ),
-                            )
-                        }
+                        .tvControllerActivation(onClick = selectResult)
+                        .clickable(interaction, LocalIndication.current, onClick = selectResult)
+                        .controllerFocus(interaction, shape)
                         .padding(horizontal = 15.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -947,6 +966,7 @@ fun TrafficScreen(
     status: EngineStatus,
     onSettingsChange: (AppSettings) -> Unit,
     onGoToSplitTunnel: () -> Unit = {},
+    appsModifier: Modifier = Modifier,
 ) {
     var advanced by rememberSaveable(settings.showAdvanced) { mutableStateOf(settings.showAdvanced) }
     var portText by remember(settings.proxyPort) { mutableStateOf(settings.proxyPort.toString()) }
@@ -971,6 +991,7 @@ fun TrafficScreen(
                     title = "Apps",
                     subtitle = settings.splitTunnel.summary(),
                     iconTint = AetherTheme.colors.cyan,
+                    modifier = appsModifier.testTag("traffic-apps"),
                     onClick = onGoToSplitTunnel,
                 )
             }
@@ -1044,6 +1065,7 @@ fun TrafficScreen(
 
                 Divider()
                 Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
+                    val portInteraction = remember { MutableInteractionSource() }
                     Text("Local proxy port", style = AetherType.RowTitle, color = colors.text)
                     Text(
                         "Where proxy-only mode listens on this device.",
@@ -1063,7 +1085,9 @@ fun TrafficScreen(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
+                            .tvTextFieldSupport(portInteraction)
                             .testTag("proxy-port-field"),
+                        interactionSource = portInteraction,
                         textStyle = AetherType.Data.copy(color = colors.text),
                         supportingText = { Text("Between 1024 and 65535", style = AetherType.Small) },
                         isError = portText.toIntOrNull() !in 1_024..65_535,
@@ -1079,17 +1103,14 @@ fun TrafficScreen(
                 }
 
                 Divider()
-                SettingRow(
+                ToggleSettingRow(
                     title = "Share with this network",
                     subtitle = "Lets other devices on the same Wi-Fi use this tunnel " +
                         "through the proxy above.",
-                ) {
-                    AetherSwitch(
-                        checked = settings.lanSharing,
-                        onCheckedChange = { onSettingsChange(settings.copy(lanSharing = it)) },
-                        modifier = Modifier.testTag("lan-sharing-switch"),
-                    )
-                }
+                    checked = settings.lanSharing,
+                    onCheckedChange = { onSettingsChange(settings.copy(lanSharing = it)) },
+                    modifier = Modifier.testTag("lan-sharing-switch"),
+                )
 
                 if (settings.lanSharing) {
                     Column(
@@ -1216,98 +1237,77 @@ fun TrafficScreen(
                 }
 
                 Divider()
-                SettingRow(
+                ToggleSettingRow(
                     title = "Block traffic if the tunnel fails",
                     subtitle = "When every retry is spent, hold a blocking interface up " +
                         "instead of letting the phone resume unprotected.",
-                ) {
-                    AetherSwitch(
-                        checked = settings.killSwitch,
-                        onCheckedChange = { onSettingsChange(settings.copy(killSwitch = it)) },
-                        modifier = Modifier.testTag("kill-switch"),
-                    )
-                }
+                    checked = settings.killSwitch,
+                    onCheckedChange = { onSettingsChange(settings.copy(killSwitch = it)) },
+                    modifier = Modifier.testTag("kill-switch"),
+                )
 
                 if (settings.killSwitch) {
                     Divider()
-                    SettingRow(
+                    ToggleSettingRow(
                         title = "Keep blocking after you disconnect",
                         subtitle = "Nothing reaches the internet between sessions until you " +
                             "lift it. The app says so while it is on.",
-                    ) {
-                        AetherSwitch(
-                            checked = settings.strictKillSwitch,
-                            onCheckedChange = {
-                                onSettingsChange(settings.copy(strictKillSwitch = it))
-                            },
-                            modifier = Modifier.testTag("strict-kill-switch"),
-                        )
-                    }
+                        checked = settings.strictKillSwitch,
+                        onCheckedChange = {
+                            onSettingsChange(settings.copy(strictKillSwitch = it))
+                        },
+                        modifier = Modifier.testTag("strict-kill-switch"),
+                    )
                 }
 
                 Divider()
-                SettingRow(
+                ToggleSettingRow(
                     title = "Match rules on domain names",
                     subtitle = "Reads the name from a connection's first bytes. Without it a " +
                         "rule written against a domain never matches on this platform.",
-                ) {
-                    AetherSwitch(
-                        checked = settings.routeSniff,
-                        onCheckedChange = { onSettingsChange(settings.copy(routeSniff = it)) },
-                        modifier = Modifier.testTag("route-sniff-switch"),
-                    )
-                }
+                    checked = settings.routeSniff,
+                    onCheckedChange = { onSettingsChange(settings.copy(routeSniff = it)) },
+                    modifier = Modifier.testTag("route-sniff-switch"),
+                )
 
                 Divider()
-                SettingRow(
+                ToggleSettingRow(
                     title = "Replace a refused identity",
                     subtitle = "If Cloudflare stops accepting the saved identity, register a " +
                         "fresh one instead of holding a tunnel that carries nothing.",
-                ) {
-                    AetherSwitch(
-                        checked = settings.autoReprovision,
-                        onCheckedChange = { onSettingsChange(settings.copy(autoReprovision = it)) },
-                        modifier = Modifier.testTag("auto-reprovision-switch"),
-                    )
-                }
+                    checked = settings.autoReprovision,
+                    onCheckedChange = { onSettingsChange(settings.copy(autoReprovision = it)) },
+                    modifier = Modifier.testTag("auto-reprovision-switch"),
+                )
 
                 Divider()
-                SettingRow(
+                ToggleSettingRow(
                     title = "Check the connection works",
                     subtitle = "Sends one test request after connecting. Leave this on.",
-                ) {
-                    AetherSwitch(
-                        checked = settings.validationEnabled,
-                        onCheckedChange = { onSettingsChange(settings.copy(validationEnabled = it)) },
-                        modifier = Modifier.testTag("validation-switch"),
-                    )
-                }
+                    checked = settings.validationEnabled,
+                    onCheckedChange = { onSettingsChange(settings.copy(validationEnabled = it)) },
+                    modifier = Modifier.testTag("validation-switch"),
+                )
 
                 Divider()
-                SettingRow(
+                ToggleSettingRow(
                     title = "Split the TLS handshake",
                     subtitle = "Sends the first packet in pieces so filtering that reads the " +
                         "site name cannot see it. Turn this on where connections are blocked.",
-                ) {
-                    AetherSwitch(
-                        checked = settings.fragmentTls,
-                        onCheckedChange = { onSettingsChange(settings.copy(fragmentTls = it)) },
-                        modifier = Modifier.testTag("fragment-tls-switch"),
-                    )
-                }
+                    checked = settings.fragmentTls,
+                    onCheckedChange = { onSettingsChange(settings.copy(fragmentTls = it)) },
+                    modifier = Modifier.testTag("fragment-tls-switch"),
+                )
 
                 Divider()
-                SettingRow(
+                ToggleSettingRow(
                     title = "Encrypted Client Hello",
                     subtitle = "Hides which site is being reached. Only works where the network " +
                         "on the other end supports it.",
-                ) {
-                    AetherSwitch(
-                        checked = settings.encryptedHello,
-                        onCheckedChange = { onSettingsChange(settings.copy(encryptedHello = it)) },
-                        modifier = Modifier.testTag("ech-switch"),
-                    )
-                }
+                    checked = settings.encryptedHello,
+                    onCheckedChange = { onSettingsChange(settings.copy(encryptedHello = it)) },
+                    modifier = Modifier.testTag("ech-switch"),
+                )
 
                 Divider()
                 // Read-only on purpose: the resolvers are fixed inside the engine
@@ -1345,6 +1345,7 @@ private fun LanCredentialField(
     onValueChange: (String) -> Unit,
 ) {
     val colors = AetherTheme.colors
+    val interaction = remember { MutableInteractionSource() }
     OutlinedTextField(
         value = value,
         // Whitespace is dropped as it is typed rather than trimmed on save: a
@@ -1353,7 +1354,9 @@ private fun LanCredentialField(
         onValueChange = { entered -> onValueChange(entered.filterNot(Char::isWhitespace)) },
         modifier = Modifier
             .fillMaxWidth()
+            .tvTextFieldSupport(interaction)
             .testTag(tag),
+        interactionSource = interaction,
         textStyle = AetherType.Data.copy(color = colors.text),
         label = { Text(label, style = AetherType.Small) },
         singleLine = true,
@@ -1422,12 +1425,15 @@ private fun PlainField(
     onValueChange: (String) -> Unit,
 ) {
     val colors = AetherTheme.colors
+    val interaction = remember { MutableInteractionSource() }
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         modifier = Modifier
             .fillMaxWidth()
+            .tvTextFieldSupport(interaction)
             .testTag(tag),
+        interactionSource = interaction,
         textStyle = AetherType.Data.copy(color = colors.text),
         singleLine = true,
         shape = RoundedCornerShape(14.dp),
@@ -1543,13 +1549,16 @@ private fun RuleField(
     onValueChange: (String) -> Unit,
 ) {
     val colors = AetherTheme.colors
+    val interaction = remember { MutableInteractionSource() }
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 108.dp)
+            .tvTextFieldSupport(interaction)
             .testTag(tag),
+        interactionSource = interaction,
         textStyle = AetherType.Data.copy(color = colors.text),
         placeholder = {
             Text(placeholder, style = AetherType.Data, color = colors.text3)
@@ -1576,6 +1585,10 @@ fun SettingsScreen(
     onGoToDiagnostics: () -> Unit,
     onGoToAbout: () -> Unit,
     onGoToIdentity: () -> Unit,
+    isTelevision: Boolean = false,
+    identityModifier: Modifier = Modifier,
+    diagnosticsModifier: Modifier = Modifier,
+    aboutModifier: Modifier = Modifier,
 ) {
     ScreenColumn {
         CrumbBar("Settings")
@@ -1592,21 +1605,18 @@ fun SettingsScreen(
                 )
             }
             Divider()
-            SettingRow(
+            ToggleSettingRow(
                 title = "Show advanced controls",
                 subtitle = "Opens every Advanced section by default across the app.",
-            ) {
-                AetherSwitch(
-                    checked = settings.showAdvanced,
-                    onCheckedChange = { onSettingsChange(settings.copy(showAdvanced = it)) },
-                    modifier = Modifier.testTag("show-advanced-switch"),
-                )
-            }
+                checked = settings.showAdvanced,
+                onCheckedChange = { onSettingsChange(settings.copy(showAdvanced = it)) },
+                modifier = Modifier.testTag("show-advanced-switch"),
+            )
         }
 
         // Only where the platform can ask. Before Android 13 the tile is still
         // there, but the user has to find it in the shade's own edit screen.
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        if (!isTelevision && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             Spacer(Modifier.height(12.dp))
             AetherCard {
                 SettingRow(
@@ -1684,6 +1694,7 @@ fun SettingsScreen(
                 icon = AetherIcons.Key,
                 title = "Identity & access",
                 subtitle = "The device identity this app was issued",
+                modifier = identityModifier.testTag("settings-identity"),
                 onClick = onGoToIdentity,
             )
             Divider()
@@ -1691,6 +1702,7 @@ fun SettingsScreen(
                 icon = AetherIcons.Pulse,
                 title = "Diagnostics & logs",
                 subtitle = "See what happened, and send a report to the developer",
+                modifier = diagnosticsModifier.testTag("settings-diagnostics"),
                 onClick = onGoToDiagnostics,
             )
             Divider()
@@ -1698,6 +1710,7 @@ fun SettingsScreen(
                 icon = AetherIcons.Info,
                 title = "About WhiteAesther",
                 subtitle = "Version, engine build, and licences",
+                modifier = aboutModifier.testTag("settings-about"),
                 onClick = onGoToAbout,
             )
         }
@@ -1715,6 +1728,11 @@ fun SettingsScreen(
 private fun CommunityFooter() {
     val colors = AetherTheme.colors
     val uriHandler = LocalUriHandler.current
+    val interaction = remember { MutableInteractionSource() }
+    var unavailable by rememberSaveable { mutableStateOf(false) }
+    val openCommunity = {
+        unavailable = runCatching { uriHandler.openUri("https://t.me/whitedns") }.isFailure
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1724,7 +1742,9 @@ private fun CommunityFooter() {
                 .clip(CircleShape)
                 .background(colors.cyan.copy(alpha = 0.10f))
                 .border(1.dp, colors.cyan.copy(alpha = 0.34f), CircleShape)
-                .clickable { uriHandler.openUri("https://t.me/whitedns") }
+                .tvControllerActivation(onClick = openCommunity)
+                .clickable(interaction, LocalIndication.current, onClick = openCommunity)
+                .controllerFocus(interaction, CircleShape)
                 .testTag("telegram-link")
                 .padding(start = 16.dp, end = 20.dp, top = 11.dp, bottom = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1732,6 +1752,14 @@ private fun CommunityFooter() {
         ) {
             Icon(AetherIcons.Telegram, null, Modifier.size(19.dp), colors.cyan)
             Text("Join us on Telegram", style = AetherType.RowTitle, color = colors.cyan)
+        }
+        if (unavailable) {
+            Text(
+                "No app on this device can open the community link.",
+                style = AetherType.Small,
+                color = colors.signalFailed,
+                modifier = Modifier.padding(top = 8.dp).testTag("telegram-unavailable"),
+            )
         }
         Spacer(Modifier.height(10.dp))
         Text(
@@ -1975,16 +2003,13 @@ fun DiagnosticsScreen(
             Divider()
             CheckRow("Your settings", "Profile, transport, coverage and port.", includeSettings) { includeSettings = it }
             Divider()
-            SettingRow(
+            ToggleSettingRow(
                 title = "Hide IP addresses",
                 subtitle = "Replaces them with placeholders. Most problems can still be diagnosed.",
-            ) {
-                AetherSwitch(
-                    checked = redact,
-                    onCheckedChange = { redact = it },
-                    modifier = Modifier.testTag("redact-switch"),
-                )
-            }
+                checked = redact,
+                onCheckedChange = { redact = it },
+                modifier = Modifier.testTag("redact-switch"),
+            )
             Divider()
             Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
                 SectionLabel("Exactly what will be sent")
@@ -2036,10 +2061,27 @@ private fun CheckRow(
     onCheckedChange: ((Boolean) -> Unit)?,
 ) {
     val colors = AetherTheme.colors
+    val interaction = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(14.dp)
     Row(
         Modifier
             .fillMaxWidth()
-            .then(if (onCheckedChange != null) Modifier.clickable { onCheckedChange(!checked) } else Modifier)
+            .then(
+                if (onCheckedChange != null) {
+                    Modifier
+                        .tvControllerActivation { onCheckedChange(!checked) }
+                        .toggleable(
+                            value = checked,
+                            interactionSource = interaction,
+                            indication = LocalIndication.current,
+                            role = Role.Checkbox,
+                            onValueChange = onCheckedChange,
+                        )
+                        .controllerFocus(interaction, shape)
+                } else {
+                    Modifier
+                },
+            )
             .padding(horizontal = 15.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {

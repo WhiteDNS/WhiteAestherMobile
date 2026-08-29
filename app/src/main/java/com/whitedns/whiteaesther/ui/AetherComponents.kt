@@ -2,9 +2,13 @@ package com.whitedns.whiteaesther.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -25,17 +30,20 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -176,6 +184,23 @@ object AetherIcons {
 
 // ----------------------------------------------------------- primitives ----
 
+/** One unmistakable outline for every remote/keyboard focus target. */
+@Composable
+internal fun Modifier.controllerFocus(
+    interactionSource: MutableInteractionSource,
+    shape: Shape,
+    enabled: Boolean = true,
+): Modifier {
+    val focused by interactionSource.collectIsFocusedAsState()
+    return then(
+        if (enabled && focused) {
+            Modifier.border(2.dp, AetherTheme.colors.brand, shape)
+        } else {
+            Modifier
+        },
+    )
+}
+
 @Composable
 fun SectionLabel(text: String, modifier: Modifier = Modifier) {
     Text(
@@ -199,6 +224,8 @@ fun PageTitle(title: String, subtitle: String? = null) {
 
 @Composable
 fun CrumbBar(text: String, onBack: (() -> Unit)? = null) {
+    val backInteraction = remember { MutableInteractionSource() }
+    val backShape = RoundedCornerShape(12.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -210,10 +237,12 @@ fun CrumbBar(text: String, onBack: (() -> Unit)? = null) {
             Box(
                 Modifier
                     .size(38.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .border(1.dp, AetherTheme.colors.line, RoundedCornerShape(12.dp))
+                    .clip(backShape)
+                    .border(1.dp, AetherTheme.colors.line, backShape)
                     .background(AetherTheme.colors.ink2)
-                    .clickable(onClick = onBack)
+                    .tvControllerActivation(onClick = onBack)
+                    .clickable(backInteraction, LocalIndication.current, onClick = onBack)
+                    .controllerFocus(backInteraction, backShape)
                     .testTag("back-button"),
                 contentAlignment = Alignment.Center,
             ) {
@@ -273,10 +302,21 @@ fun RowCard(
     trailing: Boolean = true,
     onClick: (() -> Unit)? = null,
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(14.dp)
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(
+                if (onClick != null) {
+                    Modifier
+                        .tvControllerActivation(onClick = onClick)
+                        .clickable(interaction, LocalIndication.current, onClick = onClick)
+                        .controllerFocus(interaction, shape)
+                } else {
+                    Modifier
+                },
+            )
             .padding(horizontal = 15.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(13.dp),
@@ -346,11 +386,59 @@ fun SettingRow(
 }
 
 @Composable
-fun AetherSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+fun ToggleSettingRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .tvControllerActivation { onCheckedChange(!checked) }
+            .toggleable(
+                value = checked,
+                interactionSource = interaction,
+                indication = LocalIndication.current,
+                role = Role.Switch,
+                onValueChange = onCheckedChange,
+            )
+            .controllerFocus(interaction, shape)
+            .padding(horizontal = 15.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = AetherType.RowTitle, color = AetherTheme.colors.text)
+            Text(subtitle, style = AetherType.Small, color = AetherTheme.colors.text2)
+        }
+        AetherSwitch(checked = checked, onCheckedChange = null)
+    }
+}
+
+@Composable
+fun AetherSwitch(
+    checked: Boolean,
+    onCheckedChange: ((Boolean) -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val interaction = remember { MutableInteractionSource() }
     Switch(
         checked = checked,
         onCheckedChange = onCheckedChange,
-        modifier = modifier,
+        modifier = modifier
+            .then(
+                if (onCheckedChange != null) {
+                    Modifier.tvControllerActivation { onCheckedChange(!checked) }
+                } else {
+                    Modifier
+                },
+            )
+            .controllerFocus(interaction, RoundedCornerShape(16.dp)),
+        interactionSource = interaction,
         colors = SwitchDefaults.colors(
             checkedTrackColor = AetherTheme.colors.brand,
             checkedThumbColor = AetherTheme.colors.onBrand,
@@ -374,6 +462,7 @@ fun <T> SegGroup(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .focusGroup()
             .clip(RoundedCornerShape(13.dp))
             .background(AetherTheme.colors.ink3)
             .border(1.dp, AetherTheme.colors.line, RoundedCornerShape(13.dp))
@@ -382,24 +471,28 @@ fun <T> SegGroup(
     ) {
         options.forEach { option ->
             val active = option == selected
+            val interaction = remember(option) { MutableInteractionSource() }
+            val shape = RoundedCornerShape(10.dp)
             Box(
                 Modifier
                     .weight(1f)
                     .height(38.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(shape)
                     .background(if (active) AetherTheme.colors.ink2 else Color.Transparent)
                     .then(
                         if (active) {
                             Modifier.border(
                                 1.dp,
                                 AetherTheme.colors.brand.copy(alpha = 0.36f),
-                                RoundedCornerShape(10.dp),
+                                shape,
                             )
                         } else {
                             Modifier
                         },
                     )
-                    .clickable { onSelect(option) }
+                    .tvControllerActivation { onSelect(option) }
+                    .clickable(interaction, LocalIndication.current) { onSelect(option) }
+                    .controllerFocus(interaction, shape)
                     .testTag("seg-${label(option).lowercase().replace(' ', '-')}"),
                 contentAlignment = Alignment.Center,
             ) {
@@ -427,16 +520,20 @@ fun ChoiceCard(
     onClick: () -> Unit,
 ) {
     val colors = AetherTheme.colors
+    val interaction = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(14.dp)
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
+            .clip(shape)
             .background(if (selected) colors.brand.copy(alpha = 0.08f) else colors.ink2)
             .border(
                 1.dp,
                 if (selected) colors.brand.copy(alpha = 0.55f) else colors.line,
-                RoundedCornerShape(14.dp),
+                shape,
             )
-            .clickable(onClick = onClick)
+            .tvControllerActivation(onClick = onClick)
+            .clickable(interaction, LocalIndication.current, onClick = onClick)
+            .controllerFocus(interaction, shape)
             .testTag("choice-${name.lowercase().replace(' ', '-')}")
             .padding(13.dp),
     ) {
@@ -483,17 +580,21 @@ fun OptionRow(
     onClick: () -> Unit,
 ) {
     val colors = AetherTheme.colors
+    val interaction = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(14.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(shape)
             .background(if (selected) colors.brand.copy(alpha = 0.07f) else Color.Transparent)
             .border(
                 1.dp,
                 if (selected) colors.brand.copy(alpha = 0.44f) else Color.Transparent,
-                RoundedCornerShape(14.dp),
+                shape,
             )
-            .clickable(onClick = onClick)
+            .tvControllerActivation(onClick = onClick)
+            .clickable(interaction, LocalIndication.current, onClick = onClick)
+            .controllerFocus(interaction, shape)
             .testTag("option-${title.lowercase().replace(' ', '-')}")
             .padding(horizontal = 10.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -557,11 +658,15 @@ fun AdvancedSection(
     content: @Composable ColumnScopeAlias.() -> Unit,
 ) {
     val rotation by animateFloatAsState(if (expanded) 180f else 0f, label = "advanced-chevron")
+    val interaction = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(14.dp)
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onToggle)
+                .tvControllerActivation(onClick = onToggle)
+                .clickable(interaction, LocalIndication.current, onClick = onToggle)
+                .controllerFocus(interaction, shape)
                 .testTag("advanced-toggle")
                 .padding(horizontal = 15.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -610,11 +715,14 @@ fun AttentionCard(
                 Spacer(Modifier.height(11.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     actions.forEach { (label, action) ->
+                        val interaction = remember(label) { MutableInteractionSource() }
                         Box(
                             Modifier
                                 .clip(CircleShape)
                                 .border(1.dp, tone.copy(alpha = 0.42f), CircleShape)
-                                .clickable(onClick = action)
+                                .tvControllerActivation(onClick = action)
+                                .clickable(interaction, LocalIndication.current, onClick = action)
+                                .controllerFocus(interaction, CircleShape)
                                 .padding(horizontal = 13.dp, vertical = 7.dp),
                         ) {
                             Text(label, style = AetherType.Small, color = tone)
@@ -635,12 +743,16 @@ fun PrimaryButton(
     onClick: () -> Unit,
 ) {
     val colors = AetherTheme.colors
+    val interaction = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(14.dp)
     Row(
         modifier = modifier
             .height(50.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(shape)
             .background(if (enabled) colors.brand else colors.brand.copy(alpha = 0.4f))
-            .clickable(enabled = enabled, onClick = onClick)
+            .tvControllerActivation(enabled = enabled, onClick = onClick)
+            .clickable(interaction, LocalIndication.current, enabled = enabled, onClick = onClick)
+            .controllerFocus(interaction, shape, enabled)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp, Alignment.CenterHorizontally),
@@ -659,13 +771,17 @@ fun OutlineButton(
     onClick: () -> Unit,
 ) {
     val colors = AetherTheme.colors
+    val interaction = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(14.dp)
     Row(
         modifier = modifier
             .height(50.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(shape)
             .background(colors.ink2)
-            .border(1.dp, colors.line, RoundedCornerShape(14.dp))
-            .clickable(enabled = enabled, onClick = onClick)
+            .border(1.dp, colors.line, shape)
+            .tvControllerActivation(enabled = enabled, onClick = onClick)
+            .clickable(interaction, LocalIndication.current, enabled = enabled, onClick = onClick)
+            .controllerFocus(interaction, shape, enabled)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),

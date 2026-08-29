@@ -1,8 +1,10 @@
 package com.whitedns.whiteaesther.ui
 
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -108,22 +111,19 @@ fun ChainScreen(
         }
 
         AetherCard {
-            SettingRow(
+            ToggleSettingRow(
                 title = "Exit chain",
                 subtitle = if (chain.enabled) {
                     "Traffic leaves from your node."
                 } else {
                     "Traffic leaves from Cloudflare, as normal."
                 },
-            ) {
-                AetherSwitch(
-                    checked = chain.enabled,
-                    onCheckedChange = {
-                        onSettingsChange(settings.copy(chain = chain.copy(enabled = it)))
-                    },
-                    modifier = Modifier.testTag("chain-switch"),
-                )
-            }
+                checked = chain.enabled,
+                onCheckedChange = {
+                    onSettingsChange(settings.copy(chain = chain.copy(enabled = it)))
+                },
+                modifier = Modifier.testTag("chain-switch"),
+            )
         }
 
         if (!chain.enabled) {
@@ -140,22 +140,19 @@ fun ChainScreen(
 
         Spacer(Modifier.height(12.dp))
         AetherCard {
-            SettingRow(
+            ToggleSettingRow(
                 title = "Dial nodes through the tunnel",
                 subtitle = if (chain.throughTunnel) {
                     "Your network never learns the node's address, and the node never learns yours."
                 } else {
                     "Nodes are reached directly. Use this only where the tunnel itself is blocked."
                 },
-            ) {
-                AetherSwitch(
-                    checked = chain.throughTunnel,
-                    onCheckedChange = {
-                        onSettingsChange(settings.copy(chain = chain.copy(throughTunnel = it)))
-                    },
-                    modifier = Modifier.testTag("chain-through-tunnel-switch"),
-                )
-            }
+                checked = chain.throughTunnel,
+                onCheckedChange = {
+                    onSettingsChange(settings.copy(chain = chain.copy(throughTunnel = it)))
+                },
+                modifier = Modifier.testTag("chain-through-tunnel-switch"),
+            )
         }
         if (!chain.throughTunnel) {
             Note(
@@ -184,6 +181,8 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
     var draft by rememberSaveable { mutableStateOf("") }
     var pasting by rememberSaveable { mutableStateOf(false) }
     var manual by rememberSaveable(chain.manual) { mutableStateOf(chain.manual) }
+    val sourceInteraction = remember { MutableInteractionSource() }
+    val manualInteraction = remember { MutableInteractionSource() }
 
     AetherCard {
         CardHead("Where your nodes come from", "A subscription link, or nodes pasted by hand.")
@@ -191,6 +190,16 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
         chain.sources.forEachIndexed { index, source ->
             Divider()
             SettingRow(title = source.name, subtitle = source.url) {
+                val removeInteraction = remember(source.url) { MutableInteractionSource() }
+                val removeSource = {
+                    onSettingsChange(
+                        settings.copy(
+                            chain = chain.copy(
+                                sources = chain.sources.filterIndexed { at, _ -> at != index },
+                            ),
+                        ),
+                    )
+                }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -213,15 +222,13 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
                         Modifier
                             .clip(CircleShape)
                             .border(1.dp, colors.line, CircleShape)
-                            .clickable {
-                                onSettingsChange(
-                                    settings.copy(
-                                        chain = chain.copy(
-                                            sources = chain.sources.filterIndexed { at, _ -> at != index },
-                                        ),
-                                    ),
-                                )
-                            }
+                            .tvControllerActivation(onClick = removeSource)
+                            .clickable(
+                                removeInteraction,
+                                LocalIndication.current,
+                                onClick = removeSource,
+                            )
+                            .controllerFocus(removeInteraction, CircleShape)
                             .padding(horizontal = 11.dp, vertical = 6.dp),
                     ) {
                         Text("Remove", style = AetherType.Small, color = colors.text3)
@@ -239,7 +246,9 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
                 onValueChange = { draft = it.take(512) },
                 modifier = Modifier
                     .fillMaxWidth()
+                    .tvTextFieldSupport(sourceInteraction)
                     .testTag("chain-source-field"),
+                interactionSource = sourceInteraction,
                 placeholder = {
                     Text("https://…", style = AetherType.Data, color = colors.text3)
                 },
@@ -293,7 +302,9 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 120.dp)
+                        .tvTextFieldSupport(manualInteraction)
                         .testTag("chain-manual-field"),
+                    interactionSource = manualInteraction,
                     placeholder = {
                         Text("vless://…", style = AetherType.Data, color = colors.text3)
                     },
@@ -427,12 +438,21 @@ private fun NodeRow(
     onClick: () -> Unit,
 ) {
     val colors = AetherTheme.colors
+    val interaction = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(14.dp)
     Row(
         Modifier
             .fillMaxWidth()
             // Listed but not selectable. Choosing it would start a chain that
             // cannot authenticate, and the failure would look like the node.
-            .clickable(enabled = supported, onClick = onClick)
+            .tvControllerActivation(enabled = supported, onClick = onClick)
+            .clickable(
+                interactionSource = interaction,
+                indication = LocalIndication.current,
+                enabled = supported,
+                onClick = onClick,
+            )
+            .controllerFocus(interaction, shape, supported)
             .padding(horizontal = 15.dp, vertical = 13.dp)
             .testTag("chain-node-$name"),
         verticalAlignment = Alignment.CenterVertically,

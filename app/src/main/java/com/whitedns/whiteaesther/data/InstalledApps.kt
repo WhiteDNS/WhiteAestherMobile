@@ -37,11 +37,14 @@ object InstalledApps {
      */
     fun launchable(context: Context): List<InstalledApp> {
         val manager = context.packageManager
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-
         return runCatching {
-            manager.queryIntentActivities(intent, 0)
-                .asSequence()
+            sequenceOf(Intent.CATEGORY_LAUNCHER, Intent.CATEGORY_LEANBACK_LAUNCHER)
+                .flatMap { category ->
+                    manager.queryIntentActivities(
+                        Intent(Intent.ACTION_MAIN).addCategory(category),
+                        0,
+                    ).asSequence()
+                }
                 .mapNotNull { it.activityInfo?.applicationInfo }
                 // A package can contribute more than one launcher entry.
                 .distinctBy { it.packageName }

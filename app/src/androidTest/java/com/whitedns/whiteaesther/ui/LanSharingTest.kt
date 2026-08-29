@@ -8,7 +8,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
@@ -75,8 +75,11 @@ class LanSharingTest {
     }
 
     private fun openSharing() {
-        compose.onNodeWithText("Obfuscation · Blocking · Port").performScrollTo().performClick()
+        compose.onNodeWithTag("advanced-toggle").performScrollTo().performClick()
         compose.onNodeWithTag("lan-sharing-switch").performScrollTo().performClick()
+        compose.waitUntil(timeoutMillis = 1_000) {
+            compose.onAllNodesWithTag("lan-sharing-notice").fetchSemanticsNodes().isNotEmpty()
+        }
     }
 
     @Test
