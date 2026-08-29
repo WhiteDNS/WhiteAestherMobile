@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -44,6 +45,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -257,14 +259,28 @@ fun CrumbBar(text: String, onBack: (() -> Unit)? = null) {
 @Composable
 fun AetherCard(
     modifier: Modifier = Modifier,
+    tvFocusable: Boolean = false,
     content: @Composable ColumnScopeAlias.() -> Unit,
 ) {
+    val shape = RoundedCornerShape(20.dp)
+    val tvInteraction = remember { MutableInteractionSource() }
+    val canReceiveTvFocus = tvFocusable && LocalTvMode.current
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
+            .clip(shape)
             .background(AetherTheme.colors.ink2)
-            .border(1.dp, AetherTheme.colors.line, RoundedCornerShape(20.dp)),
+            .border(1.dp, AetherTheme.colors.line, shape)
+            .then(
+                if (canReceiveTvFocus) {
+                    Modifier
+                        .focusable(interactionSource = tvInteraction)
+                        .controllerFocus(tvInteraction, shape)
+                        .semantics(mergeDescendants = true) {}
+                } else {
+                    Modifier
+                },
+            ),
         content = content,
     )
 }
