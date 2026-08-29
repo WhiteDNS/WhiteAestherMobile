@@ -12,6 +12,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -29,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,8 +43,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -118,8 +122,8 @@ fun WhiteAestherApp(
     television: Boolean? = null,
 ) {
     var destination by rememberSaveable { mutableStateOf(Destination.HOME) }
-    val colors = AetherTheme.colors
     val isTelevision = television ?: TvUiPolicy.isTelevision(LocalConfiguration.current.uiMode)
+    val inputModeManager = LocalInputModeManager.current
     val connectFocus = remember { FocusRequester() }
     val endpointFocus = remember { FocusRequester() }
     val chainFocus = remember { FocusRequester() }
@@ -144,12 +148,23 @@ fun WhiteAestherApp(
         destination = detail
     }
 
-    fun goBack() {
-        parentOf(destination)?.let { destination = it }
+    fun goBack(): Boolean {
+        parentOf(destination)?.let {
+            destination = it
+            return true
+        }
+        if (isTelevision && destination != Destination.HOME) {
+            destination = Destination.HOME
+            return true
+        }
+        return false
     }
 
     LaunchedEffect(isTelevision) {
-        if (isTelevision && destination == Destination.HOME) connectFocus.requestFocus()
+        if (isTelevision) {
+            inputModeManager.requestInputMode(InputMode.Keyboard)
+            if (destination == Destination.HOME) connectFocus.requestFocus()
+        }
     }
 
     LaunchedEffect(destination) {
@@ -160,36 +175,25 @@ fun WhiteAestherApp(
         }
     }
 
-    BackHandler(enabled = parentOf(destination) != null, onBack = ::goBack)
+    BackHandler(enabled = parentOf(destination) != null) { goBack() }
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(colors.ink1)
-            .then(
-                if (isTelevision) {
-                    Modifier.padding(
-                        horizontal = TvUiPolicy.safeHorizontalInset,
-                        vertical = TvUiPolicy.safeVerticalInset,
-                    )
-                } else {
-                    Modifier.statusBarsPadding()
-                },
-            ),
-    ) {
-        Column(
-            Modifier
-                .align(Alignment.TopCenter)
-                .then(
-                    if (isTelevision) {
-                        Modifier.widthIn(max = TvUiPolicy.maxContentWidth).fillMaxSize()
-                    } else {
-                        Modifier.fillMaxSize()
-                    },
-                ),
+    CompositionLocalProvider(LocalTvMode provides isTelevision) {
+        AetherAppShell(
+            selected = destination.tab,
+            isTelevision = isTelevision,
+            onControllerBack = ::goBack,
+            onSelect = { tab ->
+                returnDestination = null
+                returnFocus = null
+                destination = when (tab) {
+                    Tab.HOME -> Destination.HOME
+                    Tab.ROUTES -> Destination.ROUTES
+                    Tab.TRAFFIC -> Destination.TRAFFIC
+                    Tab.SETTINGS -> Destination.SETTINGS
+                }
+            },
         ) {
-            Box(Modifier.weight(1f)) {
-                when (destination) {
+            when (destination) {
                 Destination.HOME -> HomeScreen(
                     settings = settings,
                     status = engineStatus,
@@ -315,24 +319,107 @@ fun WhiteAestherApp(
                     settings = settings,
                     onBack = ::goBack,
                 )
-                }
             }
-
-            TabBar(
-                selected = destination.tab,
-                isTelevision = isTelevision,
-                onSelect = { tab ->
-                    returnDestination = null
-                    returnFocus = null
-                    destination = when (tab) {
-                        Tab.HOME -> Destination.HOME
-                        Tab.ROUTES -> Destination.ROUTES
-                        Tab.TRAFFIC -> Destination.TRAFFIC
-                        Tab.SETTINGS -> Destination.SETTINGS
-                    }
-                },
-            )
         }
+    }
+}
+
+@Composable
+private fun AetherAppShell(
+    selected: Tab,
+    isTelevision: Boolean,
+    onSelect: (Tab) -> Unit,
+    onControllerBack: () -> Boolean,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    val colors = AetherTheme.colors
+    if (isTelevision) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(colors.ink1)
+                .padding(
+                    horizontal = TvUiPolicy.safeHorizontalInset,
+                    vertical = TvUiPolicy.safeVerticalInset,
+                ),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            Row(
+                Modifier
+                    .fillMaxSize()
+                    .widthIn(max = TvUiPolicy.maxShellWidth)
+                    .tvControllerBack(onControllerBack),
+            ) {
+                TvNavigationRail(selected = selected, onSelect = onSelect)
+                Box(Modifier.weight(1f).fillMaxSize(), content = content)
+            }
+        }
+    } else {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(colors.ink1)
+                .statusBarsPadding(),
+        ) {
+            Box(Modifier.weight(1f), content = content)
+            TabBar(selected = selected, onSelect = onSelect)
+        }
+    }
+}
+
+@Composable
+private fun TvNavigationRail(selected: Tab, onSelect: (Tab) -> Unit) {
+    val colors = AetherTheme.colors
+    Column(
+        modifier = Modifier
+            .widthIn(min = 122.dp, max = 148.dp)
+            .fillMaxSize()
+            .background(colors.ink1)
+            .border(1.dp, colors.line, RoundedCornerShape(18.dp))
+            .padding(horizontal = 12.dp, vertical = 20.dp)
+            .focusGroup(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(AetherIcons.Globe, null, Modifier.size(34.dp), colors.brand)
+        Spacer(Modifier.height(18.dp))
+        Tab.entries.forEach { tab ->
+            val active = tab == selected
+            val interaction = remember { MutableInteractionSource() }
+            val shape = RoundedCornerShape(14.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(shape)
+                    .background(if (active) colors.brand.copy(alpha = 0.12f) else Color.Transparent)
+                    .border(
+                        1.dp,
+                        if (active) colors.brand.copy(alpha = 0.38f) else Color.Transparent,
+                        shape,
+                    )
+                    .tvControllerActivation { onSelect(tab) }
+                    .clickable(interaction, LocalIndication.current) { onSelect(tab) }
+                    .controllerFocus(interaction, shape)
+                    .testTag("tab-${tab.label.lowercase()}")
+                    .padding(horizontal = 8.dp, vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    tab.icon,
+                    null,
+                    Modifier.size(24.dp),
+                    if (active) colors.brand else colors.text3,
+                )
+                Text(
+                    tab.label,
+                    style = AetherType.Small,
+                    color = if (active) colors.text else colors.text3,
+                )
+            }
+        }
+        Spacer(Modifier.weight(1f))
+        SectionLabel("TV")
     }
 }
 
@@ -341,13 +428,13 @@ fun WhiteAestherApp(
  * so the icon and its label share the cell's exact centre line.
  */
 @Composable
-private fun TabBar(selected: Tab, isTelevision: Boolean, onSelect: (Tab) -> Unit) {
+private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit) {
     val colors = AetherTheme.colors
     Column(
         Modifier
             .fillMaxWidth()
             .background(colors.ink1)
-            .then(if (isTelevision) Modifier else Modifier.navigationBarsPadding()),
+            .navigationBarsPadding(),
     ) {
         Box(
             Modifier

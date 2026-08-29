@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -20,7 +21,6 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.test.espresso.Espresso.pressBack
-import androidx.test.platform.app.InstrumentationRegistry
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EndpointMode
@@ -30,16 +30,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
-import org.junit.Assume.assumeTrue
 
 class WhiteAestherAppTest {
     @get:Rule
     val compose = createComposeRule()
-
-    private fun assumeTelevision() {
-        val configuration = InstrumentationRegistry.getInstrumentation().targetContext.resources.configuration
-        assumeTrue(TvUiPolicy.isTelevision(configuration.uiMode))
-    }
 
     private fun setApp(
         initial: AppSettings = AppSettings(),
@@ -129,7 +123,6 @@ class WhiteAestherAppTest {
 
     @Test
     fun tvStartsOnTheConnectionOrbAndCentreConnectsOnce() {
-        assumeTelevision()
         var requests = 0
         setApp(television = true, onConnect = { requests++ })
 
@@ -142,12 +135,12 @@ class WhiteAestherAppTest {
 
     @Test
     fun tvTabSelectionKeepsRemoteFocusOnTheSelectedTab() {
-        assumeTelevision()
         setApp(television = true)
 
-        compose.onNodeWithTag("connect-orb").performKeyInput { pressKey(Key.Tab) }
-        compose.onNodeWithTag("tab-home").assertIsFocused()
-            .performKeyInput { pressKey(Key.DirectionRight) }
+        compose.onNodeWithTag("tab-home")
+            .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
+            .assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionDown) }
         compose.onNodeWithTag("tab-routes")
             .assertIsFocused()
             .performKeyInput { pressKey(Key.DirectionCenter) }
@@ -164,7 +157,6 @@ class WhiteAestherAppTest {
 
     @Test
     fun tvProfileAndCompositeSwitchActivateFromOneRemoteTarget() {
-        assumeTelevision()
         var writes = 0
         setApp(television = true, onSettings = { writes++ })
         compose.onNodeWithTag("tab-routes").performClick()
@@ -188,7 +180,6 @@ class WhiteAestherAppTest {
 
     @Test
     fun tvBackReturnsToTheOriginatingDetailRow() {
-        assumeTelevision()
         setApp(television = true)
         compose.onNodeWithTag("tab-routes").performClick()
         compose.onNodeWithTag("routes-endpoint")
@@ -204,7 +195,6 @@ class WhiteAestherAppTest {
 
     @Test
     fun tvFocusBringsLongSettingsContentIntoViewAndHidesTileSetup() {
-        assumeTelevision()
         setApp(initial = AppSettings(showAdvanced = true), television = true)
         compose.onNodeWithTag("tab-traffic").performClick()
 
@@ -221,5 +211,45 @@ class WhiteAestherAppTest {
 
         compose.onNodeWithTag("tab-settings").performClick()
         compose.onNodeWithTag("add-tile-button").assertDoesNotExist()
+    }
+
+    @Test
+    fun tvGamepadButtonsActivateAndNavigateBack() {
+        var requests = 0
+        setApp(television = true, onConnect = { requests++ })
+
+        compose.onNodeWithTag("connect-orb")
+            .assertIsFocused()
+            .performKeyInput { pressKey(Key.ButtonA) }
+        compose.runOnIdle { assertEquals(1, requests) }
+
+        compose.onNodeWithTag("tab-routes")
+            .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
+            .performKeyInput { pressKey(Key.ButtonA) }
+        compose.onNodeWithTag("routes-endpoint")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
+            .performKeyInput { pressKey(Key.ButtonA) }
+        compose.onNodeWithText("Where it connects to").assertExists()
+
+        compose.onNodeWithTag("back-button")
+            .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
+            .performKeyInput { pressKey(Key.ButtonB) }
+        compose.onNodeWithTag("routes-endpoint").assertIsFocused()
+    }
+
+    @Test
+    fun tvRoutingRuleFieldCanMoveDownWithoutTouch() {
+        setApp(television = true)
+
+        compose.onNodeWithTag("tab-routes").performClick()
+        compose.onNodeWithTag("routes-routing-rules").performScrollTo().performClick()
+        compose.onNodeWithTag("route-block-field")
+            .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
+            .assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionDown) }
+
+        compose.onNodeWithTag("route-block-field").assertIsNotFocused()
+        compose.onNodeWithTag("route-direct-field").assertIsFocused()
     }
 }

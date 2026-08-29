@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.net.VpnService
@@ -31,6 +32,7 @@ import com.whitedns.whiteaesther.service.EngineStatus
 import com.whitedns.whiteaesther.service.EngineLog
 import com.whitedns.whiteaesther.service.EngineStatusStore
 import com.whitedns.whiteaesther.ui.WhiteAestherApp
+import com.whitedns.whiteaesther.ui.TvUiPolicy
 import com.whitedns.whiteaesther.ui.theme.WhiteAestherTheme
 
 class MainActivity : ComponentActivity() {
@@ -192,6 +194,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (TvUiPolicy.isTelevision(resources.configuration.uiMode)) {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }
         enableEdgeToEdge()
         batteryExempt = isIgnoringBatteryOptimizations()
         setContent {

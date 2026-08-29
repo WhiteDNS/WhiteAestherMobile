@@ -240,6 +240,7 @@ fun CrumbBar(text: String, onBack: (() -> Unit)? = null) {
                     .clip(backShape)
                     .border(1.dp, AetherTheme.colors.line, backShape)
                     .background(AetherTheme.colors.ink2)
+                    .tvControllerActivation(onClick = onBack)
                     .clickable(backInteraction, LocalIndication.current, onClick = onBack)
                     .controllerFocus(backInteraction, backShape)
                     .testTag("back-button"),
@@ -309,6 +310,7 @@ fun RowCard(
             .then(
                 if (onClick != null) {
                     Modifier
+                        .tvControllerActivation(onClick = onClick)
                         .clickable(interaction, LocalIndication.current, onClick = onClick)
                         .controllerFocus(interaction, shape)
                 } else {
@@ -396,6 +398,7 @@ fun ToggleSettingRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .tvControllerActivation { onCheckedChange(!checked) }
             .toggleable(
                 value = checked,
                 interactionSource = interaction,
@@ -426,7 +429,15 @@ fun AetherSwitch(
     Switch(
         checked = checked,
         onCheckedChange = onCheckedChange,
-        modifier = modifier.controllerFocus(interaction, RoundedCornerShape(16.dp)),
+        modifier = modifier
+            .then(
+                if (onCheckedChange != null) {
+                    Modifier.tvControllerActivation { onCheckedChange(!checked) }
+                } else {
+                    Modifier
+                },
+            )
+            .controllerFocus(interaction, RoundedCornerShape(16.dp)),
         interactionSource = interaction,
         colors = SwitchDefaults.colors(
             checkedTrackColor = AetherTheme.colors.brand,
@@ -479,6 +490,7 @@ fun <T> SegGroup(
                             Modifier
                         },
                     )
+                    .tvControllerActivation { onSelect(option) }
                     .clickable(interaction, LocalIndication.current) { onSelect(option) }
                     .controllerFocus(interaction, shape)
                     .testTag("seg-${label(option).lowercase().replace(' ', '-')}"),
@@ -519,6 +531,7 @@ fun ChoiceCard(
                 if (selected) colors.brand.copy(alpha = 0.55f) else colors.line,
                 shape,
             )
+            .tvControllerActivation(onClick = onClick)
             .clickable(interaction, LocalIndication.current, onClick = onClick)
             .controllerFocus(interaction, shape)
             .testTag("choice-${name.lowercase().replace(' ', '-')}")
@@ -579,6 +592,7 @@ fun OptionRow(
                 if (selected) colors.brand.copy(alpha = 0.44f) else Color.Transparent,
                 shape,
             )
+            .tvControllerActivation(onClick = onClick)
             .clickable(interaction, LocalIndication.current, onClick = onClick)
             .controllerFocus(interaction, shape)
             .testTag("option-${title.lowercase().replace(' ', '-')}")
@@ -650,6 +664,7 @@ fun AdvancedSection(
         Row(
             Modifier
                 .fillMaxWidth()
+                .tvControllerActivation(onClick = onToggle)
                 .clickable(interaction, LocalIndication.current, onClick = onToggle)
                 .controllerFocus(interaction, shape)
                 .testTag("advanced-toggle")
@@ -705,6 +720,7 @@ fun AttentionCard(
                             Modifier
                                 .clip(CircleShape)
                                 .border(1.dp, tone.copy(alpha = 0.42f), CircleShape)
+                                .tvControllerActivation(onClick = action)
                                 .clickable(interaction, LocalIndication.current, onClick = action)
                                 .controllerFocus(interaction, CircleShape)
                                 .padding(horizontal = 13.dp, vertical = 7.dp),
@@ -734,6 +750,7 @@ fun PrimaryButton(
             .height(50.dp)
             .clip(shape)
             .background(if (enabled) colors.brand else colors.brand.copy(alpha = 0.4f))
+            .tvControllerActivation(enabled = enabled, onClick = onClick)
             .clickable(interaction, LocalIndication.current, enabled = enabled, onClick = onClick)
             .controllerFocus(interaction, shape, enabled)
             .padding(horizontal = 16.dp),
@@ -762,6 +779,7 @@ fun OutlineButton(
             .clip(shape)
             .background(colors.ink2)
             .border(1.dp, colors.line, shape)
+            .tvControllerActivation(enabled = enabled, onClick = onClick)
             .clickable(interaction, LocalIndication.current, enabled = enabled, onClick = onClick)
             .controllerFocus(interaction, shape, enabled)
             .padding(horizontal = 16.dp),
