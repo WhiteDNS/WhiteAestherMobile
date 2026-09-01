@@ -84,11 +84,89 @@ object ChainConfig {
         append("proxy-groups:\n")
         append("  - name: $EXIT_GROUP\n    type: select\n    use: [${names.joinToString(", ")}]\n")
 
-        // Everything goes to the exit group. A rule that let anything take a
-        // direct route would put that traffic on the local network in the clear,
-        // and on this platform it would also be captured by our own interface.
-        append("rules:\n  - MATCH,$EXIT_GROUP\n")
+        appendRules(settings)
     }
+
+    /**
+     * The user's routing rules, translated for mihomo.
+     *
+     * They have to live here and not only in the engine. With a chain running,
+     * mihomo owns the interface and dials each node *through* the engine's
+     * SOCKS5 listener, so the engine only ever sees the node's address and
+     * never the destination the user asked for. A rule written against a
+     * domain is invisible to it, which is why the rules added for the plain
+     * tunnel do nothing at all once a chain is switched on.
+     */
+    private fun StringBuilder.appendRules(settings: ChainSettings) {
+        append("rules:\n")
+        // Refusals first, so a blocked destination cannot also match a direct
+        // rule further down and get dialled anyway.
+        settings.blockRules().forEach { pattern ->
+            mihomoRules(pattern, "REJECT").forEach { append("  - $it\n") }
+        }
+        settings.directRules().forEach { pattern ->
+            mihomoRules(pattern, "DIRECT").forEach { append("  - $it\n") }
+        }
+        // Everything not named goes to the exit group. Last and unconditional:
+        // without it the file is a list of exceptions with no default, and
+        // mihomo treats an unmatched connection as direct.
+        append("  - MATCH,$EXIT_GROUP\n")
+    }
+
+    /**
+     * One rule in our grammar as mihomo rules, or empty if it is neither.
+     *
+     * A list rather than one string because `private` is several ranges.
+     *
+     * Address rules carry `no-resolve` so a domain is never looked up merely
+     * to test it against a block -- that lookup would leave the tunnel and
+     * name the destination to whoever is watching, which is the thing the rule
+     * was written to prevent.
+     */
+    internal fun mihomoRules(pattern: String, action: String): List<String> {
+        val entry = pattern.trim()
+        if (entry.isEmpty() || entry.startsWith("#")) return emptyList()
+
+        val split = entry.split(":", limit = 2)
+        val hasKind = split.size == 2 &&
+            !split[0].contains('.') &&
+            !split[0].contains('/')
+        val kind = if (hasKind) split[0].trim().lowercase() else ""
+        val value = if (hasKind) split[1].trim() else entry
+        if (value.isEmpty()) return emptyList()
+
+        return when (kind) {
+            "domain", "suffix" -> listOf("DOMAIN-SUFFIX,$value,$action")
+            "full", "exact" -> listOf("DOMAIN,$value,$action")
+            "keyword" -> listOf("DOMAIN-KEYWORD,$value,$action")
+            "regexp", "regex" -> listOf("DOMAIN-REGEX,$value,$action")
+            "ip", "cidr" -> listOf("IP-CIDR,$value,$action,no-resolve")
+            "port" -> listOf("DST-PORT,$value,$action")
+            "geoip", "geosite" ->
+                if (value.equals("private", ignoreCase = true)) privateRules(action)
+                else emptyList()
+            "" -> when {
+                value.equals("private", ignoreCase = true) -> privateRules(action)
+                value.contains('/') -> listOf("IP-CIDR,$value,$action,no-resolve")
+                else -> listOf("DOMAIN-SUFFIX,$value,$action")
+            }
+            else -> emptyList()
+        }
+    }
+
+    /**
+     * `private`, spelled out.
+     *
+     * Not GEOIP,PRIVATE: that wants a database this build does not ship, and a
+     * rule mihomo cannot resolve is one it drops without saying so.
+     */
+    private fun privateRules(action: String): List<String> = listOf(
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "169.254.0.0/16",
+        "127.0.0.0/8",
+    ).map { "IP-CIDR,$it,$action,no-resolve" }
 
     /**
      * Resolvers live inside the chain.

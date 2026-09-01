@@ -324,7 +324,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // already running, so the engine would answer with the previous
             // one's nodes. Reporting them as the new subscription's is what
             // reads as "deleting it did nothing".
-            if (!chain.isRunningConfigCurrent(settings.chain)) {
+            if (!chain.isRunningConfigCurrent(settings.chainForService())) {
                 mutableChainState.value = ChainState(available = chain.isAvailable, stale = true)
                 return@launch
             }
@@ -337,9 +337,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * How long to wait before reading the delay results back.
+     *
+     * mihomo measures the nodes concurrently but not all at once, so the wait
+     * has to grow with the list. Roughly a fifth of a second per node on top of
+     * the base, capped, because a user watching a spinner has a limit that a
+     * subscription does not.
+     */
+    private fun settleFor(nodes: Int): Long =
+        (DELAY_TEST_SETTLE_MS + nodes * 200L).coerceAtMost(DELAY_TEST_SETTLE_CAP_MS)
+
     /** Switches the live chain, and remembers the choice for the next connect. */
     fun selectChainNode(settings: AppSettings, node: String) {
         if (chainJob?.isCompleted == false) return
+        // Moved before anything blocking. Saving, telling mihomo and reading the
+        // list back are three round trips, and until they finished the row the
+        // user had just tapped looked unchanged -- which reads as a tap that
+        // did not register, so people tap again.
+        mutableChainState.value = mutableChainState.value.copy(selected = node)
         chainJob = viewModelScope.launch {
             // Saved first. If the engine refuses the switch the preference is
             // still what the user asked for, and the next connect honours it --
@@ -362,6 +378,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * The results come back through mihomo's event stream and land in the log, so
      * this waits before re-reading rather than expecting an answer here.
      */
+    /**
+     * Measures only the nodes the user ticked.
+     *
+     * Worth having separately on a large subscription: testing fifty takes the
+     * best part of half a minute, and somebody comparing three of them should
+     * not have to wait for the other forty-seven.
+     */
+    fun testChainNodes(only: List<String>) {
+        if (chainJob?.isCompleted == false) return
+        val supported = mutableChainState.value.nodes.filter { it.supported }.map { it.name }
+        val names = only.filter { it in supported }
+        if (names.isEmpty()) return
+        runDelayTests(names)
+    }
+
     fun testChainNodes() {
         if (chainJob?.isCompleted == false) return
         // Unsupported nodes are skipped rather than measured. A REALITY node
@@ -369,10 +400,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // as slow when the engine simply cannot speak to it.
         val names = mutableChainState.value.nodes.filter { it.supported }.map { it.name }
         if (names.isEmpty()) return
+        runDelayTests(names)
+    }
+
+    /**
+     * Measures the nodes a handful at a time, showing results as they arrive.
+     *
+     * All at once was the bug: fifty delay tests fired together are fifty
+     * concurrent requests through one tunnel, and the tunnel saturates. The
+     * first few answered and the rest timed out, so most of the list came back
+     * blank however long the wait was afterwards.
+     *
+     * Reading the list between batches also means the pings appear as they are
+     * measured rather than all at the end, which on a long list is the
+     * difference between progress and a frozen screen.
+     */
+    private fun runDelayTests(names: List<String>) {
         chainJob = viewModelScope.launch {
             mutableChainState.value = mutableChainState.value.copy(busy = true, error = null)
-            withContext(Dispatchers.IO) { chain.testNodes(names) }
-            delay(DELAY_TEST_SETTLE_MS)
+            for (batch in names.chunked(DELAY_TEST_BATCH)) {
+                withContext(Dispatchers.IO) { chain.testNodes(batch) }
+                delay(settleFor(batch.size))
+                val partial = withContext(Dispatchers.IO) { chain.nodes() }
+                mutableChainState.value = mutableChainState.value.copy(
+                    nodes = partial.nodes,
+                    selected = partial.selected,
+                )
+            }
             val reported = withContext(Dispatchers.IO) { chain.nodes() }
             mutableChainState.value = ChainState(
                 available = chain.isAvailable,
@@ -526,6 +580,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         /** Long enough for the slowest test to answer, short enough to watch. */
         const val DELAY_TEST_SETTLE_MS = 6_000L
+
+        /** Past this the screen has been busy long enough to look broken. */
+        const val DELAY_TEST_SETTLE_CAP_MS = 30_000L
+
+        /**
+         * How many nodes are measured at once.
+         *
+         * Small enough that one tunnel carries them without the tests starving
+         * each other, large enough that a long list does not take all evening.
+         */
+        const val DELAY_TEST_BATCH = 8
 
         /** One second: fast enough to read as live, slow enough to be free. */
         const val TRAFFIC_SAMPLE_MS = 1_000L

@@ -68,7 +68,7 @@ class AetherTileService : TileService() {
             AetherVpnService.start(
                 applicationContext,
                 settings.toNativeJson(applicationContext),
-                settings.chain.encode(),
+                settings.chainForService().encode(),
                 settings.splitTunnel.encode(),
                 settings.killSwitch,
                 settings.strictKillSwitch,

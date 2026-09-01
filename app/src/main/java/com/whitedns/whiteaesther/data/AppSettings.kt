@@ -387,6 +387,17 @@ data class AppSettings(
         endpointMode != EndpointMode.AUTOMATIC && it.endpointFamily != transport.endpointFamily
     }
 
+    /**
+     * The chain settings, carrying the routing rules with them.
+     *
+     * The rules live on [AppSettings] because one screen edits them, but the
+     * chain needs its own copy: with mihomo in front, the engine never sees the
+     * destination and its copy cannot match. Joined here rather than at each
+     * call site, so a caller cannot forget and leave a chain with no rules.
+     */
+    fun chainForService(): ChainSettings =
+        chain.copy(routeBlock = routeBlock, routeDirect = routeDirect)
+
     fun toNativeJson(context: Context): String {
         val json = JSONObject()
             .put("mode", mode.wireName)

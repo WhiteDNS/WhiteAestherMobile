@@ -442,7 +442,13 @@ class AetherVpnService : VpnService() {
             }
         }
 
-        EngineLog.record(LogLevel.INFO, "chain", "exit chain up on ${chain.nodes().nodes.size} nodes")
+        // Off the main thread, and only for a log line. nodes() is a JNI call
+        // returning the whole proxy map as JSON, and it then reads every cached
+        // subscription from disk -- on a large list most of a second, landing
+        // on the main thread at the exact moment the tunnel comes up. That is
+        // the freeze people saw on connect.
+        val nodeCount = withContext(Dispatchers.IO) { chain.nodes().nodes.size }
+        EngineLog.record(LogLevel.INFO, "chain", "exit chain up on $nodeCount nodes")
         reportConnected(
             mode,
             peer,
@@ -800,7 +806,9 @@ class AetherVpnService : VpnService() {
                 listOfNotNull(sessionJob).joinAll()
             }
             sessionJob = null
-            runCatching { chain.stop() }
+            // Also a JNI call into the Go engine, and this one runs while the
+            // user is watching a "Stopping" spinner.
+            withContext(Dispatchers.IO) { runCatching { chain.stop() } }
             clearSocketProtector(generation)
             // Rates go to zero, totals stay: what a session cost is asked
             // after it ended, not while it is running.
@@ -904,7 +912,16 @@ class AetherVpnService : VpnService() {
      * case here for it.
      */
     private fun mtuFor(transport: String): Int = when (transport) {
-        "wg", "wiw" -> WIREGUARD_MTU
+        "wg" -> WIREGUARD_MTU
+        // Not WireGuard's, despite being built out of two of them. The app's
+        // packets enter the *inner* hop, which is sized for what fits inside
+        // the outer one -- so this is the inner MTU, not the outer.
+        //
+        // Grouping it with "wg" told the system it could send 1340 into a
+        // tunnel carrying 1200. Small requests survived and anything larger was
+        // dropped, which reads as a connection that works until you open a
+        // website.
+        "wiw" -> WARP_IN_WARP_MTU
         else -> MASQUE_MTU
     }
 
@@ -1079,6 +1096,15 @@ class AetherVpnService : VpnService() {
 
         /** What the path allows WireGuard, which is the larger question. */
         private const val WIREGUARD_MTU = 1340
+
+        /**
+         * The inner hop of WARP-in-WARP, which is what the apps talk to.
+         *
+         * Matches INNER_MTU in the engine. The two have to agree: this is what
+         * the system advertises, that is what the tunnel can carry, and a gap
+         * between them is silently dropped packets.
+         */
+        private const val WARP_IN_WARP_MTU = 1200
 
         /** Any address will do; nothing is ever sent from it. */
         private const val BLACKHOLE_IPV4 = "10.111.222.1"

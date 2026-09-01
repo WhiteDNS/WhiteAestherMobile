@@ -217,7 +217,8 @@ class MainActivity : ComponentActivity() {
                     onCancelEndpointScan = viewModel::cancelEndpointScan,
                     onRefreshChainNodes = { viewModel.refreshChainNodes(settings) },
                     onSelectChainNode = { node -> viewModel.selectChainNode(settings, node) },
-                    onTestChainNodes = viewModel::testChainNodes,
+                    onTestChainNodes = { viewModel.testChainNodes() },
+                    onTestChainNodesSelected = { viewModel.testChainNodes(it) },
                     identityMessage = viewModel.identityMessage.collectAsStateWithLifecycle().value,
                     onExportIdentity = ::exportIdentity,
                     onImportIdentity = {
@@ -369,7 +370,7 @@ class MainActivity : ComponentActivity() {
         AetherVpnService.start(
             this,
             settings.toNativeJson(this),
-            settings.chain.encode(),
+            settings.chainForService().encode(),
             settings.splitTunnel.encode(),
             settings.killSwitch,
             settings.strictKillSwitch,

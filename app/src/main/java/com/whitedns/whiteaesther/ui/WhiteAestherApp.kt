@@ -103,6 +103,7 @@ fun WhiteAestherApp(
     onRefreshChainNodes: () -> Unit = {},
     onSelectChainNode: (String) -> Unit = {},
     onTestChainNodes: () -> Unit = {},
+    onTestChainNodesSelected: (List<String>) -> Unit = {},
     identityMessage: IdentityMessage? = null,
     onExportIdentity: () -> Unit = {},
     onImportIdentity: () -> Unit = {},
@@ -245,6 +246,7 @@ fun WhiteAestherApp(
                     onRefreshNodes = onRefreshChainNodes,
                     onSelectNode = onSelectChainNode,
                     onTestNodes = onTestChainNodes,
+                    onTestSelected = onTestChainNodesSelected,
                     onBack = ::goBack,
                 )
                 Destination.ENDPOINT -> EndpointScreen(

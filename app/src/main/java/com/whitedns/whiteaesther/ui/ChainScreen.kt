@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -67,6 +69,7 @@ fun ChainScreen(
     onRefreshNodes: () -> Unit,
     onSelectNode: (String) -> Unit,
     onTestNodes: () -> Unit,
+    onTestSelected: (List<String>) -> Unit,
     onBack: () -> Unit,
 ) {
     val colors = AetherTheme.colors
@@ -75,7 +78,11 @@ fun ChainScreen(
 
     // Keyed on the sources too, so editing one re-asks rather than leaving the
     // previous subscription's nodes on screen.
-    LaunchedEffect(connected, chain.enabled, chain.fingerprint()) {
+    // Keyed on what changes the node list, and nothing else. It used to key on
+    // the whole config fingerprint, which now covers the routing rules -- so
+    // every keystroke in a rule box restarted a full node load, and each of
+    // those is a JNI call plus a read of every cached subscription.
+    LaunchedEffect(connected, chain.enabled, chain.nodeSourceFingerprint()) {
         if (connected && chain.enabled) onRefreshNodes()
     }
 
@@ -170,6 +177,8 @@ fun ChainScreen(
             onRefreshNodes = onRefreshNodes,
             onSelectNode = onSelectNode,
             onTestNodes = onTestNodes,
+            onTestSelected = onTestSelected,
+            onSettingsChange = onSettingsChange,
         )
     }
 }
@@ -337,8 +346,22 @@ private fun NodesCard(
     onRefreshNodes: () -> Unit,
     onSelectNode: (String) -> Unit,
     onTestNodes: () -> Unit,
+    onTestSelected: (List<String>) -> Unit,
+    onSettingsChange: (AppSettings) -> Unit,
 ) {
     val colors = AetherTheme.colors
+    // Which rows are ticked. Held here and not persisted: a selection is about
+    // what the user is doing right now, and one restored from a previous visit
+    // would be a set of ticks nobody remembers making.
+    var picked by remember { mutableStateOf(setOf<String>()) }
+    // Remembered, so every row is not handed a freshly built lambda on each
+    // recomposition. A new one per row makes every row's inputs look changed,
+    // and ticking one box redrew all fifty.
+    val togglePick = remember {
+        { name: String ->
+            picked = if (name in picked) picked - name else picked + name
+        }
+    }
 
     AetherCard {
         CardHead("Nodes", "Whichever one is ticked is carrying your traffic.")
@@ -385,7 +408,48 @@ private fun NodesCard(
                 // was dropped from the subscription leaves the two disagreeing,
                 // and what is actually carrying traffic is the true one.
                 val live = chainState.selected ?: settings.chain.node
-                chainState.nodes.forEach { node ->
+                // Fastest first, then the untested, then the ones this build
+                // cannot dial. A subscription arrives in whatever order it was
+                // written, which on a list of fifty is no order at all -- and
+                // the number the user is choosing by is already on every row.
+                val hidden = settings.chain.hiddenNodes.toSet()
+                NodeActions(
+                    picked = picked,
+                    busy = chainState.busy,
+                    total = chainState.nodes.count { it.name !in hidden },
+                    hiddenCount = hidden.size,
+                    onTestAll = onTestNodes,
+                    onTestPicked = { onTestSelected(picked.toList()) },
+                    onHidePicked = {
+                        onSettingsChange(
+                            settings.copy(
+                                chain = settings.chain.copy(
+                                    hiddenNodes = (settings.chain.hiddenNodes + picked).distinct(),
+                                ),
+                            ),
+                        )
+                        picked = emptySet()
+                    },
+                    onRestoreHidden = {
+                        onSettingsChange(
+                            settings.copy(chain = settings.chain.copy(hiddenNodes = emptyList())),
+                        )
+                    },
+                )
+
+                val ordered = remember(chainState.nodes, hidden) {
+                    chainState.nodes
+                        .filterNot { it.name in hidden }
+                        .sortedWith(
+                            compareBy(
+                                { !it.supported },
+                                { it.delay == null },
+                                { it.delay ?: Int.MAX_VALUE },
+                                { it.name },
+                            ),
+                        )
+                }
+                ordered.forEach { node ->
                     Divider()
                     NodeRow(
                         name = node.name,
@@ -394,6 +458,8 @@ private fun NodesCard(
                         selected = node.name == live,
                         supported = node.supported,
                         onClick = { onSelectNode(node.name) },
+                        picked = node.name in picked,
+                        onPickedChange = togglePick,
                     )
                 }
             }
@@ -416,15 +482,83 @@ private fun NodesCard(
                     enabled = !chainState.busy,
                     onClick = onRefreshNodes,
                 )
-                OutlineButton(
-                    text = if (chainState.busy) "Testing…" else "Test all",
-                    modifier = Modifier.weight(1f).testTag("chain-test-nodes"),
-                    enabled = !chainState.busy && chainState.nodes.isNotEmpty(),
-                    onClick = onTestNodes,
-                )
             }
         }
         Unit
+    }
+}
+
+/**
+ * What can be done to the list, above the list.
+ *
+ * Above rather than below because on a subscription of fifty the buttons were
+ * a scroll away from the rows they act on, and a user testing nodes had to
+ * travel to the end of the list to press the thing that tests them.
+ */
+@Composable
+private fun NodeActions(
+    picked: Set<String>,
+    busy: Boolean,
+    total: Int,
+    hiddenCount: Int,
+    onTestAll: () -> Unit,
+    onTestPicked: () -> Unit,
+    onHidePicked: () -> Unit,
+    onRestoreHidden: () -> Unit,
+) {
+    val colors = AetherTheme.colors
+    Divider()
+    Column(
+        Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            OutlineButton(
+                text = if (busy) "Testing…" else "Test all",
+                modifier = Modifier.weight(1f).testTag("chain-test-nodes"),
+                enabled = !busy && total > 0,
+                onClick = onTestAll,
+            )
+            OutlineButton(
+                // Named with the count, because "Test selected" on an empty
+                // selection is a button that looks available and does nothing.
+                text = if (picked.isEmpty()) "Test selected" else "Test ${picked.size}",
+                modifier = Modifier.weight(1f).testTag("chain-test-selected"),
+                enabled = !busy && picked.isNotEmpty(),
+                onClick = onTestPicked,
+            )
+        }
+
+        if (picked.isNotEmpty()) {
+            OutlineButton(
+                text = "Remove ${picked.size} from the list",
+                modifier = Modifier.fillMaxWidth().testTag("chain-hide-selected"),
+                enabled = !busy,
+                onClick = onHidePicked,
+            )
+        }
+
+        if (hiddenCount > 0) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    // Said out loud, because a node missing from a subscription
+                    // with no explanation is what a broken link looks like.
+                    "$hiddenCount removed from the list",
+                    style = AetherType.Small,
+                    color = colors.text2,
+                )
+                OutlineButton(
+                    text = "Restore",
+                    modifier = Modifier.testTag("chain-restore-hidden"),
+                    enabled = !busy,
+                    onClick = onRestoreHidden,
+                )
+            }
+        }
     }
 }
 
@@ -436,6 +570,8 @@ private fun NodeRow(
     selected: Boolean,
     supported: Boolean,
     onClick: () -> Unit,
+    picked: Boolean,
+    onPickedChange: (String) -> Unit,
 ) {
     val colors = AetherTheme.colors
     val interaction = remember { MutableInteractionSource() }
@@ -458,6 +594,19 @@ private fun NodeRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // The tick picks the row for an action; tapping the rest of the row is
+        // still what switches the live node. Two different questions, so two
+        // different targets rather than one control that means both.
+        Checkbox(
+            checked = picked,
+            onCheckedChange = { onPickedChange(name) },
+            modifier = Modifier.testTag("chain-pick-$name"),
+            colors = CheckboxDefaults.colors(
+                checkedColor = colors.brand,
+                uncheckedColor = colors.text3,
+                checkmarkColor = colors.onBrand,
+            ),
+        )
         Icon(
             if (selected) AetherIcons.Check else AetherIcons.Globe,
             null,

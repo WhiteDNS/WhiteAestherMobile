@@ -23,14 +23,38 @@ object RealityNodes {
      * has never run looks like -- the caller treats both the same, because an
      * unmarked node is the state everything worked in before.
      */
+    private var cachedStamp: String? = null
+    private var cached: Set<String> = emptySet()
+
+    /**
+     * Cached against the provider files' own names, sizes and timestamps.
+     *
+     * Without this the whole subscription was read from disk, base64-decoded
+     * and parsed on every call -- and it is called after every node refresh and
+     * after every selection. On a list of fifty that work landed between the
+     * tap and the screen responding, which is where the lag came from.
+     *
+     * The stamp is cheap: a directory listing, no file contents. mihomo
+     * rewrites a provider file when it refetches, so a changed subscription
+     * changes the stamp.
+     */
+    @Synchronized
     fun detect(home: File): Set<String> {
         val providers = File(home, "providers")
-        if (!providers.isDirectory) return emptySet()
-        return providers.listFiles()
-            ?.filter { it.isFile }
-            ?.flatMap { file -> namesIn(runCatching { file.readText() }.getOrDefault("")) }
-            ?.toSet()
-            ?: emptySet()
+        if (!providers.isDirectory) {
+            cachedStamp = null
+            cached = emptySet()
+            return emptySet()
+        }
+        val files = providers.listFiles()?.filter { it.isFile }.orEmpty().sortedBy { it.name }
+        val stamp = files.joinToString("|") { "${it.name}:${it.length()}:${it.lastModified()}" }
+        if (stamp == cachedStamp) return cached
+
+        cached = files
+            .flatMap { file -> namesIn(runCatching { file.readText() }.getOrDefault("")) }
+            .toSet()
+        cachedStamp = stamp
+        return cached
     }
 
     /**

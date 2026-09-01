@@ -57,7 +57,37 @@ data class ChainSettings(
     val manual: String = "",
     /** The node last selected, so a reconnect returns to it. */
     val node: String? = null,
+    /**
+     * The user's routing rules, carried here as well as to the engine.
+     *
+     * Duplicated deliberately. With a chain running, mihomo owns the interface
+     * and the engine only sees node addresses, so the engine's copy of these
+     * rules can never match a destination -- mihomo has to be told separately
+     * or the rules silently stop working the moment a chain is switched on.
+     */
+    val routeBlock: String = "",
+    val routeDirect: String = "",
+    /**
+     * Nodes the user does not want offered, by name.
+     *
+     * Set aside rather than deleted, because a node from a subscription is not
+     * ours to delete: mihomo fetches the list again on the next connect and the
+     * node comes straight back. Keeping the names here is the only form of
+     * "remove" that survives a refresh -- and it is reversible, which deletion
+     * of somebody else's list should be.
+     */
+    val hiddenNodes: List<String> = emptyList(),
 ) {
+    /** Rule lines, with blanks and notes dropped as the engine drops them. */
+    fun blockRules(): List<String> = ruleLines(routeBlock)
+
+    fun directRules(): List<String> = ruleLines(routeDirect)
+
+    private fun ruleLines(raw: String): List<String> =
+        raw.split('\n', ',', ';')
+            .map(String::trim)
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
+
     /** True when there is anything for mihomo to route through. */
     val hasNodes: Boolean
         get() = sources.any { it.enabled && it.url.isNotBlank() } || manual.isNotBlank()
@@ -81,10 +111,27 @@ data class ChainSettings(
      * engine without a restart, so including it would report a stale
      * configuration every time someone picked a different node.
      */
-    fun fingerprint(): String = buildString {
+    /**
+     * Only what decides which nodes exist.
+     *
+     * Separate from [fingerprint] because the screen reloads its list whenever
+     * this changes, and the full fingerprint also covers the routing rules --
+     * which do not add or remove a single node, but do change on every
+     * keystroke in the rules editor.
+     */
+    fun nodeSourceFingerprint(): String = buildString {
         append(throughTunnel).append('|')
         sources.filter { it.enabled }.forEach { append(it.url).append(',') }
         append('|').append(manual.trim())
+    }
+
+    fun fingerprint(): String = buildString {
+        append(nodeSourceFingerprint())
+        // The rules are part of the config mihomo is running. Left out, editing
+        // one would leave the app believing the live config was current while
+        // mihomo went on routing by the previous set.
+        append('|').append(routeBlock.trim())
+        append('|').append(routeDirect.trim())
     }
 
     fun encode(): String = JSONObject()
@@ -92,6 +139,9 @@ data class ChainSettings(
         .put("throughTunnel", throughTunnel)
         .put("sources", JSONArray().apply { sources.forEach { put(it.toJson()) } })
         .put("manual", manual)
+        .put("routeBlock", routeBlock)
+        .put("routeDirect", routeDirect)
+        .put("hiddenNodes", JSONArray().apply { hiddenNodes.forEach { put(it) } })
         .apply { node?.let { put("node", it) } }
         .toString()
 
@@ -110,6 +160,15 @@ data class ChainSettings(
                         }
                     },
                     manual = json.optString("manual"),
+                    routeBlock = json.optString("routeBlock"),
+                    routeDirect = json.optString("routeDirect"),
+                    hiddenNodes = json.optJSONArray("hiddenNodes")?.let { array ->
+                        buildList {
+                            for (index in 0 until array.length()) {
+                                array.optString(index).takeIf(String::isNotBlank)?.let(::add)
+                            }
+                        }
+                    } ?: emptyList(),
                     node = json.optString("node").takeIf { it.isNotBlank() },
                 )
             }.getOrDefault(ChainSettings())
