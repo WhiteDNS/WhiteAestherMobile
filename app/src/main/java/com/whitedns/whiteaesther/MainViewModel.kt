@@ -345,17 +345,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * How long to wait before reading the delay results back.
-     *
-     * mihomo measures the nodes concurrently but not all at once, so the wait
-     * has to grow with the list. Roughly a fifth of a second per node on top of
-     * the base, capped, because a user watching a spinner has a limit that a
-     * subscription does not.
-     */
-    private fun settleFor(nodes: Int): Long =
-        (DELAY_TEST_SETTLE_MS + nodes * 200L).coerceAtMost(DELAY_TEST_SETTLE_CAP_MS)
-
-    /**
      * Stops a delay run and keeps whatever it measured.
      *
      * Needed once a subscription can carry a thousand nodes: the run is minutes
@@ -619,12 +608,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private companion object {
-        /** Long enough for the slowest test to answer, short enough to watch. */
-        const val DELAY_TEST_SETTLE_MS = 6_000L
-
-        /** Past this the screen has been busy long enough to look broken. */
-        const val DELAY_TEST_SETTLE_CAP_MS = 30_000L
-
         /**
          * How many nodes are measured at once.
          *

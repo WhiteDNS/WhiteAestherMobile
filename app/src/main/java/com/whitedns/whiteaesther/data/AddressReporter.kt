@@ -59,10 +59,6 @@ object AddressReporter {
             // IPv4 only, which reads exactly like the switch doing nothing.
             ?.takeIf { !ipv4Only || !it.contains(':') }
 
-    /** True when the address belongs to the family the user asked for. */
-    internal fun matchesFamily(address: String, ipv4Only: Boolean): Boolean =
-        !ipv4Only || !address.contains(':')
-
     /**
      * Looks the real address up and stores it. Only safe while disconnected.
      *
