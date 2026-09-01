@@ -597,10 +597,19 @@ private fun NodeRow(
         // The tick picks the row for an action; tapping the rest of the row is
         // still what switches the live node. Two different questions, so two
         // different targets rather than one control that means both.
+        val pickInteraction = remember { MutableInteractionSource() }
         Checkbox(
             checked = picked,
             onCheckedChange = { onPickedChange(name) },
-            modifier = Modifier.testTag("chain-pick-$name"),
+            // The same treatment every other control in this app has. A raw
+            // Material checkbox takes D-pad centre but not a gamepad's A
+            // button, and shows no focus ring -- on a television that is a
+            // control the remote can land on with nothing to say it has.
+            modifier = Modifier
+                .testTag("chain-pick-$name")
+                .tvControllerActivation { onPickedChange(name) }
+                .controllerFocus(pickInteraction, RoundedCornerShape(8.dp)),
+            interactionSource = pickInteraction,
             colors = CheckboxDefaults.colors(
                 checkedColor = colors.brand,
                 uncheckedColor = colors.text3,
