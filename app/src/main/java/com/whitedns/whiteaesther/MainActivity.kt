@@ -219,6 +219,7 @@ class MainActivity : ComponentActivity() {
                     onSelectChainNode = { node -> viewModel.selectChainNode(settings, node) },
                     onTestChainNodes = { viewModel.testChainNodes() },
                     onTestChainNodesSelected = { viewModel.testChainNodes(it) },
+                    onCancelChainTests = viewModel::cancelChainTests,
                     identityMessage = viewModel.identityMessage.collectAsStateWithLifecycle().value,
                     onExportIdentity = ::exportIdentity,
                     onImportIdentity = {

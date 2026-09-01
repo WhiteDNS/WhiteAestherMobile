@@ -58,6 +58,13 @@ data class ChainState(
     val nodes: List<ChainNode> = emptyList(),
     val selected: String? = null,
     val busy: Boolean = false,
+    /**
+     * How far a delay run has got, as done to total.
+     *
+     * A thousand nodes take minutes however they are batched, and "Testing…"
+     * with no number is indistinguishable from a run that has died.
+     */
+    val testProgress: Pair<Int, Int>? = null,
     val error: String? = null,
     /** The engine is running a configuration the settings no longer describe. */
     val stale: Boolean = false,
@@ -348,6 +355,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun settleFor(nodes: Int): Long =
         (DELAY_TEST_SETTLE_MS + nodes * 200L).coerceAtMost(DELAY_TEST_SETTLE_CAP_MS)
 
+    /**
+     * Stops a delay run and keeps whatever it measured.
+     *
+     * Needed once a subscription can carry a thousand nodes: the run is minutes
+     * long, and without this the only way out is to leave the screen and hope.
+     */
+    fun cancelChainTests() {
+        chainJob?.cancel()
+        chainJob = null
+        mutableChainState.value = mutableChainState.value.copy(busy = false, testProgress = null)
+        viewModelScope.launch {
+            val reported = withContext(Dispatchers.IO) { chain.nodes() }
+            mutableChainState.value = mutableChainState.value.copy(
+                nodes = reported.nodes,
+                selected = reported.selected,
+            )
+        }
+    }
+
     /** Switches the live chain, and remembers the choice for the next connect. */
     fun selectChainNode(settings: AppSettings, node: String) {
         if (chainJob?.isCompleted == false) return
@@ -417,14 +443,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun runDelayTests(names: List<String>) {
         chainJob = viewModelScope.launch {
-            mutableChainState.value = mutableChainState.value.copy(busy = true, error = null)
+            var done = 0
+            mutableChainState.value = mutableChainState.value.copy(
+                busy = true,
+                error = null,
+                testProgress = 0 to names.size,
+            )
             for (batch in names.chunked(DELAY_TEST_BATCH)) {
                 withContext(Dispatchers.IO) { chain.testNodes(batch) }
-                delay(settleFor(batch.size))
-                val partial = withContext(Dispatchers.IO) { chain.nodes() }
+                delay(DELAY_TEST_BATCH_MS)
+                done += batch.size
+                // Reading the list back is a JNI call returning every proxy as
+                // JSON, so on a thousand nodes it is the expensive half of the
+                // loop. Done every few batches rather than every one: often
+                // enough to watch pings arrive, rarely enough not to dominate.
+                val partial = if (done % (DELAY_TEST_BATCH * REFRESH_EVERY) == 0) {
+                    withContext(Dispatchers.IO) { chain.nodes() }
+                } else {
+                    null
+                }
                 mutableChainState.value = mutableChainState.value.copy(
-                    nodes = partial.nodes,
-                    selected = partial.selected,
+                    nodes = partial?.nodes ?: mutableChainState.value.nodes,
+                    selected = partial?.selected ?: mutableChainState.value.selected,
+                    testProgress = done to names.size,
                 )
             }
             val reported = withContext(Dispatchers.IO) { chain.nodes() }
@@ -590,7 +631,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
          * Small enough that one tunnel carries them without the tests starving
          * each other, large enough that a long list does not take all evening.
          */
-        const val DELAY_TEST_BATCH = 8
+        const val DELAY_TEST_BATCH = 16
+
+        /** One batch's wait, now that it is not counted per node. */
+        const val DELAY_TEST_BATCH_MS = 6_000L
+
+        /** Batches between full re-reads of the list. */
+        const val REFRESH_EVERY = 4
 
         /** One second: fast enough to read as live, slow enough to be free. */
         const val TRAFFIC_SAMPLE_MS = 1_000L

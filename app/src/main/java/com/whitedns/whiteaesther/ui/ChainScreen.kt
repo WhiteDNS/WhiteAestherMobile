@@ -4,6 +4,8 @@ import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -70,6 +72,7 @@ fun ChainScreen(
     onSelectNode: (String) -> Unit,
     onTestNodes: () -> Unit,
     onTestSelected: (List<String>) -> Unit,
+    onCancelTests: () -> Unit,
     onBack: () -> Unit,
 ) {
     val colors = AetherTheme.colors
@@ -178,6 +181,7 @@ fun ChainScreen(
             onSelectNode = onSelectNode,
             onTestNodes = onTestNodes,
             onTestSelected = onTestSelected,
+            onCancelTests = onCancelTests,
             onSettingsChange = onSettingsChange,
         )
     }
@@ -347,6 +351,7 @@ private fun NodesCard(
     onSelectNode: (String) -> Unit,
     onTestNodes: () -> Unit,
     onTestSelected: (List<String>) -> Unit,
+    onCancelTests: () -> Unit,
     onSettingsChange: (AppSettings) -> Unit,
 ) {
     val colors = AetherTheme.colors
@@ -354,6 +359,9 @@ private fun NodesCard(
     // what the user is doing right now, and one restored from a previous visit
     // would be a set of ticks nobody remembers making.
     var picked by remember { mutableStateOf(setOf<String>()) }
+    // A thousand nodes is not a list anybody scrolls. Held here rather than
+    // saved: it is a way of finding one node now, not a preference.
+    var query by remember { mutableStateOf("") }
     // Remembered, so every row is not handed a freshly built lambda on each
     // recomposition. A new one per row makes every row's inputs look changed,
     // and ticking one box redrew all fifty.
@@ -413,12 +421,15 @@ private fun NodesCard(
                 // written, which on a list of fifty is no order at all -- and
                 // the number the user is choosing by is already on every row.
                 val hidden = settings.chain.hiddenNodes.toSet()
+                NodeSearch(query = query, onQueryChange = { query = it })
                 NodeActions(
                     picked = picked,
                     busy = chainState.busy,
+                    progress = chainState.testProgress,
                     total = chainState.nodes.count { it.name !in hidden },
                     hiddenCount = hidden.size,
                     onTestAll = onTestNodes,
+                    onCancelTests = onCancelTests,
                     onTestPicked = { onTestSelected(picked.toList()) },
                     onHidePicked = {
                         onSettingsChange(
@@ -437,9 +448,10 @@ private fun NodesCard(
                     },
                 )
 
-                val ordered = remember(chainState.nodes, hidden) {
+                val ordered = remember(chainState.nodes, hidden, query) {
                     chainState.nodes
                         .filterNot { it.name in hidden }
+                        .filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
                         .sortedWith(
                             compareBy(
                                 { !it.supported },
@@ -449,7 +461,19 @@ private fun NodesCard(
                             ),
                         )
                 }
-                ordered.forEach { node ->
+                // Bounded height and lazy. A subscription can carry a thousand
+                // nodes, and a plain Column composes and measures every row
+                // whether or not it is on screen -- which is the freeze people
+                // hit the moment the list arrived. A fixed height is what lets
+                // it be lazy at all: nested inside the page's own scroll, an
+                // unbounded LazyColumn has infinite space to fill and would
+                // compose everything anyway.
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp),
+                ) {
+                    items(ordered, key = { it.name }) { node ->
                     Divider()
                     NodeRow(
                         name = node.name,
@@ -461,6 +485,7 @@ private fun NodesCard(
                         picked = node.name in picked,
                         onPickedChange = togglePick,
                     )
+                    }
                 }
             }
         }
@@ -496,12 +521,40 @@ private fun NodesCard(
  * travel to the end of the list to press the thing that tests them.
  */
 @Composable
+private fun NodeSearch(query: String, onQueryChange: (String) -> Unit) {
+    val colors = AetherTheme.colors
+    val interaction = remember { MutableInteractionSource() }
+    Divider()
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 15.dp, vertical = 11.dp)
+            .testTag("chain-node-search")
+            .tvTextFieldSupport(interaction),
+        interactionSource = interaction,
+        textStyle = AetherType.Data.copy(color = colors.text),
+        placeholder = { Text("Find a node", style = AetherType.Data, color = colors.text3) },
+        singleLine = true,
+        shape = RoundedCornerShape(14.dp),
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = colors.ink1,
+            unfocusedContainerColor = colors.ink1,
+            errorContainerColor = colors.ink1,
+        ),
+    )
+}
+
+@Composable
 private fun NodeActions(
     picked: Set<String>,
     busy: Boolean,
+    progress: Pair<Int, Int>?,
     total: Int,
     hiddenCount: Int,
     onTestAll: () -> Unit,
+    onCancelTests: () -> Unit,
     onTestPicked: () -> Unit,
     onHidePicked: () -> Unit,
     onRestoreHidden: () -> Unit,
@@ -514,10 +567,17 @@ private fun NodeActions(
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             OutlineButton(
-                text = if (busy) "Testing…" else "Test all",
+                // Named with the count while running. A thousand nodes take
+                // minutes, and a spinner with no number is indistinguishable
+                // from a run that has died -- which is what people reported.
+                text = when {
+                    progress != null -> "Stop (${progress.first}/${progress.second})"
+                    busy -> "Testing…"
+                    else -> "Test all"
+                },
                 modifier = Modifier.weight(1f).testTag("chain-test-nodes"),
-                enabled = !busy && total > 0,
-                onClick = onTestAll,
+                enabled = progress != null || (!busy && total > 0),
+                onClick = if (progress != null) onCancelTests else onTestAll,
             )
             OutlineButton(
                 // Named with the count, because "Test selected" on an empty
