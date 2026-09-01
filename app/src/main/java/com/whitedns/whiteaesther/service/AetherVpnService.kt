@@ -725,6 +725,8 @@ class AetherVpnService : VpnService() {
             .setConfigureIntent(configureIntent)
             .addRoute("0.0.0.0", 0)
 
+        val mtu = mtuFor(transport)
+
         // Everything this process opens must stay off the interface when the
         // chain runs: the engine's sockets to Cloudflare, mihomo's to its nodes,
         // and the subscription fetch that would otherwise race the tunnel it is
@@ -752,15 +754,27 @@ class AetherVpnService : VpnService() {
             // This is what kept hysteria2 and tuic nodes from working behind
             // the chain: they need a 1280-byte UDP payload, and 1280 here left
             // 1252 of it.
-            builder.setMtu(mtuFor(transport))
+            builder.setMtu(mtu)
             builder.addDnsServer("1.1.1.1")
             builder.addDnsServer("1.0.0.1")
             addAddress(builder, ipv4, 32)
-            if (ipv6.isNotBlank()) {
+            // IPv6 requires a 1280-byte minimum MTU, and Android enforces it:
+            // an interface carrying an IPv6 address with anything smaller is
+            // refused outright, which as an uncaught exception is a crash on
+            // connect. WARP-in-WARP's inner hop carries 1200, so it is IPv4
+            // only -- the alternative is advertising an MTU the tunnel cannot
+            // honour, which is the fault this number was chosen to fix.
+            if (ipv6.isNotBlank() && mtu >= IPV6_MINIMUM_MTU) {
                 addAddress(builder, ipv6, 128)
                 builder.addDnsServer("2606:4700:4700::1111")
                 builder.addDnsServer("2606:4700:4700::1001")
                 builder.addRoute("::", 0)
+            } else if (ipv6.isNotBlank()) {
+                EngineLog.record(
+                    LogLevel.INFO,
+                    "tun",
+                    "IPv6 left off: this tunnel carries $mtu bytes and IPv6 needs $IPV6_MINIMUM_MTU",
+                )
             }
         }
 
@@ -1105,6 +1119,14 @@ class AetherVpnService : VpnService() {
          * between them is silently dropped packets.
          */
         private const val WARP_IN_WARP_MTU = 1200
+
+        /**
+         * IPv6's own floor, and Android enforces it.
+         *
+         * An interface carrying an IPv6 address with a smaller MTU is refused,
+         * and the refusal is an exception rather than a return value.
+         */
+        private const val IPV6_MINIMUM_MTU = 1280
 
         /** Any address will do; nothing is ever sent from it. */
         private const val BLACKHOLE_IPV4 = "10.111.222.1"

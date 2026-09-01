@@ -28,6 +28,9 @@ class TunnelMtuTest {
 
         /** The inner hop of WARP-in-WARP, mirroring INNER_MTU in the engine. */
         const val WARP_IN_WARP = 1200
+
+        /** IPv6's minimum, which Android enforces on the interface. */
+        const val IPV6_FLOOR = 1280
     }
 
     @Test
@@ -60,5 +63,29 @@ class TunnelMtuTest {
         // Not a number this project gets to pick, which is why QUIC-based nodes
         // remain impossible on that transport however the others are tuned.
         assertEquals(1280, MASQUE)
+    }
+
+    @Test
+    fun anMtuBelowTheIpv6FloorCannotCarryAnIpv6Address() {
+        // IPv6 requires 1280 and Android enforces it: an interface with an
+        // IPv6 address and a smaller MTU is refused, and the refusal arrives as
+        // an exception, so it crashed the app on connect rather than failing.
+        //
+        // WARP-in-WARP's inner hop is 1200, which is under that floor -- so the
+        // very fix that stopped it dropping packets stopped it connecting at
+        // all. It is IPv4 only.
+        assertTrue(WARP_IN_WARP < IPV6_FLOOR)
+        assertTrue(WIREGUARD >= IPV6_FLOOR)
+        assertTrue(MASQUE >= IPV6_FLOOR)
+    }
+
+    @Test
+    fun onlyWarpInWarpGivesUpIpv6() {
+        // Worth pinning: if another transport ever drops below the floor it
+        // silently loses IPv6 too, and that should be a decision somebody makes
+        // rather than something a number change does quietly.
+        val belowFloor = listOf(MASQUE, WIREGUARD, WARP_IN_WARP).filter { it < IPV6_FLOOR }
+
+        assertEquals(listOf(WARP_IN_WARP), belowFloor)
     }
 }
