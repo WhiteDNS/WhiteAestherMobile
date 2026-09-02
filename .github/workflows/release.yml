@@ -108,7 +108,7 @@ jobs:
       # own toolchain and takes minutes. Gradle only packages whatever it finds
       # staged, so without this the release would produce APKs that install and
       # run with the feature quietly missing.
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.25"
           # Nothing to key a cache on: the core is fetched by the next step, so
