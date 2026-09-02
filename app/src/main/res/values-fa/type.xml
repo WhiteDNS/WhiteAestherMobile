@@ -23,4 +23,9 @@
       them fights the joins rather than tidying the spacing.
     -->
     <integer name="type_tracking_percent">0</integer>
+
+    <!--
+      Vazirmatn, which has Persian in it. Inter does not.
+    -->
+    <bool name="type_persian_face">true</bool>
 </resources>

@@ -17,4 +17,9 @@
       Tracking. Latin display sizes keep the tightening they were drawn with.
     -->
     <integer name="type_tracking_percent">100</integer>
+
+    <!--
+      The design was drawn in Inter.
+    -->
+    <bool name="type_persian_face">false</bool>
 </resources>

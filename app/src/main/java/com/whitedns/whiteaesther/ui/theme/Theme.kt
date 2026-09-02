@@ -8,6 +8,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.res.integerResource
 import com.whitedns.whiteaesther.R
+import androidx.compose.ui.res.booleanResource
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -170,10 +172,17 @@ fun WhiteAestherTheme(
         density.density,
         density.fontScale * (integerResource(R.integer.type_scale_percent) / 100f),
     )
+    // Chosen here rather than resolved by a locale-qualified font directory.
+    // Compose caches a typeface against its resource id for the life of the
+    // process, and that cache does not know about locale: one name resolved per
+    // locale handed back whichever face had been loaded first.
+    val family = if (booleanResource(R.bool.type_persian_face)) PersianFamily else LatinFamily
     val type = TypeScale.adjusted(
         leading = integerResource(R.integer.type_leading_percent) / 100f,
         tracking = integerResource(R.integer.type_tracking_percent) / 100f,
+        family = family,
     )
+    val typography = remember(type, family) { aetherTypography(type, family) }
     CompositionLocalProvider(
         LocalAetherColors provides colors,
         LocalAetherType provides type,
@@ -181,7 +190,7 @@ fun WhiteAestherTheme(
     ) {
         MaterialTheme(
             colorScheme = colors.toMaterialScheme(),
-            typography = AetherTypography,
+            typography = typography,
             content = content,
         )
     }

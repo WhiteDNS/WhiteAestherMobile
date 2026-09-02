@@ -54,15 +54,19 @@ class TypeInitOrderTest {
         val loader = freshLoader()
 
         // Exactly what the theme does, and nothing before it.
-        val scale = loader.loadClass("com.whitedns.whiteaesther.ui.theme.TypeScale")
+        val theme = "com.whitedns.whiteaesther.ui.theme."
+        val scale = loader.loadClass(theme + "TypeScale")
+        val family = loader.loadClass(theme + "TypeKt")
+            .getMethod("getPersianFamily").invoke(null)
         val companion = scale.getField("Companion").get(null)
         val adjusted = companion.javaClass.getMethod(
             "adjusted",
             Float::class.java,
             Float::class.java,
+            loader.loadClass("androidx.compose.ui.text.font.FontFamily"),
         )
 
-        assertNotNull(adjusted.invoke(companion, 1.22f, 0f))
+        assertNotNull(adjusted.invoke(companion, 1.22f, 0f, family))
     }
 
     @Test
@@ -71,8 +75,19 @@ class TypeInitOrderTest {
 
         // The other order, which was the one that used to work. Both have to,
         // or the app depends on which screen is drawn first.
-        val file = loader.loadClass("com.whitedns.whiteaesther.ui.theme.TypeKt")
+        val theme = "com.whitedns.whiteaesther.ui.theme."
+        val file = loader.loadClass(theme + "TypeKt")
+        val family = file.getMethod("getLatinFamily").invoke(null)
+        val designed = loader.loadClass(theme + "TypeScale")
+            .getField("Companion").get(null)
+            .let { it.javaClass.getMethod("getDesigned").invoke(it) }
 
-        assertNotNull(file.getMethod("getAetherTypography").invoke(null))
+        assertNotNull(
+            file.getMethod(
+                "aetherTypography",
+                loader.loadClass(theme + "TypeScale"),
+                loader.loadClass("androidx.compose.ui.text.font.FontFamily"),
+            ).invoke(null, designed, family),
+        )
     }
 }

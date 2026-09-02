@@ -14,30 +14,43 @@ import androidx.compose.ui.unit.sp
 import com.whitedns.whiteaesther.R
 
 /**
- * The interface face, whichever script the interface is in.
+ * The Latin interface face.
  *
- * One name, two typefaces: Inter in res/font, Vazirmatn UI in res/font-fa, and
- * the resource system picks between them the same way it picks the strings.
- * Compose resolves a family to one typeface per weight rather than per glyph,
- * so listing both here would have meant one of them winning everywhere --
- * Persian drawn by a face with no Persian in it, which is how "تنظیمات" ended
- * up broken across two lines.
+ * Two families with different resource ids, chosen explicitly, rather than one
+ * name resolved per locale. A locale-qualified res/font-fa looked tidier and
+ * was wrong: Compose caches a resolved typeface against the font's resource id
+ * for the life of the process, and that cache knows nothing about locale. An
+ * app that drew anything in English first had Inter cached under ui_regular,
+ * and switching to Persian handed back the same Inter -- which has no Persian
+ * in it, so the system substituted something and the text looked exactly as it
+ * had before the font was ever added.
  *
- * Vazirmatn's UI cut, whose vertical metrics are tightened for interface
- * containers, and deliberately not its Farsi-Digits cut: that one draws 0-9 as
- * Persian digits, which would undo the choice to keep addresses, ports and
- * measurements in Latin.
- *
- * IBM Plex Mono stays where it was, reserved for values that have to line up in
- * a column -- addresses, ports, round-trips, log rows. Those are Latin and
- * digits in either language, so it needs no counterpart.
+ * Different ids cannot collide in that cache, and picking the family is then a
+ * decision this code makes rather than one it hopes the resource system will
+ * make on its behalf.
  */
-val InterFamily = FontFamily(
+val LatinFamily = FontFamily(
     Font(R.font.ui_regular, FontWeight.Normal),
     Font(R.font.ui_medium, FontWeight.Medium),
     Font(R.font.ui_semibold, FontWeight.SemiBold),
     Font(R.font.ui_bold, FontWeight.Bold),
 )
+
+/**
+ * The Persian interface face: Vazirmatn's UI cut.
+ *
+ * Deliberately not its Farsi-Digits cut, which draws 0-9 as Persian digits and
+ * would undo the choice to keep addresses, ports and measurements in Latin.
+ */
+val PersianFamily = FontFamily(
+    Font(R.font.fa_regular, FontWeight.Normal),
+    Font(R.font.fa_medium, FontWeight.Medium),
+    Font(R.font.fa_semibold, FontWeight.SemiBold),
+    Font(R.font.fa_bold, FontWeight.Bold),
+)
+
+/** What the design was drawn in, and what AetherType is declared against. */
+val InterFamily = LatinFamily
 
 val MonoFamily = FontFamily(
     Font(R.font.plex_mono_regular, FontWeight.Normal),
@@ -132,27 +145,26 @@ object AetherType {
  * reversed the order and the cycle closed. Deferring this one breaks it
  * outright rather than depending on who asks first.
  */
-internal val AetherTypography: Typography by lazy {
+internal fun aetherTypography(scale: TypeScale, family: FontFamily): Typography =
     Typography().run {
     copy(
-        displayLarge = displayLarge.copy(fontFamily = InterFamily),
-        displayMedium = displayMedium.copy(fontFamily = InterFamily),
-        displaySmall = displaySmall.copy(fontFamily = InterFamily),
-        headlineLarge = headlineLarge.copy(fontFamily = InterFamily),
-        headlineMedium = headlineMedium.copy(fontFamily = InterFamily),
-        headlineSmall = headlineSmall.copy(fontFamily = InterFamily),
-        titleLarge = AetherType.PageTitle,
-        titleMedium = AetherType.CardTitle,
-        titleSmall = AetherType.RowTitle,
-        bodyLarge = AetherType.Body.copy(fontSize = 15.sp, lineHeight = 22.sp),
-        bodyMedium = AetherType.Body,
-        bodySmall = AetherType.Small,
-        labelLarge = AetherType.RowTitle.copy(fontSize = 14.sp),
-        labelMedium = AetherType.Small.copy(fontWeight = FontWeight.Medium),
-        labelSmall = AetherType.Label,
+        displayLarge = displayLarge.copy(fontFamily = family),
+        displayMedium = displayMedium.copy(fontFamily = family),
+        displaySmall = displaySmall.copy(fontFamily = family),
+        headlineLarge = headlineLarge.copy(fontFamily = family),
+        headlineMedium = headlineMedium.copy(fontFamily = family),
+        headlineSmall = headlineSmall.copy(fontFamily = family),
+        titleLarge = scale.PageTitle,
+        titleMedium = scale.CardTitle,
+        titleSmall = scale.RowTitle,
+        bodyLarge = scale.Body.copy(fontSize = 15.sp, lineHeight = 22.sp),
+        bodyMedium = scale.Body,
+        bodySmall = scale.Small,
+        labelLarge = scale.RowTitle.copy(fontSize = 14.sp),
+        labelMedium = scale.Small.copy(fontWeight = FontWeight.Medium),
+        labelSmall = scale.Label,
         )
     }
-}
 
 /**
  * The type scale, adjusted for the script it is being read in.
@@ -209,16 +221,16 @@ class TypeScale(
          * The mono styles are left alone: Data and LogLine carry addresses,
          * ports and log rows, which are Latin and digits in either language.
          */
-        fun adjusted(leading: Float, tracking: Float): TypeScale {
-            if (leading == 1f && tracking == 1f) return Designed
+        fun adjusted(leading: Float, tracking: Float, family: FontFamily): TypeScale {
+            if (leading == 1f && tracking == 1f && family == LatinFamily) return Designed
             return TypeScale(
-                AetherType.PageTitle.forScript(leading, tracking),
-                AetherType.StatusHead.forScript(leading, tracking),
-                AetherType.CardTitle.forScript(leading, tracking),
-                AetherType.RowTitle.forScript(leading, tracking),
-                AetherType.Body.forScript(leading, tracking),
-                AetherType.Small.forScript(leading, tracking),
-                AetherType.Label.forScript(leading, tracking),
+                AetherType.PageTitle.forScript(leading, tracking, family),
+                AetherType.StatusHead.forScript(leading, tracking, family),
+                AetherType.CardTitle.forScript(leading, tracking, family),
+                AetherType.RowTitle.forScript(leading, tracking, family),
+                AetherType.Body.forScript(leading, tracking, family),
+                AetherType.Small.forScript(leading, tracking, family),
+                AetherType.Label.forScript(leading, tracking, family),
                 AetherType.Data,
                 AetherType.DataLarge,
                 AetherType.LogLine,
@@ -238,7 +250,8 @@ class TypeScale(
  * Its own function rather than a local one, so it can be tested without
  * AetherType, whose initialiser loads fonts and needs a device to do it.
  */
-fun TextStyle.forScript(leading: Float, tracking: Float): TextStyle = copy(
+fun TextStyle.forScript(leading: Float, tracking: Float, family: FontFamily): TextStyle = copy(
+    fontFamily = family,
     lineHeight = if (lineHeight.isSpecified) lineHeight * leading else lineHeight,
     letterSpacing = if (letterSpacing.isSpecified) letterSpacing * tracking else letterSpacing,
 )
