@@ -617,21 +617,45 @@ async fn run_warp_in_warp_embedded(
         }
     };
 
-    let outcome = tokio::select! {
-        result = &mut outer_exit => join_outcome("outer wireguard tunnel", result),
-        result = &mut inner_exit => join_outcome("inner wireguard tunnel", result),
-        result = &mut endpoint_task => match result {
-            Ok(result) => result,
-            Err(error) => Err(AetherError::Other(format!("embedded endpoint task failed: {error}"))),
-        },
+    #[derive(PartialEq)]
+    enum Finished {
+        Outer,
+        Inner,
+        Endpoint,
+    }
+
+    let (outcome, finished) = tokio::select! {
+        result = &mut outer_exit => (join_outcome("outer wireguard tunnel", result), Finished::Outer),
+        result = &mut inner_exit => (join_outcome("inner wireguard tunnel", result), Finished::Inner),
+        result = &mut endpoint_task => (
+            match result {
+                Ok(result) => result,
+                Err(error) => {
+                    Err(AetherError::Other(format!("embedded endpoint task failed: {error}")))
+                }
+            },
+            Finished::Endpoint,
+        ),
     };
 
-    outer_exit.abort();
-    inner_exit.abort();
-    endpoint_task.abort();
-    let _ = outer_exit.await;
-    let _ = inner_exit.await;
-    let _ = endpoint_task.await;
+    // The handle that just resolved above must not be awaited again. A
+    // JoinHandle polled after it has yielded Ready panics, and a panic here
+    // unwinds into the JNI boundary, which Android turns into an abort with no
+    // Java stack trace -- a session that ends by vanishing rather than
+    // stopping. Aborting a task that has already finished is harmless; awaiting
+    // its handle a second time is not.
+    if finished != Finished::Outer {
+        outer_exit.abort();
+        let _ = outer_exit.await;
+    }
+    if finished != Finished::Inner {
+        inner_exit.abort();
+        let _ = inner_exit.await;
+    }
+    if finished != Finished::Endpoint {
+        endpoint_task.abort();
+        let _ = endpoint_task.await;
+    }
     drop(outer_stack);
 
     outcome
