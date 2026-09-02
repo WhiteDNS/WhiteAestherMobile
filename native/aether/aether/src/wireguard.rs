@@ -1,6 +1,6 @@
+use parking_lot::Mutex as StdMutex;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
-use parking_lot::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
 use boringtun::noise::{Tunn, TunnResult};
@@ -108,7 +108,14 @@ impl WgTunnel {
         let peer_public = PublicKey::from(cfg.peer_public_key);
         let preshared = cfg.preshared_key;
 
-        let tunn = Tunn::new(local_secret, peer_public, preshared, cfg.persistent_keepalive, 0, None);
+        let tunn = Tunn::new(
+            local_secret,
+            peer_public,
+            preshared,
+            cfg.persistent_keepalive,
+            0,
+            None,
+        );
 
         Ok(Self {
             tunn: Arc::new(Mutex::new(Box::new(tunn))),
@@ -186,7 +193,8 @@ impl WgTunnel {
                                 drop(tunn);
                                 let _ = sock_r.send(&pkt_vec).await;
                             }
-                            TunnResult::WriteToTunnelV4(pkt, _) | TunnResult::WriteToTunnelV6(pkt, _) => {
+                            TunnResult::WriteToTunnelV4(pkt, _)
+                            | TunnResult::WriteToTunnelV6(pkt, _) => {
                                 *last_valid_rx_r.lock() = Instant::now();
                                 let pkt_vec = pkt.to_vec();
                                 drop(tunn);
@@ -557,7 +565,14 @@ pub async fn verify_endpoint_keep_session(
     let local_secret = StaticSecret::from(private_key);
     let peer_pk = PublicKey::from(peer_public);
 
-    let mut tunn = Tunn::new(local_secret, peer_pk, None, Some(keepalive.unwrap_or(25)), 0, None);
+    let mut tunn = Tunn::new(
+        local_secret,
+        peer_pk,
+        None,
+        Some(keepalive.unwrap_or(25)),
+        0,
+        None,
+    );
 
     let mut out_buf = vec![0u8; MAX_PACKET];
     let mut recv_buf = vec![0u8; MAX_PACKET];

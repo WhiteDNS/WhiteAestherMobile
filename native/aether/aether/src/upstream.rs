@@ -274,7 +274,8 @@ impl Upstream {
         stream.read_exact(&mut answer).await?;
         if answer[0] != 0x01 {
             return Err(AetherError::Other(
-                "the upstream proxy answered the password negotiation with the wrong version".into(),
+                "the upstream proxy answered the password negotiation with the wrong version"
+                    .into(),
             ));
         }
         if answer[1] != 0x00 {

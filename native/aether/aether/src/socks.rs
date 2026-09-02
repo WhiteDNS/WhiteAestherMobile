@@ -1865,20 +1865,16 @@ mod http_proxy_tests {
 
     #[tokio::test]
     async fn a_head_arriving_in_one_piece_is_read_exactly() {
-        let (head, leftover) = head_over_socket(&[b"CONNECT a:443 HTTP/1.1\r\nHost: a\r\n\r\n"]).await;
+        let (head, leftover) =
+            head_over_socket(&[b"CONNECT a:443 HTTP/1.1\r\nHost: a\r\n\r\n"]).await;
         assert_eq!(head, b"CONNECT a:443 HTTP/1.1\r\nHost: a\r\n\r\n");
         assert!(leftover.is_empty());
     }
 
     #[tokio::test]
     async fn a_head_split_across_writes_is_still_assembled() {
-        let (head, _) = head_over_socket(&[
-            b"CONNECT a:443 HT",
-            b"TP/1.1\r\nHos",
-            b"t: a\r\n",
-            b"\r\n",
-        ])
-        .await;
+        let (head, _) =
+            head_over_socket(&[b"CONNECT a:443 HT", b"TP/1.1\r\nHos", b"t: a\r\n", b"\r\n"]).await;
         assert_eq!(head, b"CONNECT a:443 HTTP/1.1\r\nHost: a\r\n\r\n");
     }
 

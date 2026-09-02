@@ -1,8 +1,8 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use rand::RngExt;
 use rand::Rng;
+use rand::RngExt;
 use tokio::net::UdpSocket;
 
 #[derive(Debug, Clone)]
