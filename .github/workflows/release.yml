@@ -11,6 +11,12 @@ on:
       tag:
         description: Existing tag to build, for example v1.0.0
         required: true
+      quiet:
+        description: >-
+          Publish as a prerelease, so the app does not offer it to anyone yet.
+          The update check reads /releases/latest, which skips prereleases.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -181,9 +187,18 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ steps.version.outputs.tag }}"
+          # A prerelease is how a build gets published without being offered:
+          # the app checks /releases/latest, and that endpoint skips them. Set
+          # at creation rather than edited afterwards, because "create it, then
+          # quickly hide it" is a race against every phone that checks in
+          # between.
+          quiet=""
+          if [[ "${{ inputs.quiet }}" == "true" ]]; then
+            quiet="--prerelease"
+          fi
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" release-assets/* --clobber
           else
             gh release create "$tag" release-assets/* \
-              --verify-tag --generate-notes --title "WhiteAestherMobile $tag"
+              --verify-tag --generate-notes --title "WhiteAestherMobile $tag" $quiet
           fi
