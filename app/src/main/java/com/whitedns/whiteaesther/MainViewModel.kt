@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -105,6 +106,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = AppSettings(),
     )
+
+    /**
+     * Whether [settings] holds what is on disk yet, or still the placeholder.
+     *
+     * DataStore cannot be read synchronously, so the first value every screen
+     * sees is a default that agrees with nothing the user has chosen. Most of
+     * the interface can live with that for a frame. Anything that acts on a
+     * setting rather than drawing it cannot: the placeholder says the language
+     * is System, and an activity built for Persian read that as a change and
+     * rebuilt itself, only to be told the same thing again by the next
+     * placeholder -- a loop that never reached the real value.
+     */
+    val settingsLoaded: StateFlow<Boolean> = repository.settings
+        .map { true }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = false,
+        )
     val engineStatus = EngineStatusStore.status
     private val mutableEndpointScannerState = MutableStateFlow(EndpointScannerState())
     val endpointScannerState = mutableEndpointScannerState.asStateFlow()

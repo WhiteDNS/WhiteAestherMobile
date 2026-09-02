@@ -80,4 +80,36 @@ class AppLanguageTest {
             }
         }
     }
+
+    @Test
+    fun thePlaceholderDisagreesWithEveryExplicitChoice() {
+        // The crash this is written against. DataStore cannot be read
+        // synchronously, so the first value any screen sees is this default --
+        // and it says the language is System whatever the user actually chose.
+        //
+        // An activity built for Persian read that as the language having
+        // changed, rebuilt itself, and was handed the same placeholder again on
+        // the way up. The app never finished opening, and only for someone who
+        // had picked a language: with System selected the two agree and nothing
+        // happens.
+        val placeholder = AppSettings()
+
+        assertEquals(AppLanguage.SYSTEM, placeholder.language)
+        for (chosen in AppLanguage.entries.filter { it != AppLanguage.SYSTEM }) {
+            assertNotEquals(placeholder.language.tag, chosen.tag)
+        }
+    }
+
+    @Test
+    fun everyChoiceSurvivesBeingSavedAndReadBack() {
+        // The mirror AppLocale reads before the activity exists is written from
+        // the tag, so a tag that did not round-trip would be a language chosen
+        // and then silently lost on the next launch.
+        for (language in AppLanguage.entries) {
+            val settings = AppSettings(language = language)
+            val fromTag = AppLanguage.entries.first { it.tag == settings.language.tag }
+
+            assertEquals(language, fromTag)
+        }
+    }
 }

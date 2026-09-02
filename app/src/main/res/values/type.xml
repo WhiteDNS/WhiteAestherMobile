@@ -1,11 +1,15 @@
 <resources>
     <!--
-      How much of the designed type scale this language uses.
+      How much of the designed type scale this language uses, as a percentage.
+
+      An integer rather than a float: a dimension resource has to carry a unit,
+      and reading a bare number as one throws at the moment the theme is first
+      composed, which is the moment the app opens.
 
       The scale was drawn around Inter and English. A script with taller
       letterforms and longer words needs a little less of it to sit in the same
       boxes, and the alternative (widening every card for one language) is a
       layout that reads as loose in the language it was designed for.
     -->
-    <item name="type_scale" format="float" type="dimen">1.0</item>
+    <integer name="type_scale_percent">100</integer>
 </resources>

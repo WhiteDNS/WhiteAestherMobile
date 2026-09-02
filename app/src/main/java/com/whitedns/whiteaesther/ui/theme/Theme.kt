@@ -6,7 +6,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
-import androidx.compose.ui.res.dimensionResource
+import androidx.compose.ui.res.integerResource
 import com.whitedns.whiteaesther.R
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -158,7 +158,7 @@ fun WhiteAestherTheme(
     // including Material's own, and keeps the design as one relationship of
     // sizes instead of ten numbers that have to be adjusted together.
     val density = LocalDensity.current
-    val typeScale = dimensionResource(R.dimen.type_scale).value
+    val typeScale = integerResource(R.integer.type_scale_percent) / 100f
     val scaled = Density(density.density, density.fontScale * typeScale)
     CompositionLocalProvider(
         LocalAetherColors provides colors,

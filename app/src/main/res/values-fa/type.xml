@@ -3,5 +3,5 @@
       Persian words run longer than their English equivalents and the script
       carries more height, so the same box holds less of it.
     -->
-    <item name="type_scale" format="float" type="dimen">0.88</item>
+    <integer name="type_scale_percent">88</integer>
 </resources>

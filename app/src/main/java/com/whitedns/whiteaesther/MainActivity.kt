@@ -239,8 +239,14 @@ class MainActivity : ComponentActivity() {
             // again while the screen the user is tapping on is already resumed:
             // the choice was saved and nothing happened until something else --
             // the VPN consent dialog, say -- paused and resumed the activity.
-            LaunchedEffect(settings.language) {
-                if (settings.language.tag != builtInLanguage) {
+            val settingsLoaded = viewModel.settingsLoaded.collectAsStateWithLifecycle().value
+            LaunchedEffect(settingsLoaded, settings.language) {
+                // Only once the real settings have arrived. The placeholder
+                // DataStore emits first says the language is System, which an
+                // activity built for Persian would read as a change, rebuild
+                // for, and be told again by the next placeholder -- an app that
+                // never finished opening.
+                if (settingsLoaded && settings.language.tag != builtInLanguage) {
                     builtInLanguage = settings.language.tag
                     recreate()
                 }
