@@ -9,6 +9,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
 import com.whitedns.whiteaesther.R
 
@@ -193,18 +194,14 @@ class TypeScale(
          */
         fun adjusted(leading: Float, tracking: Float): TypeScale {
             if (leading == 1f && tracking == 1f) return Designed
-            fun TextStyle.forScript() = copy(
-                lineHeight = lineHeight * leading,
-                letterSpacing = letterSpacing * tracking,
-            )
             return TypeScale(
-                AetherType.PageTitle.forScript(),
-                AetherType.StatusHead.forScript(),
-                AetherType.CardTitle.forScript(),
-                AetherType.RowTitle.forScript(),
-                AetherType.Body.forScript(),
-                AetherType.Small.forScript(),
-                AetherType.Label.forScript(),
+                AetherType.PageTitle.forScript(leading, tracking),
+                AetherType.StatusHead.forScript(leading, tracking),
+                AetherType.CardTitle.forScript(leading, tracking),
+                AetherType.RowTitle.forScript(leading, tracking),
+                AetherType.Body.forScript(leading, tracking),
+                AetherType.Small.forScript(leading, tracking),
+                AetherType.Label.forScript(leading, tracking),
                 AetherType.Data,
                 AetherType.DataLarge,
                 AetherType.LogLine,
@@ -212,5 +209,21 @@ class TypeScale(
         }
     }
 }
+
+/**
+ * One style, opened up for a script that needs more room than Latin.
+ *
+ * Both units are guarded. A style that never named a letterSpacing carries
+ * TextUnit.Unspecified, and multiplying that throws rather than returning
+ * itself -- so Body and Small, which set neither, took the whole theme down the
+ * first time it was composed, which is the moment the app opens.
+ *
+ * Its own function rather than a local one, so it can be tested without
+ * AetherType, whose initialiser loads fonts and needs a device to do it.
+ */
+fun TextStyle.forScript(leading: Float, tracking: Float): TextStyle = copy(
+    lineHeight = if (lineHeight.isSpecified) lineHeight * leading else lineHeight,
+    letterSpacing = if (letterSpacing.isSpecified) letterSpacing * tracking else letterSpacing,
+)
 
 val LocalAetherType = staticCompositionLocalOf { TypeScale.Designed }
