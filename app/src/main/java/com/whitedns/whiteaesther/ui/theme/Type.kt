@@ -1,5 +1,7 @@
 package com.whitedns.whiteaesther.ui.theme
 
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.integerResource
 import androidx.compose.material3.Typography
@@ -135,18 +137,80 @@ internal val AetherTypography = Typography().run {
 }
 
 /**
- * The same style, with the tracking this script wants.
+ * The type scale, adjusted for the script it is being read in.
  *
- * Negative tracking is a Latin display convention: at large sizes the gaps
- * between letterforms open up, and closing them a little is what stops a
- * headline reading as loose. A connected script has no such gaps to close --
- * the letters already join -- so the same adjustment works against the joins
- * instead of the spacing, and squeezes a word into looking like a mistake.
+ * The design was drawn around Inter and English. Persian needs three things
+ * from it that a Latin scale does not give:
  *
- * Applied to the display sizes only, where the tracking is large enough to see.
+ * - **Leading.** Persian carries dots below the baseline and loops above it, so
+ *   lines set at a Latin ratio crowd into each other. 1.43 is comfortable for
+ *   Inter and tight for Vazirmatn.
+ * - **No negative tracking.** Closing the space between letters is a Latin
+ *   display convention for gaps that open at large sizes; a script whose
+ *   letters already join has no such gaps, so it fights the joins instead.
+ * - **Not being shrunk.** Which was this project's mistake: the scale was cut
+ *   to 0.88 and then 0.94 while Persian was being drawn by a substituted face,
+ *   and the shrinking was compensating for that rather than for the script.
+ *   Persian is if anything harder to read small than Latin, because what
+ *   separates two letters is often one dot.
+ *
+ * Held in a composition local rather than read at each call site, so the styles
+ * stay one set of relationships instead of ten numbers to keep in step.
  */
-@Composable
-fun TextStyle.tracked(): TextStyle {
-    val percent = integerResource(R.integer.type_tracking_percent)
-    return if (percent == 100) this else copy(letterSpacing = letterSpacing * (percent / 100f))
+@Immutable
+class TypeScale(
+    val PageTitle: TextStyle,
+    val StatusHead: TextStyle,
+    val CardTitle: TextStyle,
+    val RowTitle: TextStyle,
+    val Body: TextStyle,
+    val Small: TextStyle,
+    val Label: TextStyle,
+    val Data: TextStyle,
+    val DataLarge: TextStyle,
+    val LogLine: TextStyle,
+) {
+    companion object {
+        /** The design as drawn, which is what Latin reads in. */
+        val Designed = TypeScale(
+            AetherType.PageTitle,
+            AetherType.StatusHead,
+            AetherType.CardTitle,
+            AetherType.RowTitle,
+            AetherType.Body,
+            AetherType.Small,
+            AetherType.Label,
+            AetherType.Data,
+            AetherType.DataLarge,
+            AetherType.LogLine,
+        )
+
+        /**
+         * The same scale with the leading opened up and the tracking released.
+         *
+         * The mono styles are left alone: Data and LogLine carry addresses,
+         * ports and log rows, which are Latin and digits in either language.
+         */
+        fun adjusted(leading: Float, tracking: Float): TypeScale {
+            if (leading == 1f && tracking == 1f) return Designed
+            fun TextStyle.forScript() = copy(
+                lineHeight = lineHeight * leading,
+                letterSpacing = letterSpacing * tracking,
+            )
+            return TypeScale(
+                AetherType.PageTitle.forScript(),
+                AetherType.StatusHead.forScript(),
+                AetherType.CardTitle.forScript(),
+                AetherType.RowTitle.forScript(),
+                AetherType.Body.forScript(),
+                AetherType.Small.forScript(),
+                AetherType.Label.forScript(),
+                AetherType.Data,
+                AetherType.DataLarge,
+                AetherType.LogLine,
+            )
+        }
+    }
 }
+
+val LocalAetherType = staticCompositionLocalOf { TypeScale.Designed }

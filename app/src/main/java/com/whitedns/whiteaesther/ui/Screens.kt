@@ -81,7 +81,6 @@ import com.whitedns.whiteaesther.service.formatBytes
 import com.whitedns.whiteaesther.service.formatRate
 import com.whitedns.whiteaesther.ui.theme.AetherTheme
 import com.whitedns.whiteaesther.ui.theme.AetherType
-import com.whitedns.whiteaesther.ui.theme.tracked
 import kotlinx.coroutines.delay
 
 // -------------------------------------------------------------- profiles ----
@@ -241,7 +240,7 @@ fun HomeScreen(
                 null,
                 Modifier.size(44.dp),
             )
-            Text(stringResource(R.string.app_name), style = AetherType.CardTitle, color = colors.text)
+            Text(stringResource(R.string.app_name), style = AetherTheme.type.CardTitle, color = colors.text)
         }
 
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -296,7 +295,7 @@ fun HomeScreen(
                         EngineStage.STOPPING -> stringResource(R.string.stage_stopping)
                         EngineStage.ERROR -> stringResource(R.string.not_connected)
                     },
-                    style = AetherType.Label,
+                    style = AetherTheme.type.Label,
                     color = signal,
                 )
             }
@@ -310,7 +309,7 @@ fun HomeScreen(
                     EngineStage.STOPPING -> stringResource(R.string.status_disconnecting)
                     EngineStage.ERROR -> stringResource(R.string.couldn_t_connect)
                 },
-                style = AetherType.StatusHead.tracked(),
+                style = AetherTheme.type.StatusHead,
                 color = colors.text,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
@@ -318,7 +317,7 @@ fun HomeScreen(
             // The engine's own words -- never a number this app invented.
             Text(
                 status.message.ifBlank { stringResource(R.string.status_ready) },
-                style = AetherType.Body,
+                style = AetherTheme.type.Body,
                 color = if (status.stage == EngineStage.ERROR) colors.signalFailed else colors.text2,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
@@ -364,7 +363,7 @@ fun HomeScreen(
                             (elapsed % 3600) / 60,
                             elapsed % 60,
                         ),
-                        style = AetherType.DataLarge,
+                        style = AetherTheme.type.DataLarge,
                         color = colors.text,
                     )
                 }
@@ -457,7 +456,7 @@ fun HomeScreen(
                 if (viaChain) {
                     Text(
                         stringResource(R.string.traffic_leaves_through_your_exit_chain_so),
-                        style = AetherType.Small,
+                        style = AetherTheme.type.Small,
                         color = colors.text3,
                         modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
                     )
@@ -476,7 +475,7 @@ fun HomeScreen(
                 if (!traffic.supported) {
                     Text(
                         stringResource(R.string.this_phone_does_not_keep_per_app),
-                        style = AetherType.Small,
+                        style = AetherTheme.type.Small,
                         color = colors.text2,
                         modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
                     )
@@ -509,7 +508,7 @@ fun HomeScreen(
                     Divider()
                     Text(
                         stringResource(R.string.measured_on_the_encrypted_side_which_is),
-                        style = AetherType.Small,
+                        style = AetherTheme.type.Small,
                         color = colors.text3,
                         modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
                     )
@@ -872,8 +871,8 @@ fun EndpointScreen(
                             .onFocusChanged { focused = it.isFocused }
                             .testTag("custom-endpoint-field"),
                         interactionSource = endpointInteraction,
-                        placeholder = { Text("162.159.197.3:443", style = AetherType.Data, color = colors.text3) },
-                        textStyle = AetherType.Data.copy(color = colors.text),
+                        placeholder = { Text("162.159.197.3:443", style = AetherTheme.type.Data, color = colors.text3) },
+                        textStyle = AetherTheme.type.Data.copy(color = colors.text),
                         supportingText = {
                             Text(
                                 when {
@@ -881,7 +880,7 @@ fun EndpointScreen(
                                     normalized != null -> stringResource(R.string.valid_address)
                                     else -> stringResource(R.string.needs_an_ip_and_a_port)
                                 },
-                                style = AetherType.Small,
+                                style = AetherTheme.type.Small,
                             )
                         },
                         isError = endpointText.isNotBlank() && normalized == null,
@@ -950,7 +949,7 @@ fun EndpointScreen(
                     scannerState.error
                         ?: scannerState.message
                         ?: stringResource(R.string.not_searched_yet),
-                    style = AetherType.Data,
+                    style = AetherTheme.type.Data,
                     color = if (scannerState.error != null) colors.signalFailed else colors.text2,
                 )
             }
@@ -983,7 +982,7 @@ fun EndpointScreen(
                     Column(Modifier.weight(1f)) {
                         Text(
                             result.peer,
-                            style = AetherType.Data,
+                            style = AetherTheme.type.Data,
                             color = if (selected) colors.brand else colors.text,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -994,11 +993,11 @@ fun EndpointScreen(
                             } else {
                                 stringResource(R.string.validated_route, stringResource(settings.transport.probedAs.label))
                             },
-                            style = AetherType.Small,
+                            style = AetherTheme.type.Small,
                             color = colors.text3,
                         )
                     }
-                    Text(stringResource(R.string.result_rttmillis_ms, result.rttMillis), style = AetherType.Data, color = colors.brand)
+                    Text(stringResource(R.string.result_rttmillis_ms, result.rttMillis), style = AetherTheme.type.Data, color = colors.brand)
                 }
             }
         }
@@ -1116,10 +1115,10 @@ fun TrafficScreen(
                 Divider()
                 Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
                     val portInteraction = remember { MutableInteractionSource() }
-                    Text(stringResource(R.string.local_proxy_port), style = AetherType.RowTitle, color = colors.text)
+                    Text(stringResource(R.string.local_proxy_port), style = AetherTheme.type.RowTitle, color = colors.text)
                     Text(
                         stringResource(R.string.where_proxy_only_mode_listens_on_this),
-                        style = AetherType.Small,
+                        style = AetherTheme.type.Small,
                         color = colors.text2,
                     )
                     Spacer(Modifier.height(9.dp))
@@ -1138,8 +1137,8 @@ fun TrafficScreen(
                             .tvTextFieldSupport(portInteraction)
                             .testTag("proxy-port-field"),
                         interactionSource = portInteraction,
-                        textStyle = AetherType.Data.copy(color = colors.text),
-                        supportingText = { Text(stringResource(R.string.between_1024_and_65535), style = AetherType.Small) },
+                        textStyle = AetherTheme.type.Data.copy(color = colors.text),
+                        supportingText = { Text(stringResource(R.string.between_1024_and_65535), style = AetherTheme.type.Small) },
                         isError = portText.toIntOrNull() !in 1_024..65_535,
                         singleLine = true,
                         shape = RoundedCornerShape(14.dp),
@@ -1178,7 +1177,7 @@ fun TrafficScreen(
                             } else {
                                 stringResource(R.string.join_a_wi_fi_network_to_get)
                             },
-                            style = AetherType.Small,
+                            style = AetherTheme.type.Small,
                             color = colors.text2,
                             modifier = Modifier.testTag("lan-sharing-address"),
                         )
@@ -1186,7 +1185,7 @@ fun TrafficScreen(
                         settings.lanSharingNotice()?.let { notice ->
                             Text(
                                 text = stringResource(notice.text),
-                                style = AetherType.Small,
+                                style = AetherTheme.type.Small,
                                 color = when (notice.level) {
                                     // Amber, not red: this one is a choice the
                                     // user is allowed to keep, and the failure
@@ -1200,7 +1199,7 @@ fun TrafficScreen(
 
                         Text(
                             text = stringResource(R.string.a_password_is_optional_leave_both_boxes),
-                            style = AetherType.Small,
+                            style = AetherTheme.type.Small,
                             color = colors.text2,
                         )
                         LanCredentialField(
@@ -1226,10 +1225,10 @@ fun TrafficScreen(
 
                 Divider()
                 Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                    Text(stringResource(R.string.dns_inside_the_tunnel), style = AetherType.RowTitle, color = colors.text)
+                    Text(stringResource(R.string.dns_inside_the_tunnel), style = AetherTheme.type.RowTitle, color = colors.text)
                     Text(
                         stringResource(R.string.comma_separated_leave_empty_for_the_engine),
-                        style = AetherType.Small,
+                        style = AetherTheme.type.Small,
                         color = colors.text2,
                     )
                     Spacer(Modifier.height(9.dp))
@@ -1245,10 +1244,10 @@ fun TrafficScreen(
 
                 Divider()
                 Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                    Text(stringResource(R.string.dial_out_through_a_proxy), style = AetherType.RowTitle, color = colors.text)
+                    Text(stringResource(R.string.dial_out_through_a_proxy), style = AetherTheme.type.RowTitle, color = colors.text)
                     Text(
                         stringResource(R.string.send_everything_the_tunnel_dials_through_a),
-                        style = AetherType.Small,
+                        style = AetherTheme.type.Small,
                         color = colors.text2,
                     )
                     Spacer(Modifier.height(9.dp))
@@ -1264,10 +1263,10 @@ fun TrafficScreen(
 
                 Divider()
                 Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                    Text(stringResource(R.string.wireguard_keepalive), style = AetherType.RowTitle, color = colors.text)
+                    Text(stringResource(R.string.wireguard_keepalive), style = AetherTheme.type.RowTitle, color = colors.text)
                     Text(
                         stringResource(R.string.seconds_between_the_packets_that_hold_the),
-                        style = AetherType.Small,
+                        style = AetherTheme.type.Small,
                         color = colors.text2,
                     )
                     Spacer(Modifier.height(9.dp))
@@ -1353,7 +1352,7 @@ fun TrafficScreen(
                     title = stringResource(R.string.dns_resolvers),
                     subtitle = stringResource(R.string.fixed_in_the_engine_not_configurable_yet),
                 ) {
-                    Text("1.1.1.1", style = AetherType.Data, color = colors.text2)
+                    Text("1.1.1.1", style = AetherTheme.type.Data, color = colors.text2)
                 }
             }
         }
@@ -1396,8 +1395,8 @@ private fun LanCredentialField(
             .tvTextFieldSupport(interaction)
             .testTag(tag),
         interactionSource = interaction,
-        textStyle = AetherType.Data.copy(color = colors.text),
-        label = { Text(label, style = AetherType.Small) },
+        textStyle = AetherTheme.type.Data.copy(color = colors.text),
+        label = { Text(label, style = AetherTheme.type.Small) },
         singleLine = true,
         shape = RoundedCornerShape(14.dp),
         colors = TextFieldDefaults.colors(
@@ -1432,7 +1431,7 @@ private fun RateColumn(
         Spacer(Modifier.height(4.dp))
         Text(
             rate,
-            style = AetherType.DataLarge,
+            style = AetherTheme.type.DataLarge,
             color = tint,
             // One line, always. Two columns share the width, and a rate that
             // wrapped would push the total below the card's own edge.
@@ -1442,7 +1441,7 @@ private fun RateColumn(
         Spacer(Modifier.height(3.dp))
         Text(
             total,
-            style = AetherType.Small,
+            style = AetherTheme.type.Small,
             color = colors.text2,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -1473,7 +1472,7 @@ private fun PlainField(
             .tvTextFieldSupport(interaction)
             .testTag(tag),
         interactionSource = interaction,
-        textStyle = AetherType.Data.copy(color = colors.text),
+        textStyle = AetherTheme.type.Data.copy(color = colors.text),
         singleLine = true,
         shape = RoundedCornerShape(14.dp),
         colors = TextFieldDefaults.colors(
@@ -1564,7 +1563,7 @@ fun RoutingRulesScreen(
         if (settings.routeDirect.isNotBlank()) {
             Text(
                 stringResource(R.string.anything_under_skip_the_tunnel_leaves_with),
-                style = AetherType.Small,
+                style = AetherTheme.type.Small,
                 color = colors.signalWorking,
                 modifier = Modifier.padding(horizontal = 2.dp, vertical = 8.dp),
             )
@@ -1591,9 +1590,9 @@ private fun RuleField(
             .tvTextFieldSupport(interaction)
             .testTag(tag),
         interactionSource = interaction,
-        textStyle = AetherType.Data.copy(color = colors.text),
+        textStyle = AetherTheme.type.Data.copy(color = colors.text),
         placeholder = {
-            Text(placeholder, style = AetherType.Data, color = colors.text3)
+            Text(placeholder, style = AetherTheme.type.Data, color = colors.text3)
         },
         shape = RoundedCornerShape(14.dp),
         colors = TextFieldDefaults.colors(
@@ -1817,12 +1816,12 @@ private fun CommunityFooter() {
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Icon(AetherIcons.Telegram, null, Modifier.size(19.dp), colors.cyan)
-            Text(stringResource(R.string.join_us_on_telegram), style = AetherType.RowTitle, color = colors.cyan)
+            Text(stringResource(R.string.join_us_on_telegram), style = AetherTheme.type.RowTitle, color = colors.cyan)
         }
         if (unavailable) {
             Text(
                 stringResource(R.string.no_app_on_this_device_can_open),
-                style = AetherType.Small,
+                style = AetherTheme.type.Small,
                 color = colors.signalFailed,
                 modifier = Modifier.padding(top = 8.dp).testTag("telegram-unavailable"),
             )
@@ -1830,13 +1829,13 @@ private fun CommunityFooter() {
         Spacer(Modifier.height(10.dp))
         Text(
             stringResource(R.string.t_me_whitedns),
-            style = AetherType.Data.copy(fontSize = 12.5f.sp),
+            style = AetherTheme.type.Data.copy(fontSize = 12.5f.sp),
             color = colors.text3,
         )
         Spacer(Modifier.height(4.dp))
         Text(
             stringResource(R.string.news_releases_and_help),
-            style = AetherType.Small,
+            style = AetherTheme.type.Small,
             color = colors.text3,
         )
         Spacer(Modifier.height(18.dp))
@@ -1844,7 +1843,7 @@ private fun CommunityFooter() {
         Spacer(Modifier.height(6.dp))
         Text(
             stringResource(R.string.whiteaesther_com_whitedns_whiteaesther_buildconf, com.whitedns.whiteaesther.BuildConfig.VERSION_NAME),
-            style = AetherType.Small.copy(fontSize = 12.sp),
+            style = AetherTheme.type.Small.copy(fontSize = 12.sp),
             color = colors.text3,
         )
     }
@@ -2012,13 +2011,13 @@ fun DiagnosticsScreen(
             Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
                 SectionLabel(stringResource(R.string.activity))
                 Spacer(Modifier.height(4.dp))
-                Text(stringResource(R.string.shown_size_events, shown.size), style = AetherType.Data, color = colors.text2)
+                Text(stringResource(R.string.shown_size_events, shown.size), style = AetherTheme.type.Data, color = colors.text2)
             }
             if (shown.isEmpty()) {
                 Divider()
                 Text(
                     stringResource(R.string.nothing_recorded_yet_connect_once_and_the),
-                    style = AetherType.Small,
+                    style = AetherTheme.type.Small,
                     color = colors.text3,
                     modifier = Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
                 )
@@ -2032,10 +2031,10 @@ fun DiagnosticsScreen(
                     Divider()
                     Column(Modifier.padding(horizontal = 15.dp, vertical = 8.dp)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                            Text(entry.formattedTime(), style = AetherType.LogLine, color = colors.text3)
+                            Text(entry.formattedTime(), style = AetherTheme.type.LogLine, color = colors.text3)
                             Text(
                                 entry.level.name,
-                                style = AetherType.LogLine.copy(fontWeight = FontWeight.Medium),
+                                style = AetherTheme.type.LogLine.copy(fontWeight = FontWeight.Medium),
                                 color = when (entry.level) {
                                     LogLevel.ERROR -> colors.signalFailed
                                     LogLevel.WARN -> colors.signalWorking
@@ -2043,9 +2042,9 @@ fun DiagnosticsScreen(
                                     LogLevel.DEBUG -> colors.text3
                                 },
                             )
-                            Text(entry.tag, style = AetherType.LogLine, color = colors.cyan)
+                            Text(entry.tag, style = AetherTheme.type.LogLine, color = colors.cyan)
                         }
-                        Text(entry.message, style = AetherType.LogLine, color = colors.text2)
+                        Text(entry.message, style = AetherTheme.type.LogLine, color = colors.text2)
                     }
                 }
             }
@@ -2084,7 +2083,7 @@ fun DiagnosticsScreen(
                         .verticalScroll(rememberScrollState())
                         .padding(12.dp),
                 ) {
-                    Text(report, style = AetherType.LogLine, color = colors.text2)
+                    Text(report, style = AetherTheme.type.LogLine, color = colors.text2)
                 }
             }
         }
@@ -2162,10 +2161,10 @@ private fun CheckRow(
         Column(Modifier.weight(1f)) {
             Text(
                 title,
-                style = AetherType.RowTitle,
+                style = AetherTheme.type.RowTitle,
                 color = if (onCheckedChange == null) colors.text2 else colors.text,
             )
-            Text(subtitle, style = AetherType.Small, color = colors.text2)
+            Text(subtitle, style = AetherTheme.type.Small, color = colors.text2)
         }
     }
 }

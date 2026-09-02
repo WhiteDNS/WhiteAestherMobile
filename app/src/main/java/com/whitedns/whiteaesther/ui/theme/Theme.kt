@@ -138,6 +138,10 @@ val LocalAetherColors = staticCompositionLocalOf { DarkAether }
 object AetherTheme {
     val colors: AetherColors
         @Composable @ReadOnlyComposable get() = LocalAetherColors.current
+
+    /** The type scale for the script the interface is being read in. */
+    val type: TypeScale
+        @Composable @ReadOnlyComposable get() = LocalAetherType.current
 }
 
 @Composable
@@ -157,12 +161,23 @@ fun WhiteAestherTheme(
     // the density rather than every style reaches all of them at once,
     // including Material's own, and keeps the design as one relationship of
     // sizes instead of ten numbers that have to be adjusted together.
+    // Size scales the density, which reaches Material's own scale as well as
+    // this one and keeps the design as a single set of relationships. Leading
+    // and tracking cannot be expressed that way -- both are ratios the density
+    // preserves -- so they are carried by the type scale itself.
     val density = LocalDensity.current
-    val typeScale = integerResource(R.integer.type_scale_percent) / 100f
-    val scaled = Density(density.density, density.fontScale * typeScale)
+    val sized = Density(
+        density.density,
+        density.fontScale * (integerResource(R.integer.type_scale_percent) / 100f),
+    )
+    val type = TypeScale.adjusted(
+        leading = integerResource(R.integer.type_leading_percent) / 100f,
+        tracking = integerResource(R.integer.type_tracking_percent) / 100f,
+    )
     CompositionLocalProvider(
         LocalAetherColors provides colors,
-        LocalDensity provides scaled,
+        LocalAetherType provides type,
+        LocalDensity provides sized,
     ) {
         MaterialTheme(
             colorScheme = colors.toMaterialScheme(),

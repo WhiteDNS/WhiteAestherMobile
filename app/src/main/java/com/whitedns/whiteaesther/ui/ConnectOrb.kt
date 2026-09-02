@@ -204,7 +204,7 @@ fun ConnectOrb(
             Box(Modifier.height(7.dp))
             Text(
                 caption.uppercase(),
-                style = AetherType.Label.copy(fontSize = androidx.compose.ui.unit.TextUnit(10.5f, androidx.compose.ui.unit.TextUnitType.Sp)),
+                style = AetherTheme.type.Label.copy(fontSize = androidx.compose.ui.unit.TextUnit(10.5f, androidx.compose.ui.unit.TextUnitType.Sp)),
                 color = if (state == ConnectState.IDLE) colors.text3 else signal,
             )
         }

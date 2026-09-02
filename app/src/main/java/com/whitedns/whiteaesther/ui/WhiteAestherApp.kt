@@ -420,7 +420,7 @@ private fun TvNavigationRail(selected: Tab, onSelect: (Tab) -> Unit) {
                 )
                 Text(
                     stringResource(tab.label),
-                    style = AetherType.Small,
+                    style = AetherTheme.type.Small,
                     color = if (active) colors.text else colors.text3,
                 )
             }
@@ -498,7 +498,7 @@ private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit) {
                         Spacer(Modifier.height(4.dp))
                         Text(
                             stringResource(tab.label),
-                            style = AetherType.Small.copy(fontSize = AetherType.Label.fontSize),
+                            style = AetherTheme.type.Small.copy(fontSize = AetherTheme.type.Label.fontSize),
                             color = if (active) colors.brand else colors.text3,
                         )
                     }

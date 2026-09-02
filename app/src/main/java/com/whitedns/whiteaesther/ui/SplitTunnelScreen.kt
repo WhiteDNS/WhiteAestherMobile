@@ -163,7 +163,7 @@ fun SplitTunnelScreen(
                 if (rules.mode == SplitTunnelMode.ONLY) stringResource(R.string.apps_to_carry) else stringResource(R.string.apps_to_leave_out),
             )
             Spacer(Modifier.height(4.dp))
-            Text(rules.summary(), style = AetherType.Small, color = colors.text2)
+            Text(rules.summary(), style = AetherTheme.type.Small, color = colors.text2)
             Spacer(Modifier.height(9.dp))
             OutlinedTextField(
                 value = query,
@@ -173,8 +173,8 @@ fun SplitTunnelScreen(
                     .tvTextFieldSupport(searchInteraction)
                     .testTag("split-search"),
                 interactionSource = searchInteraction,
-                placeholder = { Text(stringResource(R.string.search_apps), style = AetherType.Body, color = colors.text3) },
-                textStyle = AetherType.Body.copy(color = colors.text),
+                placeholder = { Text(stringResource(R.string.search_apps), style = AetherTheme.type.Body, color = colors.text3) },
+                textStyle = AetherTheme.type.Body.copy(color = colors.text),
                 singleLine = true,
                 shape = RoundedCornerShape(14.dp),
                 colors = TextFieldDefaults.colors(
@@ -285,7 +285,7 @@ private fun AppRow(app: InstalledApp, checked: Boolean, onToggle: (Boolean) -> U
                 // height and the list does not jump under the user's finger.
                 Text(
                     app.label.take(1).uppercase(),
-                    style = AetherType.RowTitle,
+                    style = AetherTheme.type.RowTitle,
                     color = colors.text2,
                 )
             }
@@ -293,14 +293,14 @@ private fun AppRow(app: InstalledApp, checked: Boolean, onToggle: (Boolean) -> U
         Column(Modifier.weight(1f)) {
             Text(
                 app.label,
-                style = AetherType.RowTitle,
+                style = AetherTheme.type.RowTitle,
                 color = colors.text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
                 if (app.system) stringResource(R.string.system_app) else app.packageName,
-                style = AetherType.Small,
+                style = AetherTheme.type.Small,
                 color = colors.text3,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,

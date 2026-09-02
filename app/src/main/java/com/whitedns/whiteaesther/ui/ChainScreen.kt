@@ -241,7 +241,7 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
                             .controllerFocus(removeInteraction, CircleShape)
                             .padding(horizontal = 11.dp, vertical = 6.dp),
                     ) {
-                        Text(stringResource(R.string.remove), style = AetherType.Small, color = colors.text3)
+                        Text(stringResource(R.string.remove), style = AetherTheme.type.Small, color = colors.text3)
                     }
                 }
             }
@@ -260,9 +260,9 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
                     .testTag("chain-source-field"),
                 interactionSource = sourceInteraction,
                 placeholder = {
-                    Text(stringResource(R.string.https), style = AetherType.Data, color = colors.text3)
+                    Text(stringResource(R.string.https), style = AetherTheme.type.Data, color = colors.text3)
                 },
-                textStyle = AetherType.Data.copy(color = colors.text),
+                textStyle = AetherTheme.type.Data.copy(color = colors.text),
                 singleLine = true,
                 shape = RoundedCornerShape(14.dp),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
@@ -316,9 +316,9 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
                         .testTag("chain-manual-field"),
                     interactionSource = manualInteraction,
                     placeholder = {
-                        Text(stringResource(R.string.vless), style = AetherType.Data, color = colors.text3)
+                        Text(stringResource(R.string.vless), style = AetherTheme.type.Data, color = colors.text3)
                     },
-                    textStyle = AetherType.Data.copy(color = colors.text),
+                    textStyle = AetherTheme.type.Data.copy(color = colors.text),
                     shape = RoundedCornerShape(14.dp),
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = colors.ink1,
@@ -526,8 +526,8 @@ private fun NodeSearch(query: String, onQueryChange: (String) -> Unit) {
             .testTag("chain-node-search")
             .tvTextFieldSupport(interaction),
         interactionSource = interaction,
-        textStyle = AetherType.Data.copy(color = colors.text),
-        placeholder = { Text(stringResource(R.string.find_a_node), style = AetherType.Data, color = colors.text3) },
+        textStyle = AetherTheme.type.Data.copy(color = colors.text),
+        placeholder = { Text(stringResource(R.string.find_a_node), style = AetherTheme.type.Data, color = colors.text3) },
         singleLine = true,
         shape = RoundedCornerShape(14.dp),
         colors = TextFieldDefaults.colors(
@@ -600,7 +600,7 @@ private fun NodeActions(
                     // Said out loud, because a node missing from a subscription
                     // with no explanation is what a broken link looks like.
                     stringResource(R.string.hiddencount_removed_from_the_list, hiddenCount),
-                    style = AetherType.Small,
+                    style = AetherTheme.type.Small,
                     color = colors.text2,
                 )
                 OutlineButton(
@@ -677,21 +677,21 @@ private fun NodeRow(
         Column(Modifier.weight(1f)) {
             Text(
                 name,
-                style = AetherType.RowTitle,
+                style = AetherTheme.type.RowTitle,
                 color = colors.text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
                 if (supported) kind else stringResource(R.string.kind_not_supported, kind),
-                style = AetherType.Small,
+                style = AetherTheme.type.Small,
                 color = if (supported) colors.text2 else colors.signalWorking,
             )
             if (!supported) {
                 Spacer(Modifier.height(3.dp))
                 Text(
                     stringResource(R.string.this_build_s_engine_cannot_authenticate_with),
-                    style = AetherType.Small,
+                    style = AetherTheme.type.Small,
                     color = colors.text3,
                 )
             }
@@ -706,7 +706,7 @@ private fun NodeRow(
                     else -> stringResource(R.string.result_rttmillis_ms, delay)
                 }
             },
-            style = AetherType.Data,
+            style = AetherTheme.type.Data,
             color = when {
                 !supported -> colors.text3
                 delay == null -> colors.text3

@@ -53,7 +53,6 @@ import androidx.compose.ui.unit.sp
 import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.ui.theme.AetherTheme
 import com.whitedns.whiteaesther.ui.theme.AetherType
-import com.whitedns.whiteaesther.ui.theme.tracked
 
 // ---------------------------------------------------------------- icons ----
 
@@ -211,7 +210,7 @@ fun SectionLabel(text: String, modifier: Modifier = Modifier) {
     Text(
         text.uppercase(),
         modifier = modifier,
-        style = AetherType.Label,
+        style = AetherTheme.type.Label,
         color = AetherTheme.colors.text3,
     )
 }
@@ -227,7 +226,7 @@ fun PageTitle(title: String, subtitle: String? = null) {
             // which is what "تنظیمات" looked like when the layout decided it
             // did not fit. A page title is a title -- if it genuinely cannot
             // fit, an ellipsis says so and a severed word does not.
-            style = AetherType.PageTitle.tracked(),
+            style = AetherTheme.type.PageTitle,
             color = AetherTheme.colors.text,
             maxLines = 1,
             softWrap = false,
@@ -235,7 +234,7 @@ fun PageTitle(title: String, subtitle: String? = null) {
         )
         if (subtitle != null) {
             Spacer(Modifier.height(5.dp))
-            Text(subtitle, style = AetherType.Body, color = AetherTheme.colors.text2)
+            Text(subtitle, style = AetherTheme.type.Body, color = AetherTheme.colors.text2)
         }
     }
 }
@@ -272,7 +271,7 @@ fun CrumbBar(text: String, onBack: (() -> Unit)? = null) {
                 )
             }
         }
-        Text(text, style = AetherType.RowTitle, color = AetherTheme.colors.text3)
+        Text(text, style = AetherTheme.type.RowTitle, color = AetherTheme.colors.text3)
     }
 }
 
@@ -311,10 +310,10 @@ typealias ColumnScopeAlias = androidx.compose.foundation.layout.ColumnScope
 @Composable
 fun CardHead(title: String, subtitle: String? = null) {
     Column(Modifier.padding(start = 15.dp, end = 15.dp, top = 14.dp, bottom = 2.dp)) {
-        Text(title, style = AetherType.CardTitle, color = AetherTheme.colors.text)
+        Text(title, style = AetherTheme.type.CardTitle, color = AetherTheme.colors.text)
         if (subtitle != null) {
             Spacer(Modifier.height(2.dp))
-            Text(subtitle, style = AetherType.Small, color = AetherTheme.colors.text2)
+            Text(subtitle, style = AetherTheme.type.Small, color = AetherTheme.colors.text2)
         }
     }
 }
@@ -369,8 +368,8 @@ fun RowCard(
             Icon(icon, null, Modifier.size(18.dp), iconTint ?: AetherTheme.colors.text2)
         }
         Column(Modifier.weight(1f)) {
-            Text(title, style = AetherType.RowTitle, color = AetherTheme.colors.text)
-            Text(subtitle, style = AetherType.Small, color = AetherTheme.colors.text2)
+            Text(title, style = AetherTheme.type.RowTitle, color = AetherTheme.colors.text)
+            Text(subtitle, style = AetherTheme.type.Small, color = AetherTheme.colors.text2)
         }
         if (trailing) {
             Icon(AetherIcons.Chevron, null, Modifier.size(17.dp), AetherTheme.colors.text3)
@@ -388,11 +387,11 @@ fun FactRow(key: String, value: String, mono: Boolean = false) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(key, style = AetherType.Body, color = AetherTheme.colors.text2)
+        Text(key, style = AetherTheme.type.Body, color = AetherTheme.colors.text2)
         Spacer(Modifier.weight(1f))
         Text(
             value,
-            style = if (mono) AetherType.Data else AetherType.RowTitle,
+            style = if (mono) AetherTheme.type.Data else AetherTheme.type.RowTitle,
             color = AetherTheme.colors.text,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -415,8 +414,8 @@ fun SettingRow(
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, style = AetherType.RowTitle, color = AetherTheme.colors.text)
-            Text(subtitle, style = AetherType.Small, color = AetherTheme.colors.text2)
+            Text(title, style = AetherTheme.type.RowTitle, color = AetherTheme.colors.text)
+            Text(subtitle, style = AetherTheme.type.Small, color = AetherTheme.colors.text2)
         }
         trailing()
     }
@@ -449,8 +448,8 @@ fun ToggleSettingRow(
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, style = AetherType.RowTitle, color = AetherTheme.colors.text)
-            Text(subtitle, style = AetherType.Small, color = AetherTheme.colors.text2)
+            Text(title, style = AetherTheme.type.RowTitle, color = AetherTheme.colors.text)
+            Text(subtitle, style = AetherTheme.type.Small, color = AetherTheme.colors.text2)
         }
         AetherSwitch(checked = checked, onCheckedChange = null)
     }
@@ -537,7 +536,7 @@ fun <T> SegGroup(
             ) {
                 Text(
                     label(option),
-                    style = AetherType.RowTitle.copy(fontSize = 14.sp),
+                    style = AetherTheme.type.RowTitle.copy(fontSize = 14.sp),
                     color = if (active) AetherTheme.colors.brand else AetherTheme.colors.text2,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -579,14 +578,14 @@ fun ChoiceCard(
         Column {
             Icon(icon, null, Modifier.size(20.dp), if (selected) colors.brand else colors.text3)
             Spacer(Modifier.height(8.dp))
-            Text(name, style = AetherType.RowTitle, color = colors.text)
+            Text(name, style = AetherTheme.type.RowTitle, color = colors.text)
             Spacer(Modifier.height(2.dp))
-            Text(description, style = AetherType.Small.copy(fontSize = 12.5.sp()), color = colors.text2)
+            Text(description, style = AetherTheme.type.Small.copy(fontSize = 12.5.sp()), color = colors.text2)
             if (tag != null) {
                 Spacer(Modifier.height(6.dp))
                 Text(
                     tag.uppercase(),
-                    style = AetherType.Label.copy(fontSize = 9.5.sp()),
+                    style = AetherTheme.type.Label.copy(fontSize = 9.5.sp()),
                     color = if (selected) colors.brand else colors.text3,
                 )
             }
@@ -656,14 +655,14 @@ fun OptionRow(
             ) {
                 Text(
                     code,
-                    style = AetherType.Data.copy(fontSize = 11.5.sp()),
+                    style = AetherTheme.type.Data.copy(fontSize = 11.5.sp()),
                     color = if (selected) colors.brand else colors.text2,
                 )
             }
         }
         Column(Modifier.weight(1f)) {
-            Text(title, style = AetherType.RowTitle, color = colors.text)
-            Text(subtitle, style = AetherType.Small, color = colors.text2)
+            Text(title, style = AetherTheme.type.RowTitle, color = colors.text)
+            Text(subtitle, style = AetherTheme.type.Small, color = colors.text2)
         }
         Box(
             Modifier
@@ -719,7 +718,7 @@ fun AdvancedSection(
                     .rotate(rotation),
                 AetherTheme.colors.text2,
             )
-            Text(stringResource(R.string.advanced), style = AetherType.RowTitle, color = AetherTheme.colors.text2)
+            Text(stringResource(R.string.advanced), style = AetherTheme.type.RowTitle, color = AetherTheme.colors.text2)
             Spacer(Modifier.weight(1f))
             SectionLabel(badge)
         }
@@ -747,9 +746,9 @@ fun AttentionCard(
     ) {
         Icon(AetherIcons.Warning, null, Modifier.size(20.dp), tone)
         Column {
-            Text(title, style = AetherType.RowTitle, color = AetherTheme.colors.text)
+            Text(title, style = AetherTheme.type.RowTitle, color = AetherTheme.colors.text)
             Spacer(Modifier.height(2.dp))
-            Text(body, style = AetherType.Small, color = AetherTheme.colors.text2)
+            Text(body, style = AetherTheme.type.Small, color = AetherTheme.colors.text2)
             if (actions.isNotEmpty()) {
                 Spacer(Modifier.height(11.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -764,7 +763,7 @@ fun AttentionCard(
                                 .controllerFocus(interaction, CircleShape)
                                 .padding(horizontal = 13.dp, vertical = 7.dp),
                         ) {
-                            Text(label, style = AetherType.Small, color = tone)
+                            Text(label, style = AetherTheme.type.Small, color = tone)
                         }
                     }
                 }
@@ -797,7 +796,7 @@ fun PrimaryButton(
         horizontalArrangement = Arrangement.spacedBy(9.dp, Alignment.CenterHorizontally),
     ) {
         if (icon != null) Icon(icon, null, Modifier.size(17.dp), colors.onBrand)
-        Text(text, style = AetherType.RowTitle, color = colors.onBrand, maxLines = 1)
+        Text(text, style = AetherTheme.type.RowTitle, color = colors.onBrand, maxLines = 1)
     }
 }
 
@@ -827,7 +826,7 @@ fun OutlineButton(
     ) {
         val tint = if (enabled) colors.text else colors.text3
         if (icon != null) Icon(icon, null, Modifier.size(17.dp), tint)
-        Text(text, style = AetherType.RowTitle, color = tint, maxLines = 1)
+        Text(text, style = AetherTheme.type.RowTitle, color = tint, maxLines = 1)
     }
 }
 
@@ -836,7 +835,7 @@ fun Note(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
         modifier = modifier.padding(horizontal = 2.dp, vertical = 10.dp),
-        style = AetherType.Small.copy(fontSize = 12.5.sp()),
+        style = AetherTheme.type.Small.copy(fontSize = 12.5.sp()),
         color = AetherTheme.colors.text3,
     )
 }
