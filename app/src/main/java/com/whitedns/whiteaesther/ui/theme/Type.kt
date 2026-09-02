@@ -117,7 +117,23 @@ object AetherType {
     )
 }
 
-internal val AetherTypography = Typography().run {
+/**
+ * Material's own scale, pointed at this design's faces.
+ *
+ * Lazy, and it has to be. AetherType needs the font families, which live at
+ * file scope; this needs AetherType. Two initialisers that need each other
+ * work only while something touches the file before the object -- and whichever
+ * runs second sees the other half-built, reading its fields as null. That is a
+ * NullPointerException inside a static initialiser, which surfaces as
+ * ExceptionInInitializerError and takes the app down on its first frame.
+ *
+ * It survived for as long as it did because MaterialTheme was always the first
+ * thing to be touched. Adding a type scale that reads AetherType directly
+ * reversed the order and the cycle closed. Deferring this one breaks it
+ * outright rather than depending on who asks first.
+ */
+internal val AetherTypography: Typography by lazy {
+    Typography().run {
     copy(
         displayLarge = displayLarge.copy(fontFamily = InterFamily),
         displayMedium = displayMedium.copy(fontFamily = InterFamily),
@@ -134,7 +150,8 @@ internal val AetherTypography = Typography().run {
         labelLarge = AetherType.RowTitle.copy(fontSize = 14.sp),
         labelMedium = AetherType.Small.copy(fontWeight = FontWeight.Medium),
         labelSmall = AetherType.Label,
-    )
+        )
+    }
 }
 
 /**

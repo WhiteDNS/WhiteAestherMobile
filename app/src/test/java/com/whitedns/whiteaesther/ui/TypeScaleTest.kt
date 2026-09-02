@@ -3,6 +3,9 @@ package com.whitedns.whiteaesther.ui
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
+import com.whitedns.whiteaesther.ui.theme.AetherType
+import com.whitedns.whiteaesther.ui.theme.AetherTypography
+import com.whitedns.whiteaesther.ui.theme.TypeScale
 import com.whitedns.whiteaesther.ui.theme.forScript
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -75,5 +78,33 @@ class TypeScaleTest {
         // The Latin path, and the one every non-Persian install takes.
         assertEquals(TRACKED, TRACKED.forScript(1f, 1f))
         assertEquals(UNTRACKED, UNTRACKED.forScript(1f, 1f))
+    }
+
+    @Test
+    fun theScaleCanBeTheFirstThingAnythingTouches() {
+        // The crash on open, and the one this file explained away once already.
+        //
+        // AetherType needs the font families, which live at file scope; the file
+        // scope needs AetherType for Material's typography. Two initialisers
+        // that need each other work only while something touches the file
+        // first -- and whichever runs second reads the other half-built, as
+        // null. That is a NullPointerException inside a static initialiser.
+        //
+        // Reaching TypeScale before anything else is exactly the order the theme
+        // uses, and exactly the order that used to fail. An earlier version of
+        // this test hit it and the failure was read as "fonts need a device".
+        // It was not. It was this.
+        assertEquals(
+            AetherType.Body.lineHeight.value * LEADING,
+            TypeScale.adjusted(LEADING, TRACKING).Body.lineHeight.value,
+            0.01f,
+        )
+    }
+
+    @Test
+    fun materialsScaleIsBuiltFromTheSameStyles() {
+        // Touched after the scale, which is the order that used to explode.
+        assertEquals(AetherType.PageTitle, AetherTypography.titleLarge)
+        assertEquals(AetherType.Body, AetherTypography.bodyMedium)
     }
 }
