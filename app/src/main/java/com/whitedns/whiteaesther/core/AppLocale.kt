@@ -56,8 +56,27 @@ object AppLocale {
      */
     fun wrap(context: Context): Context {
         val tag = current(context)
-        if (tag.isEmpty()) return context
+        if (tag.isEmpty()) {
+            // Not just "return the context": wrap() sets the process-wide
+            // default locale, and a process that has been Persian once stays
+            // Persian at the JVM level -- so dates and numbers formatted
+            // outside Compose would keep coming out in a language the user has
+            // just switched away from. Resources.getSystem() reads the device's
+            // own setting, which no override here can touch.
+            Locale.setDefault(systemLocale())
+            return context
+        }
         return wrap(context, Locale.forLanguageTag(tag))
+    }
+
+    private fun systemLocale(): Locale {
+        val configuration = android.content.res.Resources.getSystem().configuration
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            configuration.locales[0]
+        } else {
+            @Suppress("DEPRECATION")
+            configuration.locale
+        }
     }
 
     private fun wrap(context: Context, locale: Locale): Context {

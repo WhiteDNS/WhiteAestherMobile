@@ -21,6 +21,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -234,6 +235,16 @@ class MainActivity : ComponentActivity() {
         batteryExempt = isIgnoringBatteryOptimizations()
         setContent {
             val settings = viewModel.settings.collectAsStateWithLifecycle().value
+            // Watched here rather than only in onResume, which is not called
+            // again while the screen the user is tapping on is already resumed:
+            // the choice was saved and nothing happened until something else --
+            // the VPN consent dialog, say -- paused and resumed the activity.
+            LaunchedEffect(settings.language) {
+                if (settings.language.tag != builtInLanguage) {
+                    builtInLanguage = settings.language.tag
+                    recreate()
+                }
+            }
             WhiteAestherTheme(themeMode = settings.themeMode) {
                 WhiteAestherApp(
                     settings = settings,
