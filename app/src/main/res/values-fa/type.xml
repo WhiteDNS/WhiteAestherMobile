@@ -1,9 +1,15 @@
 <resources>
     <!--
-      Persian words run longer than their English equivalents and the script
-      carries more height, so the same box holds less of it.
+      Persian words run longer than their English equivalents, so the same box
+      holds less of it.
+
+      Milder than it was. The first value was set while Persian was being drawn
+      by whatever the system substituted for a font that had none of it, and it
+      was compensating for that as much as for the script. Vazirmatn's UI cut is
+      metrically tuned for interface containers, so most of that compensation is
+      no longer being asked of the type size.
     -->
-    <integer name="type_scale_percent">88</integer>
+    <integer name="type_scale_percent">94</integer>
 
     <!--
       No negative tracking: Persian letters join, and closing the space

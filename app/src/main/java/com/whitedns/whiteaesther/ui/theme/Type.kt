@@ -11,15 +11,29 @@ import androidx.compose.ui.unit.sp
 import com.whitedns.whiteaesther.R
 
 /**
- * Inter carries the interface; IBM Plex Mono is reserved for values that have to
- * line up in a column -- addresses, ports, round-trips, log rows. Running text
- * never uses the mono face.
+ * The interface face, whichever script the interface is in.
+ *
+ * One name, two typefaces: Inter in res/font, Vazirmatn UI in res/font-fa, and
+ * the resource system picks between them the same way it picks the strings.
+ * Compose resolves a family to one typeface per weight rather than per glyph,
+ * so listing both here would have meant one of them winning everywhere --
+ * Persian drawn by a face with no Persian in it, which is how "تنظیمات" ended
+ * up broken across two lines.
+ *
+ * Vazirmatn's UI cut, whose vertical metrics are tightened for interface
+ * containers, and deliberately not its Farsi-Digits cut: that one draws 0-9 as
+ * Persian digits, which would undo the choice to keep addresses, ports and
+ * measurements in Latin.
+ *
+ * IBM Plex Mono stays where it was, reserved for values that have to line up in
+ * a column -- addresses, ports, round-trips, log rows. Those are Latin and
+ * digits in either language, so it needs no counterpart.
  */
 val InterFamily = FontFamily(
-    Font(R.font.inter_regular, FontWeight.Normal),
-    Font(R.font.inter_medium, FontWeight.Medium),
-    Font(R.font.inter_semibold, FontWeight.SemiBold),
-    Font(R.font.inter_bold, FontWeight.Bold),
+    Font(R.font.ui_regular, FontWeight.Normal),
+    Font(R.font.ui_medium, FontWeight.Medium),
+    Font(R.font.ui_semibold, FontWeight.SemiBold),
+    Font(R.font.ui_bold, FontWeight.Bold),
 )
 
 val MonoFamily = FontFamily(

@@ -63,6 +63,24 @@ MIT license. WhiteAesther changes only its build script to normalize `.exe`
 paths from cargo-ndk on Windows; BoringSSL runtime and crypto source are not
 modified. Details are in `native/third-party/README.md`.
 
+## Vazirmatn — SIL Open Font License 1.1
+
+The Persian interface is set in Vazirmatn v33.003 by Saber Rastikerdar, from
+`rastikerdar/vazirmatn`. Four weights of its UI cut ship in `res/font-fa/`, so
+they are used only where the app is set to Persian; the Latin interface keeps
+Inter.
+
+Bundled rather than fetched. A font requested at runtime is a request to a third
+party naming this device, from an app whose whole purpose is not to make those.
+
+The OFL permits redistribution inside a bundle like this one provided the font
+is not sold on its own and the licence travels with it. Unmodified, and named
+Vazirmatn -- the OFL's reserved-name clause forbids a modified copy keeping the
+name, which is a reason not to modify it rather than a reason to rename.
+
+The licence text is in
+[licenses/OFL-1.1-Vazirmatn.txt](licenses/OFL-1.1-Vazirmatn.txt).
+
 ## Everything else
 
 Other Kotlin, Rust, and Go dependencies retain their respective upstream
