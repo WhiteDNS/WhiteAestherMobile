@@ -1,6 +1,8 @@
 package com.whitedns.whiteaesther.service
 
+import java.util.Locale
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TrafficFormatTest {
@@ -42,5 +44,36 @@ class TrafficFormatTest {
         assertEquals(0L, unsupported.received)
         assertEquals(0L, unsupported.downloadPerSecond)
         assert(!unsupported.supported)
+    }
+
+    @Test
+    fun measurementsKeepLatinDigitsWhateverTheAppIsSetTo() {
+        // Formatted against a Persian default these came out in Arabic-Indic
+        // digits, which the bidi algorithm classes as an Arabic number -- and a
+        // number of that class beside a Latin unit swaps places with it, so
+        // "5.1 MB" appeared on screen as "MB ۵٫۱".
+        val previous = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.forLanguageTag("fa"))
+
+            assertEquals("5.1 MB", formatBytes(5_347_737))
+            assertEquals("665 KB", formatBytes(681_000))
+            assertEquals("0 B/s", formatRate(0))
+        } finally {
+            Locale.setDefault(previous)
+        }
+    }
+
+    @Test
+    fun theUnitFollowsTheNumber() {
+        // The order the reader expects, and the order that survives being
+        // pasted into a bug report.
+        for (bytes in listOf(0L, 900L, 5_347_737L, 9_000_000_000L)) {
+            val formatted = formatBytes(bytes)
+            val digitsEnd = formatted.indexOfFirst { it == ' ' }
+
+            assertTrue(formatted, digitsEnd > 0)
+            assertTrue(formatted, formatted.take(digitsEnd).all { it.isDigit() || it == '.' })
+        }
     }
 }

@@ -1,6 +1,8 @@
 package com.whitedns.whiteaesther.ui
 
 import androidx.annotation.StringRes
+import androidx.compose.ui.res.painterResource
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -228,7 +230,17 @@ fun HomeScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(11.dp),
         ) {
-            Icon(AetherIcons.Globe, null, Modifier.size(30.dp), colors.brand)
+            // The launcher icon itself, not a drawn stand-in. Image rather than
+            // Icon because it carries its own colour and tinting it would flatten
+            // it to a silhouette, and larger than the 30dp it replaces because
+            // the launcher foreground is a 108dp canvas holding a 72dp mark --
+            // sized to the canvas, the mark itself would come out smaller than
+            // what it replaced.
+            Image(
+                painterResource(R.mipmap.ic_launcher_foreground),
+                null,
+                Modifier.size(44.dp),
+            )
             Text(stringResource(R.string.app_name), style = AetherType.CardTitle, color = colors.text)
         }
 
@@ -342,7 +354,16 @@ fun HomeScreen(
                     SectionLabel(stringResource(R.string.connected_for))
                     Spacer(Modifier.height(3.dp))
                     Text(
-                        stringResource(R.string.elapsed_clock).format(elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60),
+                        String.format(
+                            // Latin digits and Latin order: a clock read against
+                            // a Persian default came out in Arabic-Indic digits,
+                            // which reorder around the colons.
+                            java.util.Locale.ROOT,
+                            stringResource(R.string.elapsed_clock),
+                            elapsed / 3600,
+                            (elapsed % 3600) / 60,
+                            elapsed % 60,
+                        ),
                         style = AetherType.DataLarge,
                         color = colors.text,
                     )

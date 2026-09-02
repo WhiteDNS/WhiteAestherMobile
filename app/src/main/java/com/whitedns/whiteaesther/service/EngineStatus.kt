@@ -17,7 +17,15 @@ data class EngineStatus(
     val stage: EngineStage = EngineStage.IDLE,
     val mode: EngineMode? = null,
     val peer: String? = null,
-    val message: String = "Ready",
+    /**
+     * Blank by default, and the screen supplies the word.
+     *
+     * It used to default to "Ready", which is a sentence rather than a state:
+     * every idle status carried an English word that no language setting could
+     * reach, and it sat under the translated headline saying the same thing in
+     * the language the user had left.
+     */
+    val message: String = "",
     /** When the tunnel came up, so elapsed time survives the UI being recreated. */
     val connectedAtMillis: Long? = null,
 )

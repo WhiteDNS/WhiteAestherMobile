@@ -1,5 +1,6 @@
 package com.whitedns.whiteaesther.service
 
+import java.util.Locale
 import android.net.TrafficStats
 import android.os.Process
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -160,10 +161,18 @@ fun formatBytes(bytes: Long): String {
         value /= 1024
         unit++
     }
+    // Locale.ROOT, so the digits stay Latin whatever the app is set to.
+    //
+    // Not only a preference. Formatted against a Persian default these came out
+    // in Arabic-Indic digits, which the bidi algorithm reads as an Arabic number
+    // -- and a number of that class beside a Latin unit swaps places with it, so
+    // "5.1 MB" rendered as "MB ۵٫۱". A measurement is a technical value: Latin
+    // digits keep the order right and keep it copyable.
+    //
     // One decimal below ten, none above: "9.4 MB" is worth the character,
     // "946.2 MB" is not.
-    return if (value < 10) "%.1f %s".format(value, units[unit])
-    else "%.0f %s".format(value, units[unit])
+    return if (value < 10) String.format(Locale.ROOT, "%.1f %s", value, units[unit])
+    else String.format(Locale.ROOT, "%.0f %s", value, units[unit])
 }
 
 /** Formats a rate. Always per second, so the unit says so once. */
