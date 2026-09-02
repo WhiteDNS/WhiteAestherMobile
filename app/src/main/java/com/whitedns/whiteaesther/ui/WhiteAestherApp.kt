@@ -1,6 +1,7 @@
 package com.whitedns.whiteaesther.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.annotation.StringRes
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.LocalIndication
@@ -66,11 +67,11 @@ import com.whitedns.whiteaesther.service.TrafficSample
 import com.whitedns.whiteaesther.ui.theme.AetherTheme
 import com.whitedns.whiteaesther.ui.theme.AetherType
 
-private enum class Tab(val label: String, val icon: ImageVector) {
-    HOME("Home", AetherIcons.Home),
-    ROUTES("Routes", AetherIcons.Routes),
-    TRAFFIC("Traffic", AetherIcons.Traffic),
-    SETTINGS("Settings", AetherIcons.Settings),
+private enum class Tab(@StringRes val label: Int, val icon: ImageVector) {
+    HOME(R.string.tab_home, AetherIcons.Home),
+    ROUTES(R.string.tab_routes, AetherIcons.Routes),
+    TRAFFIC(R.string.tab_traffic, AetherIcons.Traffic),
+    SETTINGS(R.string.tab_settings, AetherIcons.Settings),
 }
 
 /** Sub-screens keep their parent tab selected. */
@@ -406,7 +407,7 @@ private fun TvNavigationRail(selected: Tab, onSelect: (Tab) -> Unit) {
                     .tvControllerActivation { onSelect(tab) }
                     .clickable(interaction, LocalIndication.current) { onSelect(tab) }
                     .controllerFocus(interaction, shape)
-                    .testTag("tab-${tab.label.lowercase()}")
+                    .testTag("tab-${tab.name.lowercase()}")
                     .padding(horizontal = 8.dp, vertical = 12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -418,7 +419,7 @@ private fun TvNavigationRail(selected: Tab, onSelect: (Tab) -> Unit) {
                     if (active) colors.brand else colors.text3,
                 )
                 Text(
-                    tab.label,
+                    stringResource(tab.label),
                     style = AetherType.Small,
                     color = if (active) colors.text else colors.text3,
                 )
@@ -484,7 +485,7 @@ private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit) {
                             .fillMaxSize()
                             .clickable(interaction, LocalIndication.current) { onSelect(tab) }
                             .controllerFocus(interaction, shape)
-                            .testTag("tab-${tab.label.lowercase()}"),
+                            .testTag("tab-${tab.name.lowercase()}"),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
@@ -496,7 +497,7 @@ private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit) {
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            tab.label,
+                            stringResource(tab.label),
                             style = AetherType.Small.copy(fontSize = AetherType.Label.fontSize),
                             color = if (active) colors.brand else colors.text3,
                         )

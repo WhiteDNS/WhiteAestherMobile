@@ -1,6 +1,7 @@
 package com.whitedns.whiteaesther.data
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -67,7 +68,7 @@ class KillSwitchSettingsTest {
             routeDirect = "",
         )
 
-        assertTrue(settings.routingSummary() == "2 blocked")
+        assertEquals(RuleCounts(blocked = 2, direct = 0), settings.routingCounts())
     }
 
     @Test
@@ -79,14 +80,11 @@ class KillSwitchSettingsTest {
 
         // Semicolons and commas separate too, which is what makes a pasted
         // one-line list work.
-        assertTrue(settings.routingSummary().contains("1 blocked"))
-        assertTrue(settings.routingSummary().contains("2 skipping"))
+        assertEquals(RuleCounts(blocked = 1, direct = 2), settings.routingCounts())
     }
 
     @Test
     fun noRulesSaysSoRatherThanShowingZero() {
-        assertTrue(
-            AppSettings().routingSummary() == "Everything goes through the tunnel",
-        )
+        assertEquals(RuleCounts(blocked = 0, direct = 0), AppSettings().routingCounts())
     }
 }

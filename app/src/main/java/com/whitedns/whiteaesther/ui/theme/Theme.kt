@@ -4,6 +4,10 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.res.dimensionResource
+import com.whitedns.whiteaesther.R
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -147,7 +151,19 @@ fun WhiteAestherTheme(
         ThemeMode.DARK -> true
     }
     val colors = if (dark) DarkAether else LightAether
-    CompositionLocalProvider(LocalAetherColors provides colors) {
+    // The type scale was drawn around Inter and English. A script whose words
+    // run longer holds less of it in the same card, so the scale comes from
+    // resources and the qualified value applies wherever one exists. Scaling
+    // the density rather than every style reaches all of them at once,
+    // including Material's own, and keeps the design as one relationship of
+    // sizes instead of ten numbers that have to be adjusted together.
+    val density = LocalDensity.current
+    val typeScale = dimensionResource(R.dimen.type_scale).value
+    val scaled = Density(density.density, density.fontScale * typeScale)
+    CompositionLocalProvider(
+        LocalAetherColors provides colors,
+        LocalDensity provides scaled,
+    ) {
         MaterialTheme(
             colorScheme = colors.toMaterialScheme(),
             typography = AetherTypography,

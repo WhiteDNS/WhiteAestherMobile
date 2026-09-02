@@ -1,5 +1,6 @@
 package com.whitedns.whiteaesther.data
 
+import com.whitedns.whiteaesther.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -40,7 +41,7 @@ class SplitTunnelTest {
         // tunnel that carries nothing -- which looks exactly like a connection
         // that failed silently.
         assertTrue(rules.effectivePackages(self).isEmpty())
-        assertTrue(rules.validationError(self).orEmpty().contains("at least one"))
+        assertEquals(R.string.split_choose_one, rules.validationError(self))
     }
 
     @Test

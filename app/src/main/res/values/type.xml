@@ -1,0 +1,11 @@
+<resources>
+    <!--
+      How much of the designed type scale this language uses.
+
+      The scale was drawn around Inter and English. A script with taller
+      letterforms and longer words needs a little less of it to sit in the same
+      boxes, and the alternative (widening every card for one language) is a
+      layout that reads as loose in the language it was designed for.
+    -->
+    <item name="type_scale" format="float" type="dimen">1.0</item>
+</resources>

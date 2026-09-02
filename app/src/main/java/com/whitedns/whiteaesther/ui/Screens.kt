@@ -277,10 +277,10 @@ fun HomeScreen(
                 Text(
                     when (status.stage) {
                         EngineStage.IDLE -> stringResource(R.string.not_connected)
-                        EngineStage.PREPARING -> "PREPARING"
-                        EngineStage.CONNECTING -> "CONNECTING"
-                        EngineStage.CONNECTED -> "CONNECTED"
-                        EngineStage.STOPPING -> "STOPPING"
+                        EngineStage.PREPARING -> stringResource(R.string.stage_preparing)
+                        EngineStage.CONNECTING -> stringResource(R.string.stage_connecting)
+                        EngineStage.CONNECTED -> stringResource(R.string.stage_connected)
+                        EngineStage.STOPPING -> stringResource(R.string.stage_stopping)
                         EngineStage.ERROR -> stringResource(R.string.not_connected)
                     },
                     style = AetherType.Label,
@@ -501,7 +501,7 @@ fun HomeScreen(
             tvFocusable = true,
         ) {
             if (status.stage == EngineStage.CONNECTED) {
-                FactRow("Transport", settings.transport.label)
+                FactRow(stringResource(R.string.fact_transport), stringResource(settings.transport.label))
                 Divider()
                 FactRow("Gateway", status.peer ?: "Negotiating", mono = true)
                 Divider()
@@ -584,7 +584,7 @@ private fun homeAttention(settings: AppSettings, status: EngineStatus): Attentio
         validationError != null -> Attention(
             tone = colors.signalWorking,
             title = stringResource(R.string.endpoint_address_is_incomplete),
-            body = validationError,
+            body = stringResource(validationError),
             actions = listOf(stringResource(R.string.finish_setting_it) to AttentionTarget.ENDPOINT),
         )
         // Ranked above the quieter warnings below because the consequence is the
@@ -714,7 +714,7 @@ fun RoutesScreen(
                     TunnelProtocol.entries.forEach { transport ->
                         OptionRow(
                             code = transport.wireName.uppercase(),
-                            title = transport.label,
+                            title = stringResource(transport.label),
                             subtitle = when (transport) {
                                 TunnelProtocol.AUTO ->
                                     stringResource(R.string.finds_what_this_network_allows_and_remembers)
@@ -747,7 +747,7 @@ fun RoutesScreen(
                     ScanStrategy.entries.forEachIndexed { index, strategy ->
                         OptionRow(
                             code = (index + 1).toString(),
-                            title = strategy.label,
+                            title = stringResource(strategy.label),
                             subtitle = when (strategy) {
                                 ScanStrategy.TURBO -> stringResource(R.string.fastest_fewest_endpoints_tested)
                                 ScanStrategy.BALANCED -> stringResource(R.string.default_a_good_result_in_a_few)
@@ -800,8 +800,7 @@ fun EndpointScreen(
             AttentionCard(
                 tone = colors.signalFailed,
                 title = stringResource(R.string.this_address_is_not_for_settings_transport, settings.transport.label),
-                body = "It was found for ${pinnedFor.label}, and endpoints are not shared " +
-                    "between protocols. Scan again, or switch Endpoint back to Automatic.",
+                body = stringResource(R.string.pinned_for_other_protocol, stringResource(pinnedFor.label)),
                 actions = listOf(
                     stringResource(R.string.use_automatic) to {
                         onSettingsChange(
@@ -971,9 +970,9 @@ fun EndpointScreen(
                         )
                         Text(
                             if (selected) {
-                                "Validated ${settings.transport.probedAs.label} route · pinned"
+                                stringResource(R.string.validated_route_pinned, stringResource(settings.transport.probedAs.label))
                             } else {
-                                "Validated ${settings.transport.probedAs.label} route"
+                                stringResource(R.string.validated_route, stringResource(settings.transport.probedAs.label))
                             },
                             style = AetherType.Small,
                             color = colors.text3,
@@ -1167,7 +1166,7 @@ fun TrafficScreen(
 
                         settings.lanSharingNotice()?.let { notice ->
                             Text(
-                                text = notice.text,
+                                text = stringResource(notice.text),
                                 style = AetherType.Small,
                                 color = when (notice.level) {
                                     // Amber, not red: this one is a choice the
@@ -1646,7 +1645,7 @@ fun SettingsScreen(
                 SegGroup(
                     options = ThemeMode.entries,
                     selected = settings.themeMode,
-                    label = { it.label },
+                    label = { stringResource(it.label) },
                     onSelect = { onSettingsChange(settings.copy(themeMode = it)) },
                 )
             }
@@ -2174,7 +2173,7 @@ private fun buildReport(
     if (includeDevice) appendLine("device ${deviceLine()}")
     if (includeSettings) {
         appendLine(
-            "settings profile=${settings.activeProfile().label} transport=${settings.transport.wireName} " +
+            "settings profile=${settings.activeProfile().name.lowercase()} transport=${settings.transport.wireName} " +
                 "scan=${settings.scanStrategy.wireName} coverage=${settings.mode.wireName} " +
                 "noize=${settings.noizeProfile} bind=${settings.proxyBindLabel()} lanAuth=${settings.lanCredentialsUsable()} dualStack=${settings.dualStack}",
         )

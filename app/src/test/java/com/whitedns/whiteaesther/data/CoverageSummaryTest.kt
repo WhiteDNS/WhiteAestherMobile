@@ -17,7 +17,7 @@ class CoverageSummaryTest {
     fun theDefaultReallyIsTheWholeDevice() {
         val settings = AppSettings(mode = EngineMode.TUN)
 
-        assertEquals("Whole device", settings.coverageSummary())
+        assertEquals(Coverage.WholeDevice, settings.coverage())
         assertFalse(settings.coverageIsRestricted())
     }
 
@@ -30,7 +30,7 @@ class CoverageSummaryTest {
 
         // The exact wording that was wrong before: this must never read as
         // "Whole device" while one app is carried and the rest are not.
-        assertEquals("1 app only", settings.coverageSummary())
+        assertEquals(Coverage.OnlySome(1), settings.coverage())
         assertTrue(settings.coverageIsRestricted())
     }
 
@@ -41,7 +41,7 @@ class CoverageSummaryTest {
             splitTunnel = SplitTunnel(SplitTunnelMode.EXCEPT, setOf("com.bank.app", "ir.local")),
         )
 
-        assertEquals("All apps except 2", settings.coverageSummary())
+        assertEquals(Coverage.AllExcept(2), settings.coverage())
         assertTrue(settings.coverageIsRestricted())
     }
 
@@ -54,7 +54,7 @@ class CoverageSummaryTest {
             splitTunnel = SplitTunnel(SplitTunnelMode.EXCEPT, emptySet()),
         )
 
-        assertEquals("Whole device", settings.coverageSummary())
+        assertEquals(Coverage.WholeDevice, settings.coverage())
         assertFalse(settings.coverageIsRestricted())
     }
 
@@ -65,7 +65,7 @@ class CoverageSummaryTest {
             splitTunnel = SplitTunnel(SplitTunnelMode.ONLY, emptySet()),
         )
 
-        assertEquals("No apps chosen", settings.coverageSummary())
+        assertEquals(Coverage.NothingChosen, settings.coverage())
         assertTrue(settings.coverageIsRestricted())
     }
 
@@ -78,7 +78,7 @@ class CoverageSummaryTest {
             splitTunnel = SplitTunnel(SplitTunnelMode.ONLY, setOf("org.telegram.messenger")),
         )
 
-        assertEquals("Proxy only", settings.coverageSummary())
+        assertEquals(Coverage.ProxyOnly, settings.coverage())
         assertFalse(settings.coverageIsRestricted())
     }
 }

@@ -309,7 +309,7 @@ class MainActivity : ComponentActivity() {
         }
         settings.endpointValidationError()?.let { error ->
             EngineStatusStore.update(
-                EngineStatus(EngineStage.ERROR, settings.mode, message = error),
+                EngineStatus(EngineStage.ERROR, settings.mode, message = getString(error)),
             )
             return
         }

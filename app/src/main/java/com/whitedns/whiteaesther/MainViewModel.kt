@@ -1,6 +1,8 @@
 package com.whitedns.whiteaesther
 
 import android.app.Application
+import androidx.annotation.StringRes
+import com.whitedns.whiteaesther.core.AppLocale
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.whitedns.whiteaesther.core.ChainController
@@ -83,6 +85,17 @@ data class AddressPair(
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
+    /**
+     * A string resource, in whatever language the app is set to.
+     *
+     * These messages are read on screen, so they follow the setting rather than
+     * the phone. The context an AndroidViewModel holds is the application's,
+     * which the activity's locale wrapping never touches -- so it is wrapped
+     * here on the way past.
+     */
+    private fun say(@StringRes id: Int, vararg args: Any): String =
+        AppLocale.wrap(getApplication<Application>()).getString(id, *args)
+
     private val repository = SettingsRepository(application)
     // Reaches the same mihomo the service is running: there is one per process.
     private val chain = ChainController(application)
@@ -267,7 +280,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val result = NativeAetherBridge.exportIdentity(identityConfigPath())
         result.exceptionOrNull()?.let { error ->
             mutableIdentityMessage.value = IdentityMessage(
-                error.message ?: "There is no identity to export yet",
+                error.message ?: say(R.string.msg_no_identity_yet),
                 isError = true,
             )
             return null
@@ -287,21 +300,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             EngineStatusStore.status.value.stage != EngineStage.ERROR
         ) {
             mutableIdentityMessage.value =
-                IdentityMessage("Disconnect before importing an identity", isError = true)
+                IdentityMessage(say(R.string.msg_disconnect_before_import), isError = true)
             return
         }
         val result = NativeAetherBridge.importIdentity(identityConfigPath(), payload)
         mutableIdentityMessage.value = if (result.ok) {
-            IdentityMessage("Identity imported. Connect to use it.")
+            IdentityMessage(say(R.string.msg_identity_imported))
         } else {
-            IdentityMessage(result.error ?: "That file is not a WhiteAesther identity", isError = true)
+            IdentityMessage(result.error ?: say(R.string.msg_not_an_identity), isError = true)
         }
     }
 
     /** Reports how saving the backup went, since only the activity can know. */
     fun reportIdentityWrite(error: String?) {
         mutableIdentityMessage.value = if (error == null) {
-            IdentityMessage("Identity saved. Keep it somewhere safe.")
+            IdentityMessage(say(R.string.msg_identity_saved))
         } else {
             IdentityMessage(error, isError = true)
         }
@@ -472,7 +485,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             mutableEndpointScannerState.value = EndpointScannerState(
                 operation = EndpointOperation.SCANNING,
                 results = mutableEndpointScannerState.value.results,
-                message = "Scanning validated ${settings.transport.probedAs.label} routes…",
+                message = say(R.string.msg_scanning_routes, say(settings.transport.probedAs.label)),
             )
             val base = settings
                 .copy(endpointMode = EndpointMode.AUTOMATIC, customEndpoint = "")
@@ -504,7 +517,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 mutableEndpointScannerState.value.operation == EndpointOperation.SCANNING
             ) {
                 mutableEndpointScannerState.value = mutableEndpointScannerState.value.copy(
-                    message = "Nothing over ${base.transport.label}, trying ${other.label}…",
+                    message = say(R.string.msg_nothing_over_trying, say(base.transport.label), say(other.label)),
                 )
                 result = withContext(Dispatchers.IO) {
                     NativeAetherBridge.scan(base.copy(transport = other).toNativeJson(getApplication()))
@@ -515,7 +528,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (mutableEndpointScannerState.value.operation == EndpointOperation.CANCELLING) {
                         mutableEndpointScannerState.value = EndpointScannerState(
                             results = mutableEndpointScannerState.value.results,
-                            message = "Scan cancelled",
+                            message = say(R.string.msg_scan_cancelled),
                         )
                     } else {
                         mutableEndpointScannerState.value = EndpointScannerState(
@@ -528,12 +541,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (mutableEndpointScannerState.value.operation == EndpointOperation.CANCELLING) {
                         mutableEndpointScannerState.value = EndpointScannerState(
                             results = mutableEndpointScannerState.value.results,
-                            message = "Scan cancelled",
+                            message = say(R.string.msg_scan_cancelled),
                         )
                     } else if (mutableEndpointScannerState.value.operation == EndpointOperation.SCANNING) {
                         mutableEndpointScannerState.value = EndpointScannerState(
                             results = mutableEndpointScannerState.value.results,
-                            error = error.message ?: "Endpoint scan failed",
+                            error = error.message ?: say(R.string.msg_scan_failed),
                         )
                     }
                 },
@@ -547,7 +560,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (validationError != null) {
             mutableEndpointScannerState.value = EndpointScannerState(
                 results = mutableEndpointScannerState.value.results,
-                error = validationError,
+                error = say(validationError),
             )
             return
         }
@@ -556,7 +569,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             mutableEndpointScannerState.value = EndpointScannerState(
                 operation = EndpointOperation.TESTING,
                 results = mutableEndpointScannerState.value.results,
-                message = "Testing custom endpoint…",
+                message = say(R.string.msg_testing_endpoint),
             )
             val config = settings.copy(endpointMode = EndpointMode.CUSTOM_ONLY)
                 .toNativeJson(getApplication())
@@ -571,7 +584,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 onFailure = { error ->
                     mutableEndpointScannerState.value = EndpointScannerState(
                         results = mutableEndpointScannerState.value.results,
-                        error = error.message ?: "Endpoint test failed",
+                        error = error.message ?: say(R.string.msg_endpoint_test_failed),
                     )
                 },
             )
@@ -584,7 +597,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         mutableEndpointScannerState.value = EndpointScannerState(
             operation = EndpointOperation.CANCELLING,
             results = mutableEndpointScannerState.value.results,
-            message = "Cancelling scan…",
+            message = say(R.string.msg_cancelling_scan),
         )
     }
 
@@ -593,7 +606,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (EngineStatusStore.status.value.stage !in setOf(EngineStage.IDLE, EngineStage.ERROR)) {
             mutableEndpointScannerState.value = EndpointScannerState(
                 results = mutableEndpointScannerState.value.results,
-                error = "Disconnect before testing or scanning endpoints",
+                error = say(R.string.msg_disconnect_before_scan),
             )
             return false
         }

@@ -1,17 +1,20 @@
 package com.whitedns.whiteaesther.data
 
+import androidx.annotation.StringRes
+import com.whitedns.whiteaesther.R
+
 import org.json.JSONArray
 import org.json.JSONObject
 
-enum class SplitTunnelMode(val label: String) {
+enum class SplitTunnelMode(@StringRes val label: Int) {
     /** Everything on the phone goes through the tunnel. */
-    ALL("All apps"),
+    ALL(R.string.split_all_apps),
 
     /** Only the chosen apps do. Anything installed later stays outside. */
-    ONLY("Only these apps"),
+    ONLY(R.string.split_only_these),
 
     /** Everything except the chosen apps. Anything installed later goes in. */
-    EXCEPT("All except these"),
+    EXCEPT(R.string.split_all_except),
 }
 
 /**
@@ -49,12 +52,19 @@ data class SplitTunnel(
     }
 
     /** Why this cannot be used, or null. */
-    fun validationError(self: String): String? = when {
+    @StringRes
+    fun validationError(self: String): Int? = when {
         mode == SplitTunnelMode.ONLY && effectivePackages(self).isEmpty() ->
-            "Choose at least one app, or switch back to All apps"
+            R.string.split_choose_one
         else -> null
     }
 
+    /**
+     * The same state the screen shows, for the diagnostics log.
+     *
+     * English on purpose, and separate from what the user reads: this line ends
+     * up in a report that someone else has to read next to another report.
+     */
     fun summary(): String = when {
         mode == SplitTunnelMode.ALL -> "Every app on this phone"
         packages.isEmpty() && mode == SplitTunnelMode.ONLY -> "No apps chosen yet"

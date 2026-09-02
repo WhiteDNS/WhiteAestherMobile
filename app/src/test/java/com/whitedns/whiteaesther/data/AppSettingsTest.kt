@@ -1,5 +1,6 @@
 package com.whitedns.whiteaesther.data
 
+import com.whitedns.whiteaesther.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -40,7 +41,7 @@ class AppSettingsTest {
         val notice = shared.lanSharingNotice()!!
         assertEquals(LanNoticeLevel.CAUTION, notice.level)
         assertFalse(shared.lanCredentialsUsable())
-        assertTrue(notice.text.contains("without a password"))
+        assertEquals(R.string.lan_no_password, notice.text)
     }
 
     @Test
@@ -52,7 +53,7 @@ class AppSettingsTest {
         val notice = half.lanSharingNotice()!!
         assertEquals(LanNoticeLevel.PROBLEM, notice.level)
         assertFalse(half.lanCredentialsUsable())
-        assertTrue(notice.text.contains("both"))
+        assertEquals(R.string.lan_half_filled, notice.text)
     }
 
     @Test
@@ -64,7 +65,7 @@ class AppSettingsTest {
         // nothing.
         val notice = wholeDevice.lanSharingNotice()!!
         assertEquals(LanNoticeLevel.PROBLEM, notice.level)
-        assertTrue(notice.text.contains("Proxy"))
+        assertEquals(R.string.lan_no_proxy_to_share, notice.text)
         assertEquals("127.0.0.1:1819", wholeDevice.proxyBindLabel())
     }
 
@@ -85,7 +86,7 @@ class AppSettingsTest {
     @Test
     fun customModeRequiresValidEndpoint() {
         assertEquals(
-            "Enter a custom endpoint",
+            R.string.endpoint_error_empty,
             AppSettings(endpointMode = EndpointMode.CUSTOM_ONLY).endpointValidationError(),
         )
         assertNull(

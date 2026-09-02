@@ -1,5 +1,8 @@
 package com.whitedns.whiteaesther.data
 
+import androidx.annotation.StringRes
+import com.whitedns.whiteaesther.R
+
 import android.content.Context
 import org.json.JSONObject
 import java.io.File
@@ -19,7 +22,7 @@ enum class EngineMode(val wireName: String) {
  * a different tunnel with its own account and its own endpoints, so it is not
  * something a retry can substitute.
  */
-enum class TunnelProtocol(val wireName: String, val label: String) {
+enum class TunnelProtocol(val wireName: String, @StringRes val label: Int) {
     /**
      * Work out what this network allows, rather than making the user guess.
      *
@@ -27,11 +30,11 @@ enum class TunnelProtocol(val wireName: String, val label: String) {
      * real one before the config is built, and remembers what succeeded so the
      * next connect starts there instead of searching again.
      */
-    AUTO("auto", "Automatic"),
-    H3("h3", "MASQUE H3"),
-    H2("h2", "MASQUE H2"),
-    WIREGUARD("wg", "WireGuard"),
-    WARP_IN_WARP("wiw", "WARP in WARP"),
+    AUTO("auto", R.string.protocol_automatic),
+    H3("h3", R.string.protocol_masque_h3),
+    H2("h2", R.string.protocol_masque_h2),
+    WIREGUARD("wg", R.string.protocol_wireguard),
+    WARP_IN_WARP("wiw", R.string.protocol_warp_in_warp),
     ;
 
     /** True when a failed attempt can be retried on the other framing. */
@@ -73,18 +76,18 @@ enum class EndpointFamily {
     WARP,
 }
 
-enum class ScanStrategy(val wireName: String, val label: String) {
-    TURBO("turbo", "Turbo"),
-    BALANCED("balanced", "Balanced"),
-    THOROUGH("thorough", "Thorough"),
-    STEALTH("stealth", "Stealth"),
-    IRONCLAD("ironclad", "Ironclad"),
+enum class ScanStrategy(val wireName: String, @StringRes val label: Int) {
+    TURBO("turbo", R.string.scan_turbo),
+    BALANCED("balanced", R.string.scan_balanced),
+    THOROUGH("thorough", R.string.scan_thorough),
+    STEALTH("stealth", R.string.scan_stealth),
+    IRONCLAD("ironclad", R.string.scan_ironclad),
 }
 
-enum class EndpointMode(val label: String) {
-    AUTOMATIC("Automatic"),
-    CUSTOM_FIRST("Custom first"),
-    CUSTOM_ONLY("Custom only"),
+enum class EndpointMode(@StringRes val label: Int) {
+    AUTOMATIC(R.string.protocol_automatic),
+    CUSTOM_FIRST(R.string.endpoint_custom_first),
+    CUSTOM_ONLY(R.string.endpoint_custom_only),
 }
 
 /** How much the LAN sharing notice is asking of the user. */
@@ -96,12 +99,12 @@ enum class LanNoticeLevel {
     PROBLEM,
 }
 
-data class LanNotice(val level: LanNoticeLevel, val text: String)
+data class LanNotice(val level: LanNoticeLevel, @StringRes val text: Int)
 
-enum class ThemeMode(val label: String) {
-    SYSTEM("System"),
-    LIGHT("Light"),
-    DARK("Dark"),
+enum class ThemeMode(@StringRes val label: Int) {
+    SYSTEM(R.string.theme_system),
+    LIGHT(R.string.theme_light),
+    DARK(R.string.theme_dark),
 }
 
 /**
@@ -323,16 +326,15 @@ data class AppSettings(
         !lanSharing -> null
         mode != EngineMode.PROXY -> LanNotice(
             LanNoticeLevel.PROBLEM,
-            "Whole device mode has no proxy to share. Choose Proxy above first.",
+            R.string.lan_no_proxy_to_share,
         )
         lanUsername.isBlank() && lanPassword.isBlank() -> LanNotice(
             LanNoticeLevel.CAUTION,
-            "Sharing without a password. Anyone on this Wi-Fi can use the tunnel " +
-                "with your identity — fine on a network you own, not in a cafe or hotel.",
+            R.string.lan_no_password,
         )
         !lanCredentialsUsable() -> LanNotice(
             LanNoticeLevel.PROBLEM,
-            "Set both a username and a password, or clear both to share without one.",
+            R.string.lan_half_filled,
         )
         else -> null
     }
@@ -353,16 +355,15 @@ data class AppSettings(
      * Blank lines and notes are dropped, so a list that reads as five rules
      * does not summarise as eight.
      */
-    fun routingSummary(): String {
-        val block = ruleCount(routeBlock)
-        val direct = ruleCount(routeDirect)
-        return when {
-            block == 0 && direct == 0 -> "Everything goes through the tunnel"
-            direct == 0 -> "$block blocked"
-            block == 0 -> "$direct skipping the tunnel"
-            else -> "$block blocked · $direct skipping the tunnel"
-        }
-    }
+    /**
+     * The two counts the summary is built from.
+     *
+     * Counting and wording are separated because only one of them is the same
+     * in every language. A test that asserts on the sentence is really testing
+     * the English, and would have to be rewritten to say nothing useful the
+     * moment a second language existed.
+     */
+    fun routingCounts(): RuleCounts = RuleCounts(ruleCount(routeBlock), ruleCount(routeDirect))
 
     private fun ruleCount(raw: String): Int =
         raw.split(NEWLINE, ',', ';')
@@ -377,25 +378,25 @@ data class AppSettings(
      * reading it had no way to tell why their traffic was not going through.
      * The rule is part of the answer, so it is part of the label.
      */
-    fun coverageSummary(): String = when {
-        mode != EngineMode.TUN -> "Proxy only"
-        splitTunnel.mode == SplitTunnelMode.ALL -> "Whole device"
+    fun coverage(): Coverage = when {
+        mode != EngineMode.TUN -> Coverage.ProxyOnly
+        splitTunnel.mode == SplitTunnelMode.ALL -> Coverage.WholeDevice
         splitTunnel.packages.isEmpty() && splitTunnel.mode == SplitTunnelMode.ONLY ->
-            "No apps chosen"
-        splitTunnel.packages.isEmpty() -> "Whole device"
-        splitTunnel.mode == SplitTunnelMode.ONLY ->
-            "${splitTunnel.packages.size} app${if (splitTunnel.packages.size == 1) "" else "s"} only"
-        else -> "All apps except ${splitTunnel.packages.size}"
+            Coverage.NothingChosen
+        splitTunnel.packages.isEmpty() -> Coverage.WholeDevice
+        splitTunnel.mode == SplitTunnelMode.ONLY -> Coverage.OnlySome(splitTunnel.packages.size)
+        else -> Coverage.AllExcept(splitTunnel.packages.size)
     }
 
     /** True when a per-app rule means this is not the whole device after all. */
     fun coverageIsRestricted(): Boolean =
         mode == EngineMode.TUN && !splitTunnel.isEffectivelyEverything("")
 
-    fun endpointValidationError(): String? = when {
+    @StringRes
+    fun endpointValidationError(): Int? = when {
         endpointMode == EndpointMode.AUTOMATIC -> null
-        customEndpoint.isBlank() -> "Enter a custom endpoint"
-        EndpointAddress.normalize(customEndpoint) == null -> "Endpoint must be a valid IP:port"
+        customEndpoint.isBlank() -> R.string.endpoint_error_empty
+        EndpointAddress.normalize(customEndpoint) == null -> R.string.endpoint_error_malformed
         else -> null
     }
 
@@ -448,4 +449,22 @@ data class AppSettings(
         }
         return json.toString()
     }
+}
+
+/** How many rules each list holds, once blanks and notes are dropped. */
+data class RuleCounts(val blocked: Int, val direct: Int)
+
+/**
+ * What the tunnel actually carries.
+ *
+ * Coverage used to be read from the mode alone, which said "Whole device"
+ * while a per-app rule quietly restricted the tunnel to one app. The rule is
+ * part of the answer, so it is part of this.
+ */
+sealed interface Coverage {
+    data object ProxyOnly : Coverage
+    data object WholeDevice : Coverage
+    data object NothingChosen : Coverage
+    data class OnlySome(val count: Int) : Coverage
+    data class AllExcept(val count: Int) : Coverage
 }

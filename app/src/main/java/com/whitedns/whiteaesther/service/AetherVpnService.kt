@@ -10,6 +10,7 @@ import android.os.ParcelFileDescriptor
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.core.AppLocale
 import com.whitedns.whiteaesther.MainActivity
 import com.whitedns.whiteaesther.core.ChainConfig
@@ -105,7 +106,7 @@ class AetherVpnService : VpnService() {
                         remove(LAST_SPLIT_CONFIG)
                     }
                 }
-                startForegroundNow("Preparing connection", "Validating native engine")
+                startForegroundNow(getString(R.string.status_preparing_connection), "Validating native engine")
                 replaceSession(configJson, chainSettings, splitSettings)
             }
             else -> {
@@ -114,7 +115,7 @@ class AetherVpnService : VpnService() {
                     stopSelf(startId)
                 } else {
                     restartPolicy = START_STICKY
-                    startForegroundNow("Restoring WhiteAesther", "Reconnecting whole-device VPN")
+                    startForegroundNow(getString(R.string.status_restoring), getString(R.string.status_reconnecting_tun))
                     replaceSession(
                         configJson,
                         preferences.getString(LAST_CHAIN_CONFIG, null),
@@ -286,14 +287,14 @@ class AetherVpnService : VpnService() {
         val peer = prepared?.peer
         if (engineInPath) {
             EngineStatusStore.update(
-                EngineStatus(EngineStage.CONNECTING, mode, peer, "Validating encrypted route"),
+                EngineStatus(EngineStage.CONNECTING, mode, peer, getString(R.string.status_validating_route)),
             )
             updateNotification(mode, "Connecting to $peer")
         } else {
             EngineStatusStore.update(
-                EngineStatus(EngineStage.CONNECTING, mode, null, "Starting the exit chain"),
+                EngineStatus(EngineStage.CONNECTING, mode, null, getString(R.string.status_starting_chain)),
             )
-            updateNotification(mode, "Starting the exit chain")
+            updateNotification(mode, getString(R.string.status_starting_chain))
         }
 
         // With the chain on, the engine coming up is the halfway point rather
@@ -422,9 +423,9 @@ class AetherVpnService : VpnService() {
         }
 
         EngineStatusStore.update(
-            EngineStatus(EngineStage.CONNECTING, mode, peer, "Starting the exit chain"),
+            EngineStatus(EngineStage.CONNECTING, mode, peer, getString(R.string.status_starting_chain)),
         )
-        updateNotification(mode, "Starting the exit chain")
+        updateNotification(mode, getString(R.string.status_starting_chain))
         val failure = withContext(Dispatchers.IO) {
             chain.start(
                 settings = chainSettings,
@@ -464,9 +465,9 @@ class AetherVpnService : VpnService() {
             mode,
             peer,
             if (engine != null) {
-                "Traffic leaves through the exit chain"
+                getString(R.string.status_chain_carries)
             } else {
-                "Traffic leaves through the exit chain, dialled directly"
+                getString(R.string.status_chain_direct)
             },
         )
 
@@ -592,14 +593,14 @@ class AetherVpnService : VpnService() {
      *
      * One message for every protocol read as a hang on the slow ones: WireGuard
      * has its own account to provision and its own endpoints to search, and
-     * "Preparing identity and gateway" for four minutes gives the user nothing
+     * getString(R.string.status_preparing_identity) for four minutes gives the user nothing
      * to judge whether waiting is worth it.
      */
     private fun preparingMessage(configJson: String): String =
         when (transportOf(configJson)) {
-            "wg" -> "Searching for a WireGuard endpoint. This can take a few minutes."
+            "wg" -> getString(R.string.status_searching_wg)
             "wiw" -> "Searching for an endpoint for the nested tunnel. This is the slowest option."
-            else -> "Preparing identity and gateway"
+            else -> getString(R.string.status_preparing_identity)
         }
 
     private fun withEngineMode(configJson: String, mode: EngineMode): String = runCatching {
@@ -1089,9 +1090,9 @@ class AetherVpnService : VpnService() {
 
     private fun updateNotification(mode: EngineMode?, text: String) {
         val title = when (mode) {
-            EngineMode.PROXY -> "WhiteAesther proxy"
-            EngineMode.TUN -> "WhiteAesther device VPN"
-            null -> "WhiteAesther"
+            EngineMode.PROXY -> getString(R.string.notify_title_proxy)
+            EngineMode.TUN -> getString(R.string.notify_title_tun)
+            null -> getString(R.string.app_name)
         }
         getSystemService(android.app.NotificationManager::class.java).notify(
             AetherNotification.NOTIFICATION_ID,
@@ -1100,7 +1101,7 @@ class AetherVpnService : VpnService() {
     }
 
     private fun connectedMessage(mode: EngineMode, configJson: String): String = when (mode) {
-        EngineMode.TUN -> "Whole-device traffic is protected"
+        EngineMode.TUN -> getString(R.string.notify_whole_device_protected)
         EngineMode.PROXY -> {
             val config = runCatching { JSONObject(configJson) }.getOrNull()
             val port = config?.optInt("listenPort", 1819) ?: 1819
@@ -1108,9 +1109,9 @@ class AetherVpnService : VpnService() {
             // at. Saying loopback while the listener is on the network sends
             // them to an address that refuses them.
             if (config?.optBoolean("lanSharing") == true) {
-                "SOCKS5 shared on the local network, port $port"
+                getString(R.string.notify_socks_shared, port)
             } else {
-                "SOCKS5 listening on 127.0.0.1:$port"
+                getString(R.string.notify_socks_local, port)
             }
         }
     }

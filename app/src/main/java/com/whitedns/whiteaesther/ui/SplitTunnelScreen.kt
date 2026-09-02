@@ -115,7 +115,7 @@ fun SplitTunnelScreen(
                                 SplitTunnelMode.ONLY -> "2"
                                 SplitTunnelMode.EXCEPT -> "3"
                             },
-                            title = mode.label,
+                            title = stringResource(mode.label),
                             subtitle = when (mode) {
                                 SplitTunnelMode.ALL ->
                                     stringResource(R.string.everything_is_covered_what_most_people_want)
@@ -152,7 +152,7 @@ fun SplitTunnelScreen(
                 AttentionCard(
                     tone = colors.signalFailed,
                     title = stringResource(R.string.nothing_would_be_carried),
-                    body = problem,
+                    body = stringResource(problem),
                 )
             }
         }
