@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use quiche::h3;
 use quiche::h3::NameValue;
-use rand::RngCore;
+use rand::Rng;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, oneshot};
 
@@ -135,7 +135,7 @@ fn bind_addr_for(peer: &SocketAddr) -> SocketAddr {
 
 fn random_scid() -> [u8; 16] {
     let mut scid = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut scid);
+    rand::rng().fill_bytes(&mut scid);
     scid
 }
 

@@ -32,7 +32,7 @@ class IdentityBackupTest {
                     settings = AppSettings(),
                     engineStatus = EngineStatus(),
                     endpointScannerState = EndpointScannerState(),
-                    nativeVersion = "1.7.0+android.0.2.0",
+                    nativeVersion = "1.8.0+android.0.2.0",
                     onSettingsChange = {},
                     onConnect = {},
                     onStop = {},

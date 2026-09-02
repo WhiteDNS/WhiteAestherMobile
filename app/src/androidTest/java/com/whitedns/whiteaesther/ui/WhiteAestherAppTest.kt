@@ -55,7 +55,7 @@ class WhiteAestherAppTest {
                     settings = current,
                     engineStatus = engineStatus,
                     endpointScannerState = EndpointScannerState(),
-                    nativeVersion = "1.7.0+android.0.2.0",
+                    nativeVersion = "1.8.0+android.0.2.0",
                     onSettingsChange = { current = it; onSettings(it) },
                     onConnect = { onConnect() },
                     onStop = {},

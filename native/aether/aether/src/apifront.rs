@@ -2,7 +2,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use boring::ssl::{SslConnector, SslMethod, SslVersion};
-use rand::Rng;
+use rand::RngExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -135,7 +135,7 @@ pub struct ApiResponse {
 }
 
 pub fn random_edge_address() -> SocketAddr {
-    let host = rand::thread_rng().gen_range(1..=254u8);
+    let host = rand::rng().random_range(1..=254u8);
     let ip = Ipv4Addr::new(EDGE_PREFIX[0], EDGE_PREFIX[1], EDGE_PREFIX[2], host);
     SocketAddr::new(IpAddr::V4(ip), 443)
 }

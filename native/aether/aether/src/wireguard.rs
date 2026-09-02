@@ -1,5 +1,6 @@
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
+use parking_lot::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
 use boringtun::noise::{Tunn, TunnResult};
@@ -9,7 +10,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::aethernoize::{self, AetherNoizeConfig};
 use crate::error::{AetherError, Result};
-use rand::Rng;
+use rand::RngExt;
 
 const TIMER_TICK: Duration = Duration::from_millis(250);
 const MAX_PACKET: usize = 65536;
@@ -107,15 +108,7 @@ impl WgTunnel {
         let peer_public = PublicKey::from(cfg.peer_public_key);
         let preshared = cfg.preshared_key;
 
-        let tunn = Tunn::new(
-            local_secret,
-            peer_public,
-            preshared,
-            cfg.persistent_keepalive,
-            0,
-            None,
-        )
-        .map_err(|e| AetherError::Other(format!("wireguard tunnel init: {e}")))?;
+        let tunn = Tunn::new(local_secret, peer_public, preshared, cfg.persistent_keepalive, 0, None);
 
         Ok(Self {
             tunn: Arc::new(Mutex::new(Box::new(tunn))),
@@ -181,21 +174,20 @@ impl WgTunnel {
                         let mut tunn = tunn_r.lock().await;
                         match tunn.decapsulate(None, &buf[..n], &mut tmp) {
                             TunnResult::Done => {
-                                *last_valid_rx_r.lock().unwrap() = Instant::now();
+                                *last_valid_rx_r.lock() = Instant::now();
                             }
                             TunnResult::Err(e) => {
                                 log::trace!("decapsulate error: {e:?}");
                             }
                             TunnResult::WriteToNetwork(pkt) => {
-                                *last_valid_rx_r.lock().unwrap() = Instant::now();
+                                *last_valid_rx_r.lock() = Instant::now();
                                 let mut pkt_vec = pkt.to_vec();
                                 inject_client_id(&mut pkt_vec, &client_id);
                                 drop(tunn);
                                 let _ = sock_r.send(&pkt_vec).await;
                             }
-                            TunnResult::WriteToTunnelV4(pkt, _)
-                            | TunnResult::WriteToTunnelV6(pkt, _) => {
-                                *last_valid_rx_r.lock().unwrap() = Instant::now();
+                            TunnResult::WriteToTunnelV4(pkt, _) | TunnResult::WriteToTunnelV6(pkt, _) => {
+                                *last_valid_rx_r.lock() = Instant::now();
                                 let pkt_vec = pkt.to_vec();
                                 drop(tunn);
                                 let _ = inbound_tx.send(pkt_vec).await;
@@ -290,7 +282,7 @@ impl WgTunnel {
             loop {
                 interval.tick().await;
 
-                let idle = last_valid_rx_h.lock().unwrap().elapsed();
+                let idle = last_valid_rx_h.lock().elapsed();
                 if idle >= stale_timeout {
                     log::warn!(
                         "[wg] no valid data from peer {} in {:?}; tunnel considered dead",
@@ -407,7 +399,7 @@ fn build_dataplane_probe(src: Ipv4Addr) -> Vec<u8> {
     pkt.extend_from_slice(&Ipv4Addr::new(8, 8, 8, 8).octets());
     let csum = ipv4_checksum(&pkt[0..20]);
     pkt[10..12].copy_from_slice(&csum.to_be_bytes());
-    let sport: u16 = rand::thread_rng().gen_range(20000..60000);
+    let sport: u16 = rand::rng().random_range(20000..60000);
     pkt.extend_from_slice(&sport.to_be_bytes());
     pkt.extend_from_slice(&53u16.to_be_bytes());
     pkt.extend_from_slice(&(udp_len as u16).to_be_bytes());
@@ -565,15 +557,7 @@ pub async fn verify_endpoint_keep_session(
     let local_secret = StaticSecret::from(private_key);
     let peer_pk = PublicKey::from(peer_public);
 
-    let mut tunn = Tunn::new(
-        local_secret,
-        peer_pk,
-        None,
-        Some(keepalive.unwrap_or(25)),
-        0,
-        None,
-    )
-    .map_err(|e| AetherError::Other(format!("tunn init: {e}")))?;
+    let mut tunn = Tunn::new(local_secret, peer_pk, None, Some(keepalive.unwrap_or(25)), 0, None);
 
     let mut out_buf = vec![0u8; MAX_PACKET];
     let mut recv_buf = vec![0u8; MAX_PACKET];

@@ -2,7 +2,7 @@ use std::net::Ipv4Addr;
 
 use octets::{Octets, OctetsMut};
 use quiche::h3;
-use rand::Rng;
+use rand::RngExt;
 
 use crate::consts;
 use crate::error::{AetherError, Result};
@@ -298,7 +298,7 @@ pub fn build_dns_probe_packet(src: Ipv4Addr) -> Vec<u8> {
     let csum = ipv4_header_checksum(&pkt[0..20]);
     pkt[10..12].copy_from_slice(&csum.to_be_bytes());
 
-    let sport: u16 = rand::thread_rng().gen_range(20000..60000);
+    let sport: u16 = rand::rng().random_range(20000..60000);
     pkt.extend_from_slice(&sport.to_be_bytes());
     pkt.extend_from_slice(&53u16.to_be_bytes());
     pkt.extend_from_slice(&(udp_len as u16).to_be_bytes());

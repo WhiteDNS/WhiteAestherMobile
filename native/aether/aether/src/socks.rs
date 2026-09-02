@@ -206,6 +206,27 @@ pub(crate) fn proxy_connect_succeeded(head: &[u8]) -> Option<bool> {
     Some((200..300).contains(&status))
 }
 
+/// Warns when a listener is reachable from off this machine and unguarded.
+///
+/// Upstream warns on the bind address alone, because upstream has nothing but
+/// the bind address: every client is accepted. This fork can require a
+/// password and filters by source, and sharing the tunnel on purpose is a
+/// feature here rather than an accident -- so a warning that fired on a
+/// deliberate, password-protected share would be crying wolf at the one user
+/// who did the careful thing.
+///
+/// It still fires for a wide bind with no password, which is genuinely open.
+pub(crate) fn warn_if_world_reachable(kind: &str, listen: SocketAddr, guarded: bool) {
+    if listen.ip().is_loopback() || guarded {
+        return;
+    }
+    log::warn!(
+        "[!] the {kind} listener is bound to {listen}, which is reachable from outside this machine. \
+         It accepts every client without authentication, so anyone who can reach {listen} can send \
+         traffic through your tunnel. Bind it to 127.0.0.1 unless you intend to share it."
+    );
+}
+
 pub async fn serve(listen: SocketAddr, stack: StackHandle) -> Result<()> {
     let listener = TcpListener::bind(listen).await?;
     let access = access();
@@ -223,6 +244,7 @@ pub async fn serve(listen: SocketAddr, stack: StackHandle) -> Result<()> {
             "no password"
         },
     );
+    warn_if_world_reachable("socks5", listen, access.credentials.is_some());
 
     let mut clients = tokio::task::JoinSet::new();
     loop {
@@ -1508,6 +1530,11 @@ const HTTP_HEAD_LIMIT: usize = 16 * 1024;
 pub async fn serve_http(listen: SocketAddr, stack: StackHandle) -> Result<()> {
     let listener = TcpListener::bind(listen).await?;
     log::info!("http proxy listening on {listen}");
+    // Never guarded, unlike socks5 above: the http proxy checks neither a
+    // password nor the source address. Android never starts it -- it is gated
+    // behind AETHER_HTTP_PROXY, which the bridge does not set -- so this warns
+    // for the desktop builds that can.
+    warn_if_world_reachable("http proxy", listen, false);
 
     loop {
         let (sock, peer) = match listener.accept().await {
@@ -1605,24 +1632,38 @@ pub fn parse_request_line(line: &str) -> Option<HttpRequestLine> {
 }
 
 async fn read_head(sock: &mut TcpStream) -> Result<Vec<u8>> {
-    let mut head = Vec::with_capacity(1024);
-    let mut byte = [0u8; 1];
+    let mut buf = vec![0u8; HTTP_HEAD_LIMIT + 4];
+    let mut seen = 0usize;
 
     loop {
-        let read = sock.read(&mut byte).await?;
-        if read == 0 {
+        let window = (seen + 1024).min(buf.len());
+        let available = sock.peek(&mut buf[..window]).await?;
+        if available == 0 {
             return Err(AetherError::Other(
                 "the http client closed before sending a request".into(),
             ));
         }
-        head.push(byte[0]);
 
-        if head.len() >= 4 && head[head.len() - 4..] == *b"\r\n\r\n" {
+        let search_from = seen.saturating_sub(3);
+        if let Some(pos) = buf[..available]
+            .windows(4)
+            .skip(search_from)
+            .position(|w| w == b"\r\n\r\n")
+        {
+            let end = search_from + pos + 4;
+            let mut head = vec![0u8; end];
+            sock.read_exact(&mut head).await?;
             return Ok(head);
         }
-        if head.len() > HTTP_HEAD_LIMIT {
+
+        if available > HTTP_HEAD_LIMIT {
             return Err(AetherError::Other("http request head too large".into()));
         }
+
+        if available == seen {
+            sock.readable().await?;
+        }
+        seen = available;
     }
 }
 
@@ -1786,7 +1827,68 @@ async fn relay_http_direct(
 
 #[cfg(test)]
 mod http_proxy_tests {
-    use super::{parse_authority, parse_request_line};
+    use super::{parse_authority, parse_request_line, read_head};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    async fn head_over_socket(chunks: &[&[u8]]) -> (Vec<u8>, Vec<u8>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+
+        let owned: Vec<Vec<u8>> = chunks.iter().map(|c| c.to_vec()).collect();
+        let writer = tokio::spawn(async move {
+            let mut client = TcpStream::connect(addr).await.expect("connect");
+            for chunk in owned {
+                client.write_all(&chunk).await.expect("write");
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            client.flush().await.expect("flush");
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        });
+
+        let (mut server, _) = listener.accept().await.expect("accept");
+        let head = read_head(&mut server).await.expect("head");
+
+        let mut leftover = vec![0u8; 64];
+        let n = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            server.read(&mut leftover),
+        )
+        .await
+        .map(|r| r.unwrap_or(0))
+        .unwrap_or(0);
+        leftover.truncate(n);
+
+        writer.abort();
+        (head, leftover)
+    }
+
+    #[tokio::test]
+    async fn a_head_arriving_in_one_piece_is_read_exactly() {
+        let (head, leftover) = head_over_socket(&[b"CONNECT a:443 HTTP/1.1\r\nHost: a\r\n\r\n"]).await;
+        assert_eq!(head, b"CONNECT a:443 HTTP/1.1\r\nHost: a\r\n\r\n");
+        assert!(leftover.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_head_split_across_writes_is_still_assembled() {
+        let (head, _) = head_over_socket(&[
+            b"CONNECT a:443 HT",
+            b"TP/1.1\r\nHos",
+            b"t: a\r\n",
+            b"\r\n",
+        ])
+        .await;
+        assert_eq!(head, b"CONNECT a:443 HTTP/1.1\r\nHost: a\r\n\r\n");
+    }
+
+    #[tokio::test]
+    async fn bytes_after_the_head_are_left_on_the_socket() {
+        let (head, leftover) =
+            head_over_socket(&[b"CONNECT a:443 HTTP/1.1\r\n\r\n\x16\x03\x01pipelined"]).await;
+        assert_eq!(head, b"CONNECT a:443 HTTP/1.1\r\n\r\n");
+        assert_eq!(leftover, b"\x16\x03\x01pipelined");
+    }
 
     #[test]
     fn a_connect_request_carries_the_host_and_port() {

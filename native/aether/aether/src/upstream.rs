@@ -222,7 +222,7 @@ impl Upstream {
     async fn socks_greet(&self, stream: &mut TcpStream) -> Result<()> {
         let wants_auth = self.user.is_some();
         let greeting: Vec<u8> = if wants_auth {
-            vec![VER, 2, AUTH_NONE, AUTH_USERPASS]
+            vec![VER, 1, AUTH_USERPASS]
         } else {
             vec![VER, 1, AUTH_NONE]
         };
@@ -237,6 +237,10 @@ impl Upstream {
         }
 
         match answer[1] {
+            AUTH_NONE if wants_auth => Err(AetherError::Other(
+                "the upstream proxy skipped authentication even though credentials are configured"
+                    .into(),
+            )),
             AUTH_NONE => Ok(()),
             AUTH_USERPASS => self.socks_authenticate(stream).await,
             AUTH_REJECTED => Err(AetherError::Other(
@@ -268,6 +272,11 @@ impl Upstream {
 
         let mut answer = [0u8; 2];
         stream.read_exact(&mut answer).await?;
+        if answer[0] != 0x01 {
+            return Err(AetherError::Other(
+                "the upstream proxy answered the password negotiation with the wrong version".into(),
+            ));
+        }
         if answer[1] != 0x00 {
             return Err(AetherError::Other(
                 "the upstream proxy refused the credentials supplied".into(),
