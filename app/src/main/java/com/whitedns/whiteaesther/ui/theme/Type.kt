@@ -1,5 +1,7 @@
 package com.whitedns.whiteaesther.ui.theme
 
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.integerResource
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -116,4 +118,21 @@ internal val AetherTypography = Typography().run {
         labelMedium = AetherType.Small.copy(fontWeight = FontWeight.Medium),
         labelSmall = AetherType.Label,
     )
+}
+
+/**
+ * The same style, with the tracking this script wants.
+ *
+ * Negative tracking is a Latin display convention: at large sizes the gaps
+ * between letterforms open up, and closing them a little is what stops a
+ * headline reading as loose. A connected script has no such gaps to close --
+ * the letters already join -- so the same adjustment works against the joins
+ * instead of the spacing, and squeezes a word into looking like a mistake.
+ *
+ * Applied to the display sizes only, where the tracking is large enough to see.
+ */
+@Composable
+fun TextStyle.tracked(): TextStyle {
+    val percent = integerResource(R.integer.type_tracking_percent)
+    return if (percent == 100) this else copy(letterSpacing = letterSpacing * (percent / 100f))
 }

@@ -12,4 +12,9 @@
       layout that reads as loose in the language it was designed for.
     -->
     <integer name="type_scale_percent">100</integer>
+
+    <!--
+      Latin display sizes keep their tightening.
+    -->
+    <integer name="type_tracking_percent">100</integer>
 </resources>

@@ -95,7 +95,7 @@ class MainActivity : ComponentActivity() {
             startService(settings)
         } else {
             EngineStatusStore.update(
-                EngineStatus(EngineStage.ERROR, EngineMode.TUN, message = "VPN permission was denied"),
+                EngineStatus(EngineStage.ERROR, EngineMode.TUN, message = getString(R.string.err_permission_denied)),
             )
         }
     }
@@ -156,7 +156,7 @@ class MainActivity : ComponentActivity() {
             runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
                 .onFailure {
                     batteryRequestOpen = false
-                    explainUnavailable("Battery settings are not available on this device.")
+                    explainUnavailable(getString(R.string.err_no_battery_settings))
                 }
         }
     }
@@ -180,7 +180,7 @@ class MainActivity : ComponentActivity() {
     private fun openReleasePage(url: String) {
         openExternal(
             Intent(Intent.ACTION_VIEW, Uri.parse(url)),
-            "No app on this device can open the download page.",
+            getString(R.string.err_no_browser),
         )
     }
 
@@ -195,7 +195,7 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         val manager = getSystemService(android.app.StatusBarManager::class.java)
         if (manager == null) {
-            explainUnavailable("This device could not open the tile setup.")
+            explainUnavailable(getString(R.string.err_no_tile_setup))
             return
         }
         runCatching {
@@ -212,17 +212,17 @@ class MainActivity : ComponentActivity() {
                         result != android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED &&
                         result != android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED
                     ) {
-                        explainUnavailable("This device could not add the tile.")
+                        explainUnavailable(getString(R.string.err_no_tile_add))
                     }
                 },
             )
-        }.onFailure { explainUnavailable("This device could not open the tile setup.") }
+        }.onFailure { explainUnavailable(getString(R.string.err_no_tile_setup)) }
     }
 
     private fun openAppSettings() {
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
             .setData(Uri.parse("package:$packageName"))
-        openExternal(intent, "App settings are not available on this device.")
+        openExternal(intent, getString(R.string.err_no_app_settings))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -279,7 +279,7 @@ class MainActivity : ComponentActivity() {
                         val type = arrayOf("*/*")
                         val intent = ActivityResultContracts.OpenDocument().createIntent(this, type)
                         if (intent.resolveActivity(packageManager) == null) {
-                            explainUnavailable("No file picker is available on this device.")
+                            explainUnavailable(getString(R.string.err_no_file_picker))
                         } else {
                             identityImportSource.launch(type)
                         }
@@ -352,12 +352,12 @@ class MainActivity : ComponentActivity() {
             putExtra(Intent.EXTRA_TEXT, report)
         }
         if (intent.resolveActivity(packageManager) == null) {
-            explainUnavailable("No app on this device can send the report.")
+            explainUnavailable(getString(R.string.err_no_share_target))
             return
         }
         openExternal(
-            Intent.createChooser(intent, "Send diagnostics"),
-            "No app on this device can send the report.",
+            Intent.createChooser(intent, getString(R.string.share_diagnostics)),
+            getString(R.string.err_no_share_target),
         )
     }
 
@@ -374,7 +374,7 @@ class MainActivity : ComponentActivity() {
         val intent = ActivityResultContracts.CreateDocument("application/toml")
             .createIntent(this, name)
         if (intent.resolveActivity(packageManager) == null) {
-            explainUnavailable("No file picker is available on this device.")
+            explainUnavailable(getString(R.string.err_no_file_picker))
             return
         }
         pendingIdentityExport = payload
@@ -384,7 +384,7 @@ class MainActivity : ComponentActivity() {
     private fun writeIdentityBackup(uri: Uri, payload: String) {
         val written = runCatching {
             contentResolver.openOutputStream(uri, "wt")?.use { it.write(payload.toByteArray()) }
-                ?: error("could not open that location")
+                ?: error(getString(R.string.err_cannot_open_location))
         }
         viewModel.reportIdentityWrite(written.exceptionOrNull()?.message)
     }
@@ -392,7 +392,7 @@ class MainActivity : ComponentActivity() {
     private fun readIdentityBackup(uri: Uri) {
         val payload = runCatching {
             contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
-                ?: error("could not read that file")
+                ?: error(getString(R.string.err_cannot_read_file))
         }
         payload.fold(
             onSuccess = viewModel::importIdentity,

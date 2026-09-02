@@ -563,8 +563,8 @@ private fun NodeActions(
                 // minutes, and a spinner with no number is indistinguishable
                 // from a run that has died -- which is what people reported.
                 text = when {
-                    progress != null -> "Stop (${progress.first}/${progress.second})"
-                    busy -> "Testing…"
+                    progress != null -> stringResource(R.string.stop_progress, progress.first, progress.second)
+                    busy -> stringResource(R.string.testing_ellipsis)
                     else -> stringResource(R.string.test_all)
                 },
                 modifier = Modifier.weight(1f).testTag("chain-test-nodes"),
@@ -574,7 +574,7 @@ private fun NodeActions(
             OutlineButton(
                 // Named with the count, because "Test selected" on an empty
                 // selection is a button that looks available and does nothing.
-                text = if (picked.isEmpty()) stringResource(R.string.test_selected) else "Test ${picked.size}",
+                text = if (picked.isEmpty()) stringResource(R.string.test_selected) else stringResource(R.string.test_count, picked.size),
                 modifier = Modifier.weight(1f).testTag("chain-test-selected"),
                 enabled = !busy && picked.isNotEmpty(),
                 onClick = onTestPicked,
@@ -733,4 +733,3 @@ private fun String.subscriptionName(): String = trim()
     .substringAfter("://")
     .substringBefore('/')
     .substringBefore(':')
-    .ifBlank { "Subscription" }

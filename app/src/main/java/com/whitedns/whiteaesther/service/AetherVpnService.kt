@@ -41,14 +41,27 @@ import java.net.InetAddress
 
 class AetherVpnService : VpnService() {
     /**
-     * The notification is the app's only face while it is in the background,
-     * so it has to speak the language the rest of the app does. A service gets
-     * its own context and none of the activity's, so the wrapping is repeated
-     * here rather than inherited.
+     * The notification is the app's only face while it is in the background, so
+     * it has to speak the language the rest of the app does. A service gets its
+     * own context and none of the activity's, so the wrapping is repeated here
+     * rather than inherited.
      */
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(AppLocale.wrap(newBase))
     }
+
+    /**
+     * A string in the language the app is set to *now*.
+     *
+     * attachBaseContext runs once, when the service is created, and a service
+     * outlives the screen that started it: one created while the app was in
+     * English kept English resources for the rest of the session, so the status
+     * line under "متصل شدید" stayed in the language the user had already left.
+     * Reading the choice per message costs a preferences lookup and removes the
+     * question of when the service happened to be built.
+     */
+    private fun sayNow(resId: Int, vararg args: Any): String =
+        AppLocale.wrap(applicationContext).getString(resId, *args)
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val commandMutex = Mutex()
@@ -82,7 +95,7 @@ class AetherVpnService : VpnService() {
             ACTION_START -> {
                 val configJson = intent.getStringExtra(EXTRA_CONFIG)
                 if (configJson == null) {
-                    reportError(null, "Connection settings are missing")
+                    reportError(null, sayNow(R.string.err_settings_missing))
                     stopSelf(startId)
                     return START_NOT_STICKY
                 }
@@ -106,7 +119,7 @@ class AetherVpnService : VpnService() {
                         remove(LAST_SPLIT_CONFIG)
                     }
                 }
-                startForegroundNow(getString(R.string.status_preparing_connection), "Validating native engine")
+                startForegroundNow(sayNow(R.string.status_preparing_connection), sayNow(R.string.status_validating_engine))
                 replaceSession(configJson, chainSettings, splitSettings)
             }
             else -> {
@@ -115,7 +128,7 @@ class AetherVpnService : VpnService() {
                     stopSelf(startId)
                 } else {
                     restartPolicy = START_STICKY
-                    startForegroundNow(getString(R.string.status_restoring), getString(R.string.status_reconnecting_tun))
+                    startForegroundNow(sayNow(R.string.status_restoring), sayNow(R.string.status_reconnecting_tun))
                     replaceSession(
                         configJson,
                         preferences.getString(LAST_CHAIN_CONFIG, null),
@@ -133,7 +146,7 @@ class AetherVpnService : VpnService() {
             remove(LAST_CHAIN_CONFIG)
             remove(LAST_SPLIT_CONFIG)
         }
-        stopFromUser("VPN permission was revoked")
+        stopFromUser(sayNow(R.string.err_permission_revoked))
         super.onRevoke()
     }
 
@@ -222,7 +235,7 @@ class AetherVpnService : VpnService() {
         // protector is installed, so this was silent.
         if (mode == EngineMode.TUN) {
             if (prepare(this) != null) {
-                reportError(mode, "Android VPN permission is required")
+                reportError(mode, sayNow(R.string.err_permission_required))
                 finishIfCurrent(sessionGeneration)
                 return
             }
@@ -241,7 +254,7 @@ class AetherVpnService : VpnService() {
             withContext(Dispatchers.IO) {
                 NativeAetherBridge.prepare(engineConfig)
             }.getOrElse { error ->
-                val reason = error.message ?: "Native preparation failed"
+                val reason = error.message ?: sayNow(R.string.err_native_prepare)
                 // Retrying a refused registration is not merely useless, it is
                 // what keeps it refused: every attempt is another registration
                 // against the endpoint that just rate-limited this address.
@@ -274,7 +287,7 @@ class AetherVpnService : VpnService() {
                 splitTunnel,
             )
             if (tun == null) {
-                reportError(mode, "Android could not establish the VPN interface")
+                reportError(mode, sayNow(R.string.err_no_interface))
                 finishIfCurrent(sessionGeneration)
                 return
             }
@@ -287,14 +300,14 @@ class AetherVpnService : VpnService() {
         val peer = prepared?.peer
         if (engineInPath) {
             EngineStatusStore.update(
-                EngineStatus(EngineStage.CONNECTING, mode, peer, getString(R.string.status_validating_route)),
+                EngineStatus(EngineStage.CONNECTING, mode, peer, sayNow(R.string.status_validating_route)),
             )
-            updateNotification(mode, "Connecting to $peer")
+            updateNotification(mode, sayNow(R.string.status_connecting_to, peer.orEmpty()))
         } else {
             EngineStatusStore.update(
-                EngineStatus(EngineStage.CONNECTING, mode, null, getString(R.string.status_starting_chain)),
+                EngineStatus(EngineStage.CONNECTING, mode, null, sayNow(R.string.status_starting_chain)),
             )
-            updateNotification(mode, getString(R.string.status_starting_chain))
+            updateNotification(mode, sayNow(R.string.status_starting_chain))
         }
 
         // With the chain on, the engine coming up is the halfway point rather
@@ -327,7 +340,7 @@ class AetherVpnService : VpnService() {
                 configJson,
                 sessionGeneration,
                 mode,
-                result.error ?: "The encrypted route closed",
+                result.error ?: sayNow(R.string.err_route_closed),
             )
             return
         }
@@ -391,7 +404,7 @@ class AetherVpnService : VpnService() {
         }
 
         if (engine != null) {
-            updateNotification(mode, "Connecting to $peer for the exit chain")
+            updateNotification(mode, sayNow(R.string.status_connecting_for_chain, peer.orEmpty()))
             val reached = withTimeoutOrNull(TUNNEL_WAIT_MS) {
                 // Either outcome ends the wait: the route opened, or the engine
                 // stopped and there will never be one.
@@ -408,9 +421,9 @@ class AetherVpnService : VpnService() {
                     sessionGeneration,
                     mode,
                     if (reached == null) {
-                        "The exit chain timed out waiting for a route"
+                        sayNow(R.string.err_chain_timeout)
                     } else {
-                        "The encrypted route closed before the exit chain started"
+                        sayNow(R.string.err_route_closed_early)
                     },
                 )
                 return
@@ -423,9 +436,9 @@ class AetherVpnService : VpnService() {
         }
 
         EngineStatusStore.update(
-            EngineStatus(EngineStage.CONNECTING, mode, peer, getString(R.string.status_starting_chain)),
+            EngineStatus(EngineStage.CONNECTING, mode, peer, sayNow(R.string.status_starting_chain)),
         )
-        updateNotification(mode, getString(R.string.status_starting_chain))
+        updateNotification(mode, sayNow(R.string.status_starting_chain))
         val failure = withContext(Dispatchers.IO) {
             chain.start(
                 settings = chainSettings,
@@ -465,9 +478,9 @@ class AetherVpnService : VpnService() {
             mode,
             peer,
             if (engine != null) {
-                getString(R.string.status_chain_carries)
+                sayNow(R.string.status_chain_carries)
             } else {
-                getString(R.string.status_chain_direct)
+                sayNow(R.string.status_chain_direct)
             },
         )
 
@@ -480,7 +493,7 @@ class AetherVpnService : VpnService() {
         engine.join()
         cleanUp()
         if (sessionGeneration != generation) return
-        scheduleReconnect(configJson, sessionGeneration, mode, "The encrypted route closed")
+        scheduleReconnect(configJson, sessionGeneration, mode, sayNow(R.string.err_route_closed))
     }
 
     /**
@@ -544,8 +557,8 @@ class AetherVpnService : VpnService() {
         sessionGeneration: Long,
     ): Boolean {
         val refusal = when {
-            !chain.isAvailable -> "The exit chain is not available in this build"
-            mode != EngineMode.TUN -> "The exit chain needs whole-device coverage"
+            !chain.isAvailable -> sayNow(R.string.err_chain_unavailable)
+            mode != EngineMode.TUN -> sayNow(R.string.err_chain_needs_tun)
             else -> settings.startupError()
         } ?: return true
 
@@ -593,14 +606,14 @@ class AetherVpnService : VpnService() {
      *
      * One message for every protocol read as a hang on the slow ones: WireGuard
      * has its own account to provision and its own endpoints to search, and
-     * getString(R.string.status_preparing_identity) for four minutes gives the user nothing
+     * sayNow(R.string.status_preparing_identity) for four minutes gives the user nothing
      * to judge whether waiting is worth it.
      */
     private fun preparingMessage(configJson: String): String =
         when (transportOf(configJson)) {
-            "wg" -> getString(R.string.status_searching_wg)
-            "wiw" -> "Searching for an endpoint for the nested tunnel. This is the slowest option."
-            else -> getString(R.string.status_preparing_identity)
+            "wg" -> sayNow(R.string.status_searching_wg)
+            "wiw" -> sayNow(R.string.status_searching_nested)
+            else -> sayNow(R.string.status_preparing_identity)
         }
 
     private fun withEngineMode(configJson: String, mode: EngineMode): String = runCatching {
@@ -692,7 +705,7 @@ class AetherVpnService : VpnService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val builder = Builder()
-            .setSession("WhiteAesther blocking")
+            .setSession(sayNow(R.string.notify_title_blocking))
             .setConfigureIntent(configureIntent)
             .setMtu(MASQUE_MTU)
             .addAddress(BLACKHOLE_IPV4, 32)
@@ -804,15 +817,16 @@ class AetherVpnService : VpnService() {
         builder.addAddress(InetAddress.getByName(address), prefix)
     }
 
-    private fun stopFromUser(message: String = "Stopped") {
+    private fun stopFromUser(message: String? = null) {
         preferences.edit {
             remove(LAST_TUN_CONFIG)
             remove(LAST_CHAIN_CONFIG)
             remove(LAST_SPLIT_CONFIG)
         }
-        startForegroundNow("Stopping WhiteAesther", message)
+        val said = message ?: sayNow(R.string.status_stopped)
+        startForegroundNow(sayNow(R.string.status_stopping_app), said)
         EngineStatusStore.update(
-            EngineStatus(EngineStage.STOPPING, EngineStatusStore.status.value.mode, message = message),
+            EngineStatus(EngineStage.STOPPING, EngineStatusStore.status.value.mode, message = said),
         )
         // Invalidate and signal immediately, outside commandMutex. A session
         // wedged in a native call may be holding that lock, and waiting for it
@@ -845,9 +859,9 @@ class AetherVpnService : VpnService() {
             // on has a phone with no internet and no reason given.
             if (blockAfterStop && raiseBlackhole("disconnected with strict blocking on")) {
                 EngineStatusStore.update(
-                    EngineStatus(EngineStage.IDLE, message = "Traffic is blocked"),
+                    EngineStatus(EngineStage.IDLE, message = sayNow(R.string.traffic_is_blocked)),
                 )
-                startForegroundNow("Traffic is blocked", "Strict blocking is on. Tap to open and lift.")
+                startForegroundNow(sayNow(R.string.traffic_is_blocked), sayNow(R.string.notify_strict_blocking))
                 return@launch
             }
             EngineStatusStore.update(EngineStatus())
@@ -1060,7 +1074,7 @@ class AetherVpnService : VpnService() {
             sessionJob = null
             if (blocking) {
                 // The service stays up because the interface belongs to it.
-                startForegroundNow("Traffic is blocked", "The tunnel failed. Tap to open and lift.")
+                startForegroundNow(sayNow(R.string.traffic_is_blocked), sayNow(R.string.notify_tunnel_failed))
                 return@launch
             }
             ServiceCompat.stopForeground(this@AetherVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -1090,9 +1104,9 @@ class AetherVpnService : VpnService() {
 
     private fun updateNotification(mode: EngineMode?, text: String) {
         val title = when (mode) {
-            EngineMode.PROXY -> getString(R.string.notify_title_proxy)
-            EngineMode.TUN -> getString(R.string.notify_title_tun)
-            null -> getString(R.string.app_name)
+            EngineMode.PROXY -> sayNow(R.string.notify_title_proxy)
+            EngineMode.TUN -> sayNow(R.string.notify_title_tun)
+            null -> sayNow(R.string.app_name)
         }
         getSystemService(android.app.NotificationManager::class.java).notify(
             AetherNotification.NOTIFICATION_ID,
@@ -1101,7 +1115,7 @@ class AetherVpnService : VpnService() {
     }
 
     private fun connectedMessage(mode: EngineMode, configJson: String): String = when (mode) {
-        EngineMode.TUN -> getString(R.string.notify_whole_device_protected)
+        EngineMode.TUN -> sayNow(R.string.notify_whole_device_protected)
         EngineMode.PROXY -> {
             val config = runCatching { JSONObject(configJson) }.getOrNull()
             val port = config?.optInt("listenPort", 1819) ?: 1819
@@ -1109,9 +1123,9 @@ class AetherVpnService : VpnService() {
             // at. Saying loopback while the listener is on the network sends
             // them to an address that refuses them.
             if (config?.optBoolean("lanSharing") == true) {
-                getString(R.string.notify_socks_shared, port)
+                sayNow(R.string.notify_socks_shared, port)
             } else {
-                getString(R.string.notify_socks_local, port)
+                sayNow(R.string.notify_socks_local, port)
             }
         }
     }

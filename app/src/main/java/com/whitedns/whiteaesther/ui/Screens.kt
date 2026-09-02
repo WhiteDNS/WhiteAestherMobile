@@ -79,6 +79,7 @@ import com.whitedns.whiteaesther.service.formatBytes
 import com.whitedns.whiteaesther.service.formatRate
 import com.whitedns.whiteaesther.ui.theme.AetherTheme
 import com.whitedns.whiteaesther.ui.theme.AetherType
+import com.whitedns.whiteaesther.ui.theme.tracked
 import kotlinx.coroutines.delay
 
 // -------------------------------------------------------------- profiles ----
@@ -241,7 +242,7 @@ fun HomeScreen(
                     EngineStage.IDLE -> stringResource(R.string.tap_to_connect)
                     EngineStage.PREPARING, EngineStage.CONNECTING -> stringResource(R.string.tap_to_cancel)
                     EngineStage.CONNECTED -> stringResource(R.string.tap_to_stop)
-                    EngineStage.STOPPING -> "Stopping"
+                    EngineStage.STOPPING -> stringResource(R.string.stage_stopping)
                     EngineStage.ERROR -> stringResource(R.string.tap_to_retry)
                 },
                 onClick = onToggleConnection,
@@ -294,17 +295,17 @@ fun HomeScreen(
                     EngineStage.PREPARING, EngineStage.CONNECTING ->
                         if (status.message.contains("retry")) stringResource(R.string.still_trying) else stringResource(R.string.finding_a_working_route)
                     EngineStage.CONNECTED -> stringResource(R.string.you_re_connected)
-                    EngineStage.STOPPING -> "Disconnecting"
+                    EngineStage.STOPPING -> stringResource(R.string.status_disconnecting)
                     EngineStage.ERROR -> stringResource(R.string.couldn_t_connect)
                 },
-                style = AetherType.StatusHead,
+                style = AetherType.StatusHead.tracked(),
                 color = colors.text,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
             Spacer(Modifier.height(6.dp))
             // The engine's own words -- never a number this app invented.
             Text(
-                status.message.ifBlank { "Ready" },
+                status.message.ifBlank { stringResource(R.string.status_ready) },
                 style = AetherType.Body,
                 color = if (status.stage == EngineStage.ERROR) colors.signalFailed else colors.text2,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -428,7 +429,7 @@ fun HomeScreen(
                         // would report the address the tunnel hides.
                         viaChain -> chainSelection ?: stringResource(R.string.your_exit_chain_node)
                         addresses.tunnel != null -> addresses.tunnel
-                        else -> "Checking"
+                        else -> stringResource(R.string.fact_checking)
                     },
                     mono = !viaChain && addresses.tunnel != null,
                 )
@@ -503,25 +504,25 @@ fun HomeScreen(
             if (status.stage == EngineStage.CONNECTED) {
                 FactRow(stringResource(R.string.fact_transport), stringResource(settings.transport.label))
                 Divider()
-                FactRow("Gateway", status.peer ?: "Negotiating", mono = true)
+                FactRow(stringResource(R.string.fact_gateway), status.peer ?: stringResource(R.string.fact_negotiating), mono = true)
                 Divider()
-                FactRow("Coverage", settings.coverageSummary())
+                FactRow(stringResource(R.string.fact_coverage), settings.coverageSummary())
                 Divider()
-                FactRow("Addresses", if (settings.dualStack) stringResource(R.string.ipv4_ipv6) else stringResource(R.string.ipv4_only))
+                FactRow(stringResource(R.string.fact_addresses), if (settings.dualStack) stringResource(R.string.ipv4_ipv6) else stringResource(R.string.ipv4_only))
                 if (settings.mode == EngineMode.PROXY) {
                     Divider()
                     FactRow(stringResource(R.string.local_proxy), settings.proxyBindLabel(), mono = true)
                 }
             } else {
-                FactRow("Profile", stringResource(settings.activeProfile().label))
+                FactRow(stringResource(R.string.profile), stringResource(settings.activeProfile().label))
                 Divider()
                 FactRow(
-                    "Endpoint",
+                    stringResource(R.string.endpoint),
                     settings.endpointSummary(),
                     mono = settings.endpointMode != EndpointMode.AUTOMATIC,
                 )
                 Divider()
-                FactRow("Coverage", settings.coverageSummary())
+                FactRow(stringResource(R.string.fact_coverage), settings.coverageSummary())
             }
         }
         Note(
@@ -562,8 +563,7 @@ private fun homeAttention(settings: AppSettings, status: EngineStatus): Attentio
         substituted -> Attention(
             tone = colors.cyan,
             title = stringResource(R.string.connected_to_a_different_endpoint),
-            body = "$pinned did not work, so fallback used ${status.peer} instead. " +
-                "Turn off Fall back automatically if you would rather it failed than substituted.",
+            body = stringResource(R.string.fallback_substituted, pinned, status.peer.orEmpty()),
             actions = listOf(stringResource(R.string.endpoint_settings) to AttentionTarget.ENDPOINT),
         )
         // The service retries a failed session forever on a fixed delay. Without
@@ -594,14 +594,13 @@ private fun homeAttention(settings: AppSettings, status: EngineStatus): Attentio
             tone = colors.cyan,
             title = stringResource(R.string.only_some_apps_are_going_through),
             body = "A per-app rule is limiting this to ${settings.coverageSummary().lowercase()}. " +
-                "Everything else is using your real address, connected or not.",
+                stringResource(R.string.everything_else_real_address),
             actions = listOf(stringResource(R.string.change_which_apps) to AttentionTarget.TRAFFIC),
         )
         settings.mode == EngineMode.PROXY -> Attention(
             tone = colors.cyan,
             title = stringResource(R.string.proxy_only_apps_are_not_routed_for),
-            body = "Nothing goes through the tunnel unless you point an app at " +
-                "${settings.proxyBindLabel()}. Choose Whole device under Traffic to cover everything.",
+            body = stringResource(R.string.proxy_needs_pointing, settings.proxyBindLabel()),
             actions = listOf(stringResource(R.string.change_coverage) to AttentionTarget.TRAFFIC),
         )
         settings.endpointMode == EndpointMode.CUSTOM_ONLY -> Attention(
@@ -857,7 +856,7 @@ fun EndpointScreen(
                         supportingText = {
                             Text(
                                 when {
-                                    endpointText.isBlank() -> "Looks like 162.159.197.3:443"
+                                    endpointText.isBlank() -> stringResource(R.string.endpoint_example)
                                     normalized != null -> stringResource(R.string.valid_address)
                                     else -> stringResource(R.string.needs_an_ip_and_a_port)
                                 },
@@ -895,15 +894,15 @@ fun EndpointScreen(
         Spacer(Modifier.height(12.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             OutlineButton(
-                text = if (scannerState.operation == EndpointOperation.TESTING) "Testing…" else stringResource(R.string.test_this_one),
+                text = if (scannerState.operation == EndpointOperation.TESTING) stringResource(R.string.testing_ellipsis) else stringResource(R.string.test_this_one),
                 modifier = Modifier.weight(1f),
                 enabled = custom && normalized != null && scannerState.operation == null && !engineBusy,
                 onClick = { onTestEndpoint(settings.copy(customEndpoint = endpointText)) },
             )
             PrimaryButton(
                 text = when (scannerState.operation) {
-                    EndpointOperation.SCANNING -> "Stop"
-                    EndpointOperation.CANCELLING -> "Stopping…"
+                    EndpointOperation.SCANNING -> stringResource(R.string.stop)
+                    EndpointOperation.CANCELLING -> stringResource(R.string.stopping_ellipsis)
                     else -> stringResource(R.string.find_endpoints)
                 },
                 modifier = Modifier
@@ -1040,7 +1039,7 @@ fun TrafficScreen(
                     icon = AetherIcons.Shield,
                     name = stringResource(R.string.whole_device),
                     description = stringResource(R.string.every_app_is_covered_what_most_people),
-                    tag = "Recommended",
+                    tag = stringResource(R.string.profile_recommended),
                     selected = settings.mode == EngineMode.TUN,
                     modifier = Modifier
                         .weight(1f)
@@ -1154,8 +1153,7 @@ fun TrafficScreen(
                         }
                         Text(
                             text = if (address != null) {
-                                "Point other devices at $address:${settings.proxyPort} " +
-                                    "as a SOCKS5 proxy."
+                                stringResource(R.string.point_devices_at, address, settings.proxyPort)
                             } else {
                                 stringResource(R.string.join_a_wi_fi_network_to_get)
                             },
@@ -1847,7 +1845,7 @@ fun IdentityScreen(
             stringResource(R.string.whiteaesther_issues_this_device_its_own_identity),
         )
         AetherCard {
-            FactRow("Identity", stringResource(R.string.generated_on_first_connect))
+            FactRow(stringResource(R.string.fact_identity), stringResource(R.string.generated_on_first_connect))
             Divider()
             FactRow(stringResource(R.string.private_key), stringResource(R.string.app_private_storage))
             Divider()
@@ -1886,7 +1884,7 @@ fun IdentityScreen(
             Spacer(Modifier.height(12.dp))
             AttentionCard(
                 tone = if (message.isError) colors.signalFailed else colors.brand,
-                title = if (message.isError) stringResource(R.string.that_did_not_work) else "Done",
+                title = if (message.isError) stringResource(R.string.that_did_not_work) else stringResource(R.string.done),
                 body = message.text,
             )
         }
@@ -1912,9 +1910,9 @@ fun AboutScreen(nativeVersion: String?, settings: AppSettings, onBack: () -> Uni
                 mono = true,
             )
             Divider()
-            FactRow("Engine", nativeVersion ?: "Unavailable", mono = true)
+            FactRow(stringResource(R.string.fact_engine), nativeVersion ?: stringResource(R.string.fact_unavailable), mono = true)
             Divider()
-            FactRow("Package", com.whitedns.whiteaesther.BuildConfig.APPLICATION_ID, mono = true)
+            FactRow(stringResource(R.string.fact_package), com.whitedns.whiteaesther.BuildConfig.APPLICATION_ID, mono = true)
         }
         Spacer(Modifier.height(12.dp))
         AetherCard {
@@ -1922,17 +1920,17 @@ fun AboutScreen(nativeVersion: String?, settings: AppSettings, onBack: () -> Uni
             Spacer(Modifier.height(6.dp))
             FactRow(stringResource(R.string.proxy_bind), settings.proxyBindLabel(), mono = true)
             Divider()
-            FactRow("Backups", "Disabled")
+            FactRow(stringResource(R.string.fact_backups), stringResource(R.string.fact_disabled))
             Divider()
-            FactRow(stringResource(R.string.cleartext_traffic), "Blocked")
+            FactRow(stringResource(R.string.cleartext_traffic), stringResource(R.string.fact_blocked))
         }
         Spacer(Modifier.height(12.dp))
         AetherCard {
             CardHead(stringResource(R.string.licence_and_source))
             Spacer(Modifier.height(6.dp))
-            FactRow("Licence", "AGPL-3.0")
+            FactRow(stringResource(R.string.fact_licence), "AGPL-3.0")
             Divider()
-            FactRow("Source", "github.com/WhiteDNS/WhiteAestherMobile", mono = true)
+            FactRow(stringResource(R.string.fact_source), "github.com/WhiteDNS/WhiteAestherMobile", mono = true)
         }
         Note(
             stringResource(R.string.whiteaesthermobile_and_the_aether_engine_it_embe),
@@ -1942,9 +1940,9 @@ fun AboutScreen(nativeVersion: String?, settings: AppSettings, onBack: () -> Uni
 
 // ----------------------------------------------------------- diagnostics ----
 
-enum class LogDetail(val label: String) {
-    BASIC("Basic"),
-    VERBOSE("Verbose"),
+enum class LogDetail(@StringRes val label: Int) {
+    BASIC(R.string.detail_basic),
+    VERBOSE(R.string.detail_verbose),
 }
 
 @Composable
@@ -1982,7 +1980,7 @@ fun DiagnosticsScreen(
                 SegGroup(
                     options = LogDetail.entries,
                     selected = detail,
-                    label = { it.label },
+                    label = { stringResource(it.label) },
                     onSelect = { detail = it },
                 )
             }

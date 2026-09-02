@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.sp
 import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.ui.theme.AetherTheme
 import com.whitedns.whiteaesther.ui.theme.AetherType
+import com.whitedns.whiteaesther.ui.theme.tracked
 
 // ---------------------------------------------------------------- icons ----
 
@@ -218,7 +219,20 @@ fun SectionLabel(text: String, modifier: Modifier = Modifier) {
 @Composable
 fun PageTitle(title: String, subtitle: String? = null) {
     Column(Modifier.padding(bottom = 14.dp)) {
-        Text(title, style = AetherType.PageTitle, color = AetherTheme.colors.text)
+        Text(
+            title,
+            // One line, and shortened rather than broken. Persian is a
+            // connected script: a word split across two lines is not a word
+            // with a line break in it, it is two fragments that no longer join,
+            // which is what "تنظیمات" looked like when the layout decided it
+            // did not fit. A page title is a title -- if it genuinely cannot
+            // fit, an ellipsis says so and a severed word does not.
+            style = AetherType.PageTitle.tracked(),
+            color = AetherTheme.colors.text,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+        )
         if (subtitle != null) {
             Spacer(Modifier.height(5.dp))
             Text(subtitle, style = AetherType.Body, color = AetherTheme.colors.text2)
@@ -250,7 +264,12 @@ fun CrumbBar(text: String, onBack: (() -> Unit)? = null) {
                     .testTag("back-button"),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(AetherIcons.Back, "Back", Modifier.size(18.dp), AetherTheme.colors.text2)
+                Icon(
+                    AetherIcons.Back,
+                    stringResource(R.string.back),
+                    Modifier.size(18.dp),
+                    AetherTheme.colors.text2,
+                )
             }
         }
         Text(text, style = AetherType.RowTitle, color = AetherTheme.colors.text3)

@@ -7,6 +7,7 @@ import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import com.whitedns.whiteaesther.MainActivity
+import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.core.AppLocale
 import com.whitedns.whiteaesther.data.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
@@ -125,13 +126,19 @@ class AetherTileService : TileService() {
         // inactive states and nothing else, which is the whole answer anyway --
         // the words only add the stage in between.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            tile.subtitle = when (stage) {
-                EngineStage.IDLE -> "Off"
-                EngineStage.PREPARING, EngineStage.CONNECTING -> "Connecting"
-                EngineStage.CONNECTED -> "On"
-                EngineStage.STOPPING -> "Stopping"
-                EngineStage.ERROR -> "Failed"
-            }
+            // Resolved per render, not per service: a tile service is created
+            // once and lives on, so one built while the app was in English
+            // would keep saying so after the user had switched.
+            val words = AppLocale.wrap(applicationContext)
+            tile.subtitle = words.getString(
+                when (stage) {
+                    EngineStage.IDLE -> R.string.tile_off
+                    EngineStage.PREPARING, EngineStage.CONNECTING -> R.string.tile_connecting
+                    EngineStage.CONNECTED -> R.string.tile_on
+                    EngineStage.STOPPING -> R.string.tile_stopping
+                    EngineStage.ERROR -> R.string.tile_failed
+                },
+            )
         }
         tile.updateTile()
     }

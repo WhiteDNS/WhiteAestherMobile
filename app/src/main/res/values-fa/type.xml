@@ -4,4 +4,10 @@
       carries more height, so the same box holds less of it.
     -->
     <integer name="type_scale_percent">88</integer>
+
+    <!--
+      No negative tracking: Persian letters join, and closing the space
+      between them fights the joins rather than tidying the spacing.
+    -->
+    <integer name="type_tracking_percent">0</integer>
 </resources>
