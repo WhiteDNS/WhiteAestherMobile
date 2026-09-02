@@ -21,9 +21,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -44,11 +44,13 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.ui.theme.AetherTheme
 import com.whitedns.whiteaesther.ui.theme.AetherType
 
@@ -471,7 +473,9 @@ fun AetherSwitch(
 fun <T> SegGroup(
     options: List<T>,
     selected: T,
-    label: (T) -> String,
+    // Composable because a label is display text, and display text now comes
+    // from resources rather than from literals at the call site.
+    label: @Composable (T) -> String,
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -696,7 +700,7 @@ fun AdvancedSection(
                     .rotate(rotation),
                 AetherTheme.colors.text2,
             )
-            Text("Advanced", style = AetherType.RowTitle, color = AetherTheme.colors.text2)
+            Text(stringResource(R.string.advanced), style = AetherType.RowTitle, color = AetherTheme.colors.text2)
             Spacer(Modifier.weight(1f))
             SectionLabel(badge)
         }

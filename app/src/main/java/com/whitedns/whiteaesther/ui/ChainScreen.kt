@@ -4,8 +4,6 @@ import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +15,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -37,10 +37,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.whitedns.whiteaesther.ChainState
+import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.ChainSource
 import com.whitedns.whiteaesther.data.EngineMode
@@ -55,11 +57,12 @@ import com.whitedns.whiteaesther.ui.theme.AetherType
  * Says what the user gets, not what is configured: "two subscriptions" tells
  * them nothing about whether their traffic is leaving from somewhere else.
  */
+@Composable
 fun AppSettings.chainSummary(): String = when {
-    !chain.enabled -> "Off. Traffic leaves from Cloudflare"
-    !chain.hasNodes -> "On, but no nodes yet"
-    chain.throughTunnel -> "On, dialled through the tunnel"
-    else -> "On, nodes dialled directly"
+    !chain.enabled -> stringResource(R.string.off_traffic_leaves_from_cloudflare)
+    !chain.hasNodes -> stringResource(R.string.on_but_no_nodes_yet)
+    chain.throughTunnel -> stringResource(R.string.on_dialled_through_the_tunnel)
+    else -> stringResource(R.string.on_nodes_dialled_directly)
 }
 
 @Composable
@@ -90,10 +93,10 @@ fun ChainScreen(
     }
 
     ScreenColumn {
-        CrumbBar("Routes · Exit chain", onBack = onBack)
+        CrumbBar(stringResource(R.string.routes_exit_chain), onBack = onBack)
         PageTitle(
-            "Where your traffic comes out",
-            "Adds a second hop after the tunnel, so sites see your node's address instead of Cloudflare's.",
+            stringResource(R.string.where_your_traffic_comes_out),
+            stringResource(R.string.adds_a_second_hop_after_the_tunnel),
         )
 
         if (!chainState.available) {
@@ -103,9 +106,8 @@ fun ChainScreen(
             // arriving several screens away from the setting that caused it.
             AttentionCard(
                 tone = colors.signalFailed,
-                title = "Not available in this build",
-                body = "This copy of WhiteAesther does not include the exit chain. " +
-                    "Everything else works as normal.",
+                title = stringResource(R.string.not_available_in_this_build),
+                body = stringResource(R.string.this_copy_of_whiteaesther_does_not_include),
             )
             return@ScreenColumn
         }
@@ -113,20 +115,19 @@ fun ChainScreen(
         if (chain.enabled && settings.mode != EngineMode.TUN) {
             AttentionCard(
                 tone = colors.signalFailed,
-                title = "Coverage has to be whole device",
-                body = "The chain routes the whole phone. Under Traffic, set Coverage back to " +
-                    "Whole device, or turn the chain off.",
+                title = stringResource(R.string.coverage_has_to_be_whole_device),
+                body = stringResource(R.string.the_chain_routes_the_whole_phone_under),
             )
             Spacer(Modifier.height(12.dp))
         }
 
         AetherCard {
             ToggleSettingRow(
-                title = "Exit chain",
+                title = stringResource(R.string.exit_chain),
                 subtitle = if (chain.enabled) {
-                    "Traffic leaves from your node."
+                    stringResource(R.string.traffic_leaves_from_your_node)
                 } else {
-                    "Traffic leaves from Cloudflare, as normal."
+                    stringResource(R.string.traffic_leaves_from_cloudflare_as_normal)
                 },
                 checked = chain.enabled,
                 onCheckedChange = {
@@ -138,9 +139,7 @@ fun ChainScreen(
 
         if (!chain.enabled) {
             Note(
-                "With this off, WhiteAesther works exactly as it does today. Turn it on if you " +
-                    "have a subscription or a node of your own, and want sites to see that " +
-                    "address rather than Cloudflare's.",
+                stringResource(R.string.with_this_off_whiteaesther_works_exactly_as),
             )
             return@ScreenColumn
         }
@@ -151,11 +150,11 @@ fun ChainScreen(
         Spacer(Modifier.height(12.dp))
         AetherCard {
             ToggleSettingRow(
-                title = "Dial nodes through the tunnel",
+                title = stringResource(R.string.dial_nodes_through_the_tunnel),
                 subtitle = if (chain.throughTunnel) {
-                    "Your network never learns the node's address, and the node never learns yours."
+                    stringResource(R.string.your_network_never_learns_the_node_s)
                 } else {
-                    "Nodes are reached directly. Use this only where the tunnel itself is blocked."
+                    stringResource(R.string.nodes_are_reached_directly_use_this_only)
                 },
                 checked = chain.throughTunnel,
                 onCheckedChange = {
@@ -166,9 +165,7 @@ fun ChainScreen(
         }
         if (!chain.throughTunnel) {
             Note(
-                "Dialling directly skips the tunnel entirely -- WhiteAesther becomes a plain " +
-                    "client for your node. That is the right choice on a network that blocks " +
-                    "the tunnel outright, and the wrong one everywhere else.",
+                stringResource(R.string.dialling_directly_skips_the_tunnel_entirely_whit),
             )
         }
 
@@ -198,7 +195,7 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
     val manualInteraction = remember { MutableInteractionSource() }
 
     AetherCard {
-        CardHead("Where your nodes come from", "A subscription link, or nodes pasted by hand.")
+        CardHead(stringResource(R.string.where_your_nodes_come_from), stringResource(R.string.a_subscription_link_or_nodes_pasted_by))
 
         chain.sources.forEachIndexed { index, source ->
             Divider()
@@ -244,7 +241,7 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
                             .controllerFocus(removeInteraction, CircleShape)
                             .padding(horizontal = 11.dp, vertical = 6.dp),
                     ) {
-                        Text("Remove", style = AetherType.Small, color = colors.text3)
+                        Text(stringResource(R.string.remove), style = AetherType.Small, color = colors.text3)
                     }
                 }
             }
@@ -252,7 +249,7 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
 
         Divider()
         Column(Modifier.padding(horizontal = 15.dp, vertical = 12.dp)) {
-            SectionLabel("Add a subscription")
+            SectionLabel(stringResource(R.string.add_a_subscription))
             Spacer(Modifier.height(7.dp))
             OutlinedTextField(
                 value = draft,
@@ -263,7 +260,7 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
                     .testTag("chain-source-field"),
                 interactionSource = sourceInteraction,
                 placeholder = {
-                    Text("https://…", style = AetherType.Data, color = colors.text3)
+                    Text(stringResource(R.string.https), style = AetherType.Data, color = colors.text3)
                 },
                 textStyle = AetherType.Data.copy(color = colors.text),
                 singleLine = true,
@@ -276,7 +273,7 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
             )
             Spacer(Modifier.height(9.dp))
             PrimaryButton(
-                text = "Add",
+                text = stringResource(R.string.add),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("chain-add-source"),
@@ -292,18 +289,18 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
                 draft = ""
             }
             if (draft.isNotBlank() && !draft.isValidSubscription()) {
-                Note("A subscription is an https:// link your provider gave you.")
+                Note(stringResource(R.string.a_subscription_is_an_https_link_your))
             }
         }
 
         Divider()
         RowCard(
             icon = AetherIcons.Copy,
-            title = "Paste nodes by hand",
+            title = stringResource(R.string.paste_nodes_by_hand),
             subtitle = when (val count = chain.manual.lines().count { it.isNotBlank() }) {
-                0 -> "None. One link per line: vless, vmess, trojan, ss, hysteria2"
-                1 -> "1 node"
-                else -> "$count nodes"
+                0 -> stringResource(R.string.none_one_link_per_line_vless_vmess)
+                1 -> stringResource(R.string.t_1_node)
+                else -> stringResource(R.string.count_nodes, count)
             },
             onClick = { pasting = !pasting },
         )
@@ -319,7 +316,7 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
                         .testTag("chain-manual-field"),
                     interactionSource = manualInteraction,
                     placeholder = {
-                        Text("vless://…", style = AetherType.Data, color = colors.text3)
+                        Text(stringResource(R.string.vless), style = AetherType.Data, color = colors.text3)
                     },
                     textStyle = AetherType.Data.copy(color = colors.text),
                     shape = RoundedCornerShape(14.dp),
@@ -330,7 +327,7 @@ private fun SourcesCard(settings: AppSettings, onSettingsChange: (AppSettings) -
                 )
                 Spacer(Modifier.height(9.dp))
                 OutlineButton(
-                    text = "Save nodes",
+                    text = stringResource(R.string.save_nodes),
                     modifier = Modifier.fillMaxWidth(),
                     enabled = manual != chain.manual,
                 ) {
@@ -372,15 +369,13 @@ private fun NodesCard(
     }
 
     AetherCard {
-        CardHead("Nodes", "Whichever one is ticked is carrying your traffic.")
+        CardHead(stringResource(R.string.nodes), stringResource(R.string.whichever_one_is_ticked_is_carrying_your))
 
         when {
             !connected -> {
                 Divider()
                 Note(
-                    "Connect to load your nodes. The list comes from the running chain, and " +
-                        "your subscription is fetched through the tunnel -- so there is nothing " +
-                        "to read until it is up.",
+                    stringResource(R.string.connect_to_load_your_nodes_the_list),
                     modifier = Modifier.padding(horizontal = 15.dp),
                 )
             }
@@ -391,8 +386,7 @@ private fun NodesCard(
                 // nodes here is what reads as "deleting it did nothing", so say
                 // what is actually true instead.
                 Note(
-                    "Your sources changed. The chain is still running the previous ones -- " +
-                        "disconnect and connect again to load them.",
+                    stringResource(R.string.your_sources_changed_the_chain_is_still),
                     modifier = Modifier.padding(horizontal = 15.dp),
                 )
             }
@@ -401,11 +395,9 @@ private fun NodesCard(
                 Divider()
                 Note(
                     if (chainState.busy) {
-                        "Reading the node list…"
+                        stringResource(R.string.reading_the_node_list)
                     } else {
-                        "The chain is up but reported no nodes. Check that the subscription " +
-                            "link is right, and look under Settings · Diagnostics for what " +
-                            "it said."
+                        stringResource(R.string.the_chain_is_up_but_reported_no)
                     },
                     modifier = Modifier.padding(horizontal = 15.dp),
                 )
@@ -502,7 +494,7 @@ private fun NodesCard(
                 horizontalArrangement = Arrangement.spacedBy(9.dp),
             ) {
                 OutlineButton(
-                    text = "Refresh",
+                    text = stringResource(R.string.refresh),
                     modifier = Modifier.weight(1f),
                     enabled = !chainState.busy,
                     onClick = onRefreshNodes,
@@ -535,7 +527,7 @@ private fun NodeSearch(query: String, onQueryChange: (String) -> Unit) {
             .tvTextFieldSupport(interaction),
         interactionSource = interaction,
         textStyle = AetherType.Data.copy(color = colors.text),
-        placeholder = { Text("Find a node", style = AetherType.Data, color = colors.text3) },
+        placeholder = { Text(stringResource(R.string.find_a_node), style = AetherType.Data, color = colors.text3) },
         singleLine = true,
         shape = RoundedCornerShape(14.dp),
         colors = TextFieldDefaults.colors(
@@ -573,7 +565,7 @@ private fun NodeActions(
                 text = when {
                     progress != null -> "Stop (${progress.first}/${progress.second})"
                     busy -> "Testing…"
-                    else -> "Test all"
+                    else -> stringResource(R.string.test_all)
                 },
                 modifier = Modifier.weight(1f).testTag("chain-test-nodes"),
                 enabled = progress != null || (!busy && total > 0),
@@ -582,7 +574,7 @@ private fun NodeActions(
             OutlineButton(
                 // Named with the count, because "Test selected" on an empty
                 // selection is a button that looks available and does nothing.
-                text = if (picked.isEmpty()) "Test selected" else "Test ${picked.size}",
+                text = if (picked.isEmpty()) stringResource(R.string.test_selected) else "Test ${picked.size}",
                 modifier = Modifier.weight(1f).testTag("chain-test-selected"),
                 enabled = !busy && picked.isNotEmpty(),
                 onClick = onTestPicked,
@@ -591,7 +583,7 @@ private fun NodeActions(
 
         if (picked.isNotEmpty()) {
             OutlineButton(
-                text = "Remove ${picked.size} from the list",
+                text = stringResource(R.string.remove_picked_size_from_the_list, picked.size),
                 modifier = Modifier.fillMaxWidth().testTag("chain-hide-selected"),
                 enabled = !busy,
                 onClick = onHidePicked,
@@ -607,12 +599,12 @@ private fun NodeActions(
                 Text(
                     // Said out loud, because a node missing from a subscription
                     // with no explanation is what a broken link looks like.
-                    "$hiddenCount removed from the list",
+                    stringResource(R.string.hiddencount_removed_from_the_list, hiddenCount),
                     style = AetherType.Small,
                     color = colors.text2,
                 )
                 OutlineButton(
-                    text = "Restore",
+                    text = stringResource(R.string.restore),
                     modifier = Modifier.testTag("chain-restore-hidden"),
                     enabled = !busy,
                     onClick = onRestoreHidden,
@@ -691,15 +683,14 @@ private fun NodeRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                if (supported) kind else "$kind · not supported",
+                if (supported) kind else stringResource(R.string.kind_not_supported, kind),
                 style = AetherType.Small,
                 color = if (supported) colors.text2 else colors.signalWorking,
             )
             if (!supported) {
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    "This build's engine cannot authenticate with REALITY yet. The node " +
-                        "is fine and will work here again once the engine can.",
+                    stringResource(R.string.this_build_s_engine_cannot_authenticate_with),
                     style = AetherType.Small,
                     color = colors.text3,
                 )
@@ -712,7 +703,7 @@ private fun NodeRow(
                 !supported -> "—"
                 else -> when (delay) {
                     null -> "—"
-                    else -> "$delay ms"
+                    else -> stringResource(R.string.result_rttmillis_ms, delay)
                 }
             },
             style = AetherType.Data,

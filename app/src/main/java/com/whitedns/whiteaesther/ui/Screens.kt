@@ -1,5 +1,6 @@
 package com.whitedns.whiteaesther.ui
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -8,20 +9,20 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
@@ -45,35 +46,37 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.whitedns.whiteaesther.AddressPair
 import com.whitedns.whiteaesther.EndpointOperation
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.IdentityMessage
-import com.whitedns.whiteaesther.AddressPair
-import com.whitedns.whiteaesther.data.UpdateChecker
-import com.whitedns.whiteaesther.service.TrafficSample
-import com.whitedns.whiteaesther.service.formatBytes
-import com.whitedns.whiteaesther.service.formatRate
+import com.whitedns.whiteaesther.R
+import com.whitedns.whiteaesther.data.AppLanguage
 import com.whitedns.whiteaesther.data.AppSettings
-import com.whitedns.whiteaesther.data.LanNoticeLevel
-import com.whitedns.whiteaesther.data.LocalAddress
 import com.whitedns.whiteaesther.data.EndpointAddress
 import com.whitedns.whiteaesther.data.EndpointFamily
 import com.whitedns.whiteaesther.data.EndpointMode
 import com.whitedns.whiteaesther.data.EngineMode
-import com.whitedns.whiteaesther.data.TunnelProtocol
+import com.whitedns.whiteaesther.data.LanNoticeLevel
+import com.whitedns.whiteaesther.data.LocalAddress
 import com.whitedns.whiteaesther.data.ScanStrategy
-import com.whitedns.whiteaesther.data.AppLanguage
 import com.whitedns.whiteaesther.data.ThemeMode
+import com.whitedns.whiteaesther.data.TunnelProtocol
+import com.whitedns.whiteaesther.data.UpdateChecker
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatus
 import com.whitedns.whiteaesther.service.LogEntry
 import com.whitedns.whiteaesther.service.LogLevel
+import com.whitedns.whiteaesther.service.TrafficSample
+import com.whitedns.whiteaesther.service.formatBytes
+import com.whitedns.whiteaesther.service.formatRate
 import com.whitedns.whiteaesther.ui.theme.AetherTheme
 import com.whitedns.whiteaesther.ui.theme.AetherType
 import kotlinx.coroutines.delay
@@ -90,16 +93,37 @@ import kotlinx.coroutines.delay
  * a friendly-sounding preset does on the user's behalf.
  */
 enum class ConnectionProfile(
-    val label: String,
-    val description: String,
-    val tag: String?,
+    // Resource ids rather than strings: an enum is built once, before there is
+    // any composition to read resources from, and its labels have to be able to
+    // change language along with everything else.
+    @StringRes val label: Int,
+    @StringRes val description: Int,
+    @StringRes val tag: Int?,
     val scan: ScanStrategy?,
     val transport: TunnelProtocol?,
 ) {
-    ADAPTIVE("Adaptive", "Works on most networks. Start here.", "Recommended", ScanStrategy.BALANCED, TunnelProtocol.AUTO),
-    PATCHY("Patchy signal", "For mobile data that keeps dropping.", null, ScanStrategy.THOROUGH, TunnelProtocol.AUTO),
-    STRICT("Strict network", "For Wi-Fi that blocks a lot, such as an office.", null, ScanStrategy.STEALTH, TunnelProtocol.H2),
-    MANUAL("Manual", "You choose every setting yourself.", null, null, null),
+    ADAPTIVE(
+        R.string.profile_adaptive,
+        R.string.works_on_most_networks_start_here,
+        R.string.profile_recommended,
+        ScanStrategy.BALANCED,
+        TunnelProtocol.AUTO,
+    ),
+    PATCHY(
+        R.string.patchy_signal,
+        R.string.for_mobile_data_that_keeps_dropping,
+        null,
+        ScanStrategy.THOROUGH,
+        TunnelProtocol.AUTO,
+    ),
+    STRICT(
+        R.string.strict_network,
+        R.string.for_wi_fi_that_blocks_a_lot,
+        null,
+        ScanStrategy.STEALTH,
+        TunnelProtocol.H2,
+    ),
+    MANUAL(R.string.profile_manual, R.string.you_choose_every_setting_yourself, null, null, null),
     ;
 
     val icon: ImageVector
@@ -123,11 +147,12 @@ fun AppSettings.applyProfile(profile: ConnectionProfile): AppSettings =
         copy(scanStrategy = profile.scan, transport = profile.transport)
     }
 
+@Composable
 fun AppSettings.endpointSummary(): String = when (endpointMode) {
-    EndpointMode.AUTOMATIC -> "Chosen automatically"
+    EndpointMode.AUTOMATIC -> stringResource(R.string.chosen_automatically)
     else -> EndpointAddress.normalize(customEndpoint)?.let {
-        if (endpointMode == EndpointMode.CUSTOM_FIRST) it else "$it · no fallback"
-    } ?: "Specific address · not set yet"
+        if (endpointMode == EndpointMode.CUSTOM_FIRST) it else stringResource(R.string.it_no_fallback, it)
+    } ?: stringResource(R.string.specific_address_not_set_yet)
 }
 
 fun EngineStage.toConnectState(): ConnectState = when (this) {
@@ -203,7 +228,7 @@ fun HomeScreen(
             horizontalArrangement = Arrangement.spacedBy(11.dp),
         ) {
             Icon(AetherIcons.Globe, null, Modifier.size(30.dp), colors.brand)
-            Text("WhiteAesther", style = AetherType.CardTitle, color = colors.text)
+            Text(stringResource(R.string.app_name), style = AetherType.CardTitle, color = colors.text)
         }
 
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -213,11 +238,11 @@ fun HomeScreen(
                 diameter = if (compact) 210.dp else 262.dp,
                 enabled = status.stage != EngineStage.STOPPING,
                 caption = when (status.stage) {
-                    EngineStage.IDLE -> "Tap to connect"
-                    EngineStage.PREPARING, EngineStage.CONNECTING -> "Tap to cancel"
-                    EngineStage.CONNECTED -> "Tap to stop"
+                    EngineStage.IDLE -> stringResource(R.string.tap_to_connect)
+                    EngineStage.PREPARING, EngineStage.CONNECTING -> stringResource(R.string.tap_to_cancel)
+                    EngineStage.CONNECTED -> stringResource(R.string.tap_to_stop)
                     EngineStage.STOPPING -> "Stopping"
-                    EngineStage.ERROR -> "Tap to retry"
+                    EngineStage.ERROR -> stringResource(R.string.tap_to_retry)
                 },
                 onClick = onToggleConnection,
             )
@@ -251,12 +276,12 @@ fun HomeScreen(
                 )
                 Text(
                     when (status.stage) {
-                        EngineStage.IDLE -> "NOT CONNECTED"
+                        EngineStage.IDLE -> stringResource(R.string.not_connected)
                         EngineStage.PREPARING -> "PREPARING"
                         EngineStage.CONNECTING -> "CONNECTING"
                         EngineStage.CONNECTED -> "CONNECTED"
                         EngineStage.STOPPING -> "STOPPING"
-                        EngineStage.ERROR -> "NOT CONNECTED"
+                        EngineStage.ERROR -> stringResource(R.string.not_connected)
                     },
                     style = AetherType.Label,
                     color = signal,
@@ -265,12 +290,12 @@ fun HomeScreen(
             Spacer(Modifier.height(8.dp))
             Text(
                 when (status.stage) {
-                    EngineStage.IDLE -> "Ready when you are"
+                    EngineStage.IDLE -> stringResource(R.string.ready_when_you_are)
                     EngineStage.PREPARING, EngineStage.CONNECTING ->
-                        if (status.message.contains("retry")) "Still trying" else "Finding a working route"
-                    EngineStage.CONNECTED -> "You're connected"
+                        if (status.message.contains("retry")) stringResource(R.string.still_trying) else stringResource(R.string.finding_a_working_route)
+                    EngineStage.CONNECTED -> stringResource(R.string.you_re_connected)
                     EngineStage.STOPPING -> "Disconnecting"
-                    EngineStage.ERROR -> "Couldn't connect"
+                    EngineStage.ERROR -> stringResource(R.string.couldn_t_connect)
                 },
                 style = AetherType.StatusHead,
                 color = colors.text,
@@ -313,10 +338,10 @@ fun HomeScreen(
                 tvFocusable = true,
             ) {
                 Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                    SectionLabel("Connected for")
+                    SectionLabel(stringResource(R.string.connected_for))
                     Spacer(Modifier.height(3.dp))
                     Text(
-                        "%02d:%02d:%02d".format(elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60),
+                        stringResource(R.string.elapsed_clock).format(elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60),
                         style = AetherType.DataLarge,
                         color = colors.text,
                     )
@@ -328,15 +353,15 @@ fun HomeScreen(
         // Only route out of a blocked phone. Reached from the notification
         // too, but a user who opens the app first should not have to find the
         // notification again to undo something the app is doing.
-        if (status.message == "Traffic is blocked") {
+        if (status.message == stringResource(R.string.traffic_is_blocked)) {
             AetherCard {
                 CardHead(
-                    "Traffic is blocked",
-                    "Nothing reaches the internet until you connect again or lift this.",
+                    stringResource(R.string.traffic_is_blocked),
+                    stringResource(R.string.nothing_reaches_the_internet_until_you_connect),
                 )
                 Box(Modifier.padding(11.dp)) {
                     OutlineButton(
-                        text = "Lift the block",
+                        text = stringResource(R.string.lift_the_block),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("lift-block-button"),
@@ -350,22 +375,22 @@ fun HomeScreen(
         if (update != null) {
             AetherCard {
                 CardHead(
-                    "Version ${update.version} is out",
-                    "You are on ${com.whitedns.whiteaesther.BuildConfig.VERSION_NAME}.",
+                    stringResource(R.string.version_update_version_is_out, update.version),
+                    stringResource(R.string.you_are_on_com_whitedns_whiteaesther_buildconfig, com.whitedns.whiteaesther.BuildConfig.VERSION_NAME),
                 )
                 Column(
                     Modifier.padding(11.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     PrimaryButton(
-                        text = "Open the download page",
+                        text = stringResource(R.string.open_the_download_page),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("update-open-button"),
                         onClick = { onOpenUpdate(update.url) },
                     )
                     OutlineButton(
-                        text = "Not now",
+                        text = stringResource(R.string.not_now),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("update-dismiss-button"),
@@ -381,27 +406,27 @@ fun HomeScreen(
                 modifier = Modifier.testTag("home-address"),
                 tvFocusable = true,
             ) {
-                CardHead("Your address")
+                CardHead(stringResource(R.string.your_address))
                 Spacer(Modifier.height(6.dp))
                 FactRow(
-                    "Without the tunnel",
+                    stringResource(R.string.without_the_tunnel),
                     // Absent until the app has been open while disconnected:
                     // reading it during a session would send the real address
                     // out past the thing hiding it.
-                    addresses.real ?: "Not measured yet",
+                    addresses.real ?: stringResource(R.string.not_measured_yet),
                     mono = addresses.real != null,
                 )
                 Divider()
                 val viaChain = settings.chain.enabled && settings.mode == EngineMode.TUN
                 FactRow(
-                    "Seen by websites",
+                    stringResource(R.string.seen_by_websites),
                     when {
-                        status.stage != EngineStage.CONNECTED -> "Not connected"
+                        status.stage != EngineStage.CONNECTED -> stringResource(R.string.not_connected_3)
                         // The chain's exit cannot be measured from here: this
                         // process is kept off its own interface while mihomo
                         // runs, so a probe leaves by the physical network and
                         // would report the address the tunnel hides.
-                        viaChain -> chainSelection ?: "Your exit chain node"
+                        viaChain -> chainSelection ?: stringResource(R.string.your_exit_chain_node)
                         addresses.tunnel != null -> addresses.tunnel
                         else -> "Checking"
                     },
@@ -409,9 +434,7 @@ fun HomeScreen(
                 )
                 if (viaChain) {
                     Text(
-                        "Traffic leaves through your exit chain, so the address is your " +
-                            "node's. The app cannot read it from here without routing its " +
-                            "own traffic back into the chain.",
+                        stringResource(R.string.traffic_leaves_through_your_exit_chain_so),
                         style = AetherType.Small,
                         color = colors.text3,
                         modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
@@ -426,12 +449,11 @@ fun HomeScreen(
                 modifier = Modifier.testTag("home-session"),
                 tvFocusable = true,
             ) {
-                CardHead("This session")
+                CardHead(stringResource(R.string.this_session))
                 Spacer(Modifier.height(6.dp))
                 if (!traffic.supported) {
                     Text(
-                        "This phone does not keep per-app byte counters, so there is " +
-                            "nothing to measure.",
+                        stringResource(R.string.this_phone_does_not_keep_per_app),
                         style = AetherType.Small,
                         color = colors.text2,
                         modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
@@ -444,7 +466,7 @@ fun HomeScreen(
                         horizontalArrangement = Arrangement.spacedBy(15.dp),
                     ) {
                         RateColumn(
-                            label = "Download",
+                            label = stringResource(R.string.download),
                             rate = formatRate(traffic.downloadPerSecond),
                             total = formatBytes(traffic.received),
                             tint = colors.signalLive,
@@ -453,7 +475,7 @@ fun HomeScreen(
                                 .testTag("traffic-download"),
                         )
                         RateColumn(
-                            label = "Upload",
+                            label = stringResource(R.string.upload),
                             rate = formatRate(traffic.uploadPerSecond),
                             total = formatBytes(traffic.sent),
                             tint = colors.cyan,
@@ -464,8 +486,7 @@ fun HomeScreen(
                     }
                     Divider()
                     Text(
-                        "Measured on the encrypted side, which is what your data plan is " +
-                            "billed for, so it runs a little above what an app reports.",
+                        stringResource(R.string.measured_on_the_encrypted_side_which_is),
                         style = AetherType.Small,
                         color = colors.text3,
                         modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
@@ -486,13 +507,13 @@ fun HomeScreen(
                 Divider()
                 FactRow("Coverage", settings.coverageSummary())
                 Divider()
-                FactRow("Addresses", if (settings.dualStack) "IPv4 + IPv6" else "IPv4 only")
+                FactRow("Addresses", if (settings.dualStack) stringResource(R.string.ipv4_ipv6) else stringResource(R.string.ipv4_only))
                 if (settings.mode == EngineMode.PROXY) {
                     Divider()
-                    FactRow("Local proxy", settings.proxyBindLabel(), mono = true)
+                    FactRow(stringResource(R.string.local_proxy), settings.proxyBindLabel(), mono = true)
                 }
             } else {
-                FactRow("Profile", settings.activeProfile().label)
+                FactRow("Profile", stringResource(settings.activeProfile().label))
                 Divider()
                 FactRow(
                     "Endpoint",
@@ -505,9 +526,9 @@ fun HomeScreen(
         }
         Note(
             if (status.stage == EngineStage.CONNECTED) {
-                "Live values. Change them under Routes and Traffic."
+                stringResource(R.string.live_values_change_them_under_routes_and)
             } else {
-                "What will be used when you connect. Change it under Routes and Traffic."
+                stringResource(R.string.what_will_be_used_when_you_connect)
             },
         )
     }
@@ -540,54 +561,54 @@ private fun homeAttention(settings: AppSettings, status: EngineStatus): Attentio
     return when {
         substituted -> Attention(
             tone = colors.cyan,
-            title = "Connected to a different endpoint",
+            title = stringResource(R.string.connected_to_a_different_endpoint),
             body = "$pinned did not work, so fallback used ${status.peer} instead. " +
                 "Turn off Fall back automatically if you would rather it failed than substituted.",
-            actions = listOf("Endpoint settings" to AttentionTarget.ENDPOINT),
+            actions = listOf(stringResource(R.string.endpoint_settings) to AttentionTarget.ENDPOINT),
         )
         // The service retries a failed session forever on a fixed delay. Without
         // saying so, an endless spinner looks the same as normal progress.
         retrying -> Attention(
             tone = colors.signalWorking,
-            title = "The engine keeps retrying",
-            body = status.message.substringBefore(" · retry").ifBlank { status.message } +
+            title = stringResource(R.string.the_engine_keeps_retrying),
+            body = status.message.substringBefore(stringResource(R.string.retry)).ifBlank { status.message } +
                 ". " + status.message.substringAfter(" · ", "").replaceFirstChar(Char::uppercase) + ".",
-            actions = listOf("Change profile" to AttentionTarget.ROUTES, "Pin an endpoint" to AttentionTarget.ENDPOINT),
+            actions = listOf(stringResource(R.string.change_profile) to AttentionTarget.ROUTES, stringResource(R.string.pin_an_endpoint) to AttentionTarget.ENDPOINT),
         )
         status.stage == EngineStage.ERROR -> Attention(
             tone = colors.signalFailed,
-            title = "The last attempt failed",
-            body = status.message.ifBlank { "The engine stopped without a working route." },
-            actions = listOf("Change profile" to AttentionTarget.ROUTES, "Pin an endpoint" to AttentionTarget.ENDPOINT),
+            title = stringResource(R.string.the_last_attempt_failed),
+            body = status.message.ifBlank { stringResource(R.string.the_engine_stopped_without_a_working_route) },
+            actions = listOf(stringResource(R.string.change_profile) to AttentionTarget.ROUTES, stringResource(R.string.pin_an_endpoint) to AttentionTarget.ENDPOINT),
         )
         validationError != null -> Attention(
             tone = colors.signalWorking,
-            title = "Endpoint address is incomplete",
+            title = stringResource(R.string.endpoint_address_is_incomplete),
             body = validationError,
-            actions = listOf("Finish setting it" to AttentionTarget.ENDPOINT),
+            actions = listOf(stringResource(R.string.finish_setting_it) to AttentionTarget.ENDPOINT),
         )
         // Ranked above the quieter warnings below because the consequence is the
         // same as not being connected, for every app outside the rule -- and
         // nothing else on this screen would tell the user that.
         settings.coverageIsRestricted() -> Attention(
             tone = colors.cyan,
-            title = "Only some apps are going through",
+            title = stringResource(R.string.only_some_apps_are_going_through),
             body = "A per-app rule is limiting this to ${settings.coverageSummary().lowercase()}. " +
                 "Everything else is using your real address, connected or not.",
-            actions = listOf("Change which apps" to AttentionTarget.TRAFFIC),
+            actions = listOf(stringResource(R.string.change_which_apps) to AttentionTarget.TRAFFIC),
         )
         settings.mode == EngineMode.PROXY -> Attention(
             tone = colors.cyan,
-            title = "Proxy only: apps are not routed for you",
+            title = stringResource(R.string.proxy_only_apps_are_not_routed_for),
             body = "Nothing goes through the tunnel unless you point an app at " +
                 "${settings.proxyBindLabel()}. Choose Whole device under Traffic to cover everything.",
-            actions = listOf("Change coverage" to AttentionTarget.TRAFFIC),
+            actions = listOf(stringResource(R.string.change_coverage) to AttentionTarget.TRAFFIC),
         )
         settings.endpointMode == EndpointMode.CUSTOM_ONLY -> Attention(
             tone = colors.signalWorking,
-            title = "Fallback is off",
-            body = "Only the address you pinned will be used. If it stops working the connection fails instead of finding another.",
-            actions = listOf("Change this" to AttentionTarget.ENDPOINT),
+            title = stringResource(R.string.fallback_is_off),
+            body = stringResource(R.string.only_the_address_you_pinned_will_be),
+            actions = listOf(stringResource(R.string.change_this) to AttentionTarget.ENDPOINT),
         )
         else -> null
     }
@@ -610,11 +631,11 @@ fun RoutesScreen(
     val active = settings.activeProfile()
 
     ScreenColumn {
-        CrumbBar("Routes")
-        PageTitle("How it connects", "Pick a profile and you're done. Everything below is optional.")
+        CrumbBar(stringResource(R.string.routes))
+        PageTitle(stringResource(R.string.how_it_connects), stringResource(R.string.pick_a_profile_and_you_re_done))
 
         AetherCard {
-            CardHead("Profile", "Describes your network. WhiteAesther picks the rest to match.")
+            CardHead(stringResource(R.string.profile), stringResource(R.string.describes_your_network_whiteaesther_picks_the_re))
             Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ConnectionProfile.entries.chunked(2).forEach { pair ->
                     // IntrinsicSize.Min makes both cards adopt the taller one's
@@ -626,9 +647,9 @@ fun RoutesScreen(
                         pair.forEach { profile ->
                             ChoiceCard(
                                 icon = profile.icon,
-                                name = profile.label,
-                                description = profile.description,
-                                tag = profile.tag,
+                                name = stringResource(profile.label),
+                                description = stringResource(profile.description),
+                                tag = profile.tag?.let { stringResource(it) },
                                 selected = profile == active,
                                 modifier = Modifier
                                     .weight(1f)
@@ -655,7 +676,7 @@ fun RoutesScreen(
         AetherCard {
             RowCard(
                 icon = AetherIcons.Pin,
-                title = "Endpoint",
+                title = stringResource(R.string.endpoint),
                 subtitle = settings.endpointSummary(),
                 iconTint = AetherTheme.colors.cyan,
                 modifier = endpointModifier.testTag("routes-endpoint"),
@@ -664,7 +685,7 @@ fun RoutesScreen(
             Divider()
             RowCard(
                 icon = AetherIcons.Globe,
-                title = "Exit chain",
+                title = stringResource(R.string.exit_chain),
                 subtitle = settings.chainSummary(),
                 iconTint = AetherTheme.colors.brand,
                 modifier = chainModifier.testTag("routes-chain"),
@@ -673,7 +694,7 @@ fun RoutesScreen(
             Divider()
             RowCard(
                 icon = AetherIcons.Routes,
-                title = "Routing rules",
+                title = stringResource(R.string.routing_rules),
                 subtitle = settings.routingSummary(),
                 iconTint = AetherTheme.colors.cyan,
                 modifier = routingRulesModifier.testTag("routes-routing-rules"),
@@ -684,11 +705,11 @@ fun RoutesScreen(
         Spacer(Modifier.height(12.dp))
         AetherCard {
             AdvancedSection(
-                badge = "Transport · Discovery",
+                badge = stringResource(R.string.transport_discovery),
                 expanded = advanced,
                 onToggle = { advanced = !advanced },
             ) {
-                CardHead("Protocol", "Tried first on every connect. The profile already picks a sensible one.")
+                CardHead(stringResource(R.string.protocol), stringResource(R.string.tried_first_on_every_connect_the_profile))
                 Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     TunnelProtocol.entries.forEach { transport ->
                         OptionRow(
@@ -696,17 +717,17 @@ fun RoutesScreen(
                             title = transport.label,
                             subtitle = when (transport) {
                                 TunnelProtocol.AUTO ->
-                                    "Finds what this network allows, and remembers it"
-                                TunnelProtocol.H3 -> "QUIC. Faster where UDP gets through"
-                                TunnelProtocol.H2 -> "TCP. Survives networks that block UDP"
+                                    stringResource(R.string.finds_what_this_network_allows_and_remembers)
+                                TunnelProtocol.H3 -> stringResource(R.string.quic_faster_where_udp_gets_through)
+                                TunnelProtocol.H2 -> stringResource(R.string.tcp_survives_networks_that_block_udp)
                                 // Its own account and its own endpoints, so a
                                 // failed MASQUE retry never lands here and the
                                 // first connect has a scan of its own to do.
-                                TunnelProtocol.WIREGUARD -> "UDP, with an obfuscation sweep. Separate identity"
+                                TunnelProtocol.WIREGUARD -> stringResource(R.string.udp_with_an_obfuscation_sweep_separate_identity)
                                 // Two WARP tunnels, the inner handshaking
                                 // through the outer, so what an observer sees is
                                 // one session carrying opaque UDP.
-                                TunnelProtocol.WARP_IN_WARP -> "Nested tunnel. Slower, harder to classify"
+                                TunnelProtocol.WARP_IN_WARP -> stringResource(R.string.nested_tunnel_slower_harder_to_classify)
                             },
                             selected = settings.transport == transport,
                             onClick = { onSettingsChange(settings.copy(transport = transport)) },
@@ -718,23 +739,21 @@ fun RoutesScreen(
                 // saying so would warn about a limitation it does not have.
                 if (settings.transport.endpointFamily == EndpointFamily.WARP) {
                     Note(
-                        "${settings.transport.label} runs over UDP. On a network that blocks " +
-                            "UDP outright it will not connect at all, and MASQUE H2 over TCP is " +
-                            "the one to use there.",
+                        stringResource(R.string.settings_transport_label_runs_over_udp_on, settings.transport.label),
                     )
                 }
-                CardHead("Discovery depth", "How hard to search for a route. Deeper takes longer and uses more data.")
+                CardHead(stringResource(R.string.discovery_depth), stringResource(R.string.how_hard_to_search_for_a_route))
                 Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     ScanStrategy.entries.forEachIndexed { index, strategy ->
                         OptionRow(
                             code = (index + 1).toString(),
                             title = strategy.label,
                             subtitle = when (strategy) {
-                                ScanStrategy.TURBO -> "Fastest, fewest endpoints tested"
-                                ScanStrategy.BALANCED -> "Default. A good result in a few seconds"
-                                ScanStrategy.THOROUGH -> "Tests more endpoints before choosing"
-                                ScanStrategy.STEALTH -> "Quieter probing on watchful networks"
-                                ScanStrategy.IRONCLAD -> "Slowest and most stubborn"
+                                ScanStrategy.TURBO -> stringResource(R.string.fastest_fewest_endpoints_tested)
+                                ScanStrategy.BALANCED -> stringResource(R.string.default_a_good_result_in_a_few)
+                                ScanStrategy.THOROUGH -> stringResource(R.string.tests_more_endpoints_before_choosing)
+                                ScanStrategy.STEALTH -> stringResource(R.string.quieter_probing_on_watchful_networks)
+                                ScanStrategy.IRONCLAD -> stringResource(R.string.slowest_and_most_stubborn)
                             },
                             selected = settings.scanStrategy == strategy,
                             onClick = { onSettingsChange(settings.copy(scanStrategy = strategy)) },
@@ -771,8 +790,8 @@ fun EndpointScreen(
     val engineBusy = status.stage !in setOf(EngineStage.IDLE, EngineStage.ERROR)
 
     ScreenColumn {
-        CrumbBar("Routes · Endpoint", onBack = onBack)
-        PageTitle("Where it connects to", "Leave this automatic unless someone gave you an address to use.")
+        CrumbBar(stringResource(R.string.routes_endpoint), onBack = onBack)
+        PageTitle(stringResource(R.string.where_it_connects_to), stringResource(R.string.leave_this_automatic_unless_someone_gave_you))
 
         settings.endpointProtocolMismatch()?.let { pinnedFor ->
             // Without this the connect fails with a message about the address,
@@ -780,11 +799,11 @@ fun EndpointScreen(
             // protocol that is no longer selected.
             AttentionCard(
                 tone = colors.signalFailed,
-                title = "This address is not for ${settings.transport.label}",
+                title = stringResource(R.string.this_address_is_not_for_settings_transport, settings.transport.label),
                 body = "It was found for ${pinnedFor.label}, and endpoints are not shared " +
                     "between protocols. Scan again, or switch Endpoint back to Automatic.",
                 actions = listOf(
-                    "Use automatic" to {
+                    stringResource(R.string.use_automatic) to {
                         onSettingsChange(
                             settings.copy(
                                 endpointMode = EndpointMode.AUTOMATIC,
@@ -803,7 +822,7 @@ fun EndpointScreen(
                 SegGroup(
                     options = listOf(false, true),
                     selected = custom,
-                    label = { if (it) "Specific address" else "Automatic" },
+                    label = { if (it) stringResource(R.string.specific_address) else "Automatic" },
                     onSelect = { wantCustom ->
                         onSettingsChange(
                             settings.copy(
@@ -815,7 +834,7 @@ fun EndpointScreen(
             }
             if (custom) {
                 Column(Modifier.padding(horizontal = 15.dp)) {
-                    SectionLabel("Address")
+                    SectionLabel(stringResource(R.string.address))
                     Spacer(Modifier.height(7.dp))
                     OutlinedTextField(
                         value = endpointText,
@@ -840,8 +859,8 @@ fun EndpointScreen(
                             Text(
                                 when {
                                     endpointText.isBlank() -> "Looks like 162.159.197.3:443"
-                                    normalized != null -> "Valid address"
-                                    else -> "Needs an IP and a port"
+                                    normalized != null -> stringResource(R.string.valid_address)
+                                    else -> stringResource(R.string.needs_an_ip_and_a_port)
                                 },
                                 style = AetherType.Small,
                             )
@@ -859,8 +878,8 @@ fun EndpointScreen(
                 }
                 Divider(Modifier.padding(top = 6.dp))
                 ToggleSettingRow(
-                    title = "Fall back automatically",
-                    subtitle = "If this address stops working, search for another instead of failing.",
+                    title = stringResource(R.string.fall_back_automatically),
+                    subtitle = stringResource(R.string.if_this_address_stops_working_search_for),
                     checked = settings.endpointMode == EndpointMode.CUSTOM_FIRST,
                     onCheckedChange = {
                         onSettingsChange(
@@ -877,7 +896,7 @@ fun EndpointScreen(
         Spacer(Modifier.height(12.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             OutlineButton(
-                text = if (scannerState.operation == EndpointOperation.TESTING) "Testing…" else "Test this one",
+                text = if (scannerState.operation == EndpointOperation.TESTING) "Testing…" else stringResource(R.string.test_this_one),
                 modifier = Modifier.weight(1f),
                 enabled = custom && normalized != null && scannerState.operation == null && !engineBusy,
                 onClick = { onTestEndpoint(settings.copy(customEndpoint = endpointText)) },
@@ -886,7 +905,7 @@ fun EndpointScreen(
                 text = when (scannerState.operation) {
                     EndpointOperation.SCANNING -> "Stop"
                     EndpointOperation.CANCELLING -> "Stopping…"
-                    else -> "Find endpoints"
+                    else -> stringResource(R.string.find_endpoints)
                 },
                 modifier = Modifier
                     .weight(1f)
@@ -906,12 +925,12 @@ fun EndpointScreen(
         Spacer(Modifier.height(12.dp))
         AetherCard {
             Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                SectionLabel("Endpoints that worked")
+                SectionLabel(stringResource(R.string.endpoints_that_worked))
                 Spacer(Modifier.height(4.dp))
                 Text(
                     scannerState.error
                         ?: scannerState.message
-                        ?: "Not searched yet",
+                        ?: stringResource(R.string.not_searched_yet),
                     style = AetherType.Data,
                     color = if (scannerState.error != null) colors.signalFailed else colors.text2,
                 )
@@ -960,13 +979,12 @@ fun EndpointScreen(
                             color = colors.text3,
                         )
                     }
-                    Text("${result.rttMillis} ms", style = AetherType.Data, color = colors.brand)
+                    Text(stringResource(R.string.result_rttmillis_ms, result.rttMillis), style = AetherType.Data, color = colors.brand)
                 }
             }
         }
         Note(
-            "Only endpoints that pass the ${settings.transport.probedAs.label} check are listed. Tapping " +
-                "one pins it and turns fallback on. Endpoints are not shared between protocols.",
+            stringResource(R.string.only_endpoints_that_pass_the_settings_transport, settings.transport.probedAs.label),
         )
     }
 }
@@ -994,14 +1012,14 @@ fun TrafficScreen(
     val colors = AetherTheme.colors
 
     ScreenColumn {
-        CrumbBar("Traffic")
-        PageTitle("What is protected", "Choose how much of the device is covered. The rest has safe defaults.")
+        CrumbBar(stringResource(R.string.traffic))
+        PageTitle(stringResource(R.string.what_is_protected), stringResource(R.string.choose_how_much_of_the_device_is))
 
         if (settings.mode == EngineMode.TUN) {
             AetherCard {
                 RowCard(
                     icon = AetherIcons.Sliders,
-                    title = "Apps",
+                    title = stringResource(R.string.apps),
                     subtitle = settings.splitTunnel.summary(),
                     iconTint = AetherTheme.colors.cyan,
                     modifier = appsModifier.testTag("traffic-apps"),
@@ -1012,7 +1030,7 @@ fun TrafficScreen(
         }
 
         AetherCard {
-            CardHead("Coverage", "Android asks permission the first time you pick whole-device.")
+            CardHead(stringResource(R.string.coverage), stringResource(R.string.android_asks_permission_the_first_time_you))
             Row(
                 modifier = Modifier
                     .padding(11.dp)
@@ -1021,8 +1039,8 @@ fun TrafficScreen(
             ) {
                 ChoiceCard(
                     icon = AetherIcons.Shield,
-                    name = "Whole device",
-                    description = "Every app is covered. What most people want.",
+                    name = stringResource(R.string.whole_device),
+                    description = stringResource(R.string.every_app_is_covered_what_most_people),
                     tag = "Recommended",
                     selected = settings.mode == EngineMode.TUN,
                     modifier = Modifier
@@ -1032,8 +1050,8 @@ fun TrafficScreen(
                 )
                 ChoiceCard(
                     icon = AetherIcons.Proxy,
-                    name = "Proxy only",
-                    description = "Just apps you point at the local proxy.",
+                    name = stringResource(R.string.proxy_only),
+                    description = stringResource(R.string.just_apps_you_point_at_the_local),
                     selected = settings.mode == EngineMode.PROXY,
                     modifier = Modifier
                         .weight(1f)
@@ -1045,12 +1063,12 @@ fun TrafficScreen(
 
         Spacer(Modifier.height(12.dp))
         AetherCard {
-            CardHead("Addresses", "Turn off IPv6 if a network handles it badly.")
+            CardHead(stringResource(R.string.addresses), stringResource(R.string.turn_off_ipv6_if_a_network_handles))
             Box(Modifier.padding(11.dp)) {
                 SegGroup(
                     options = listOf(true, false),
                     selected = settings.dualStack,
-                    label = { if (it) "IPv4 + IPv6" else "IPv4 only" },
+                    label = { if (it) stringResource(R.string.ipv4_ipv6) else stringResource(R.string.ipv4_only) },
                     onSelect = { onSettingsChange(settings.copy(dualStack = it)) },
                 )
             }
@@ -1059,17 +1077,17 @@ fun TrafficScreen(
         Spacer(Modifier.height(12.dp))
         AetherCard {
             AdvancedSection(
-                badge = "Obfuscation · Blocking · Port",
+                badge = stringResource(R.string.obfuscation_blocking_port),
                 expanded = advanced,
                 onToggle = { advanced = !advanced },
             ) {
-                CardHead("Obfuscation", "Makes tunnel traffic harder to fingerprint. Costs a little speed.")
+                CardHead(stringResource(R.string.obfuscation), stringResource(R.string.makes_tunnel_traffic_harder_to_fingerprint_costs))
                 Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     NOIZE_PROFILES.forEach { (value, title, subtitle) ->
                         OptionRow(
                             code = null,
-                            title = title,
-                            subtitle = subtitle,
+                            title = stringResource(title),
+                            subtitle = stringResource(subtitle),
                             selected = settings.noizeProfile == value,
                             onClick = { onSettingsChange(settings.copy(noizeProfile = value)) },
                         )
@@ -1079,9 +1097,9 @@ fun TrafficScreen(
                 Divider()
                 Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
                     val portInteraction = remember { MutableInteractionSource() }
-                    Text("Local proxy port", style = AetherType.RowTitle, color = colors.text)
+                    Text(stringResource(R.string.local_proxy_port), style = AetherType.RowTitle, color = colors.text)
                     Text(
-                        "Where proxy-only mode listens on this device.",
+                        stringResource(R.string.where_proxy_only_mode_listens_on_this),
                         style = AetherType.Small,
                         color = colors.text2,
                     )
@@ -1102,7 +1120,7 @@ fun TrafficScreen(
                             .testTag("proxy-port-field"),
                         interactionSource = portInteraction,
                         textStyle = AetherType.Data.copy(color = colors.text),
-                        supportingText = { Text("Between 1024 and 65535", style = AetherType.Small) },
+                        supportingText = { Text(stringResource(R.string.between_1024_and_65535), style = AetherType.Small) },
                         isError = portText.toIntOrNull() !in 1_024..65_535,
                         singleLine = true,
                         shape = RoundedCornerShape(14.dp),
@@ -1117,9 +1135,8 @@ fun TrafficScreen(
 
                 Divider()
                 ToggleSettingRow(
-                    title = "Share with this network",
-                    subtitle = "Lets other devices on the same Wi-Fi use this tunnel " +
-                        "through the proxy above.",
+                    title = stringResource(R.string.share_with_this_network),
+                    subtitle = stringResource(R.string.lets_other_devices_on_the_same_wi),
                     checked = settings.lanSharing,
                     onCheckedChange = { onSettingsChange(settings.copy(lanSharing = it)) },
                     modifier = Modifier.testTag("lan-sharing-switch"),
@@ -1141,7 +1158,7 @@ fun TrafficScreen(
                                 "Point other devices at $address:${settings.proxyPort} " +
                                     "as a SOCKS5 proxy."
                             } else {
-                                "Join a Wi-Fi network to get an address other devices can use."
+                                stringResource(R.string.join_a_wi_fi_network_to_get)
                             },
                             style = AetherType.Small,
                             color = colors.text2,
@@ -1164,13 +1181,12 @@ fun TrafficScreen(
                         }
 
                         Text(
-                            text = "A password is optional. Leave both boxes empty to share " +
-                                "without one, or fill both to require it.",
+                            text = stringResource(R.string.a_password_is_optional_leave_both_boxes),
                             style = AetherType.Small,
                             color = colors.text2,
                         )
                         LanCredentialField(
-                            label = "Username (optional)",
+                            label = stringResource(R.string.username_optional),
                             value = lanUserText,
                             tag = "lan-username-field",
                             onValueChange = { entered ->
@@ -1179,7 +1195,7 @@ fun TrafficScreen(
                             },
                         )
                         LanCredentialField(
-                            label = "Password (optional)",
+                            label = stringResource(R.string.password_optional),
                             value = lanPassText,
                             tag = "lan-password-field",
                             onValueChange = { entered ->
@@ -1192,10 +1208,9 @@ fun TrafficScreen(
 
                 Divider()
                 Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                    Text("DNS inside the tunnel", style = AetherType.RowTitle, color = colors.text)
+                    Text(stringResource(R.string.dns_inside_the_tunnel), style = AetherType.RowTitle, color = colors.text)
                     Text(
-                        "Comma separated. Leave empty for the engine's own (1.1.1.1, " +
-                            "1.0.0.1). Entries that are not an address are ignored.",
+                        stringResource(R.string.comma_separated_leave_empty_for_the_engine),
                         style = AetherType.Small,
                         color = colors.text2,
                     )
@@ -1212,10 +1227,9 @@ fun TrafficScreen(
 
                 Divider()
                 Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                    Text("Dial out through a proxy", style = AetherType.RowTitle, color = colors.text)
+                    Text(stringResource(R.string.dial_out_through_a_proxy), style = AetherType.RowTitle, color = colors.text)
                     Text(
-                        "Send everything the tunnel dials through a proxy already running " +
-                            "on this phone: socks5://127.0.0.1:1080, or an http:// one.",
+                        stringResource(R.string.send_everything_the_tunnel_dials_through_a),
                         style = AetherType.Small,
                         color = colors.text2,
                     )
@@ -1232,11 +1246,9 @@ fun TrafficScreen(
 
                 Divider()
                 Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                    Text("WireGuard keepalive", style = AetherType.RowTitle, color = colors.text)
+                    Text(stringResource(R.string.wireguard_keepalive), style = AetherType.RowTitle, color = colors.text)
                     Text(
-                        "Seconds between the packets that hold the connection open. " +
-                            "25 is the standard; lower survives a network that forgets " +
-                            "faster, and costs battery.",
+                        stringResource(R.string.seconds_between_the_packets_that_hold_the),
                         style = AetherType.Small,
                         color = colors.text2,
                     )
@@ -1244,16 +1256,15 @@ fun TrafficScreen(
                     SegGroup(
                         options = listOf(5, 15, 25),
                         selected = settings.wgKeepalive,
-                        label = { "$it s" },
+                        label = { stringResource(R.string.it_s, it) },
                         onSelect = { onSettingsChange(settings.copy(wgKeepalive = it)) },
                     )
                 }
 
                 Divider()
                 ToggleSettingRow(
-                    title = "Block traffic if the tunnel fails",
-                    subtitle = "When every retry is spent, hold a blocking interface up " +
-                        "instead of letting the phone resume unprotected.",
+                    title = stringResource(R.string.block_traffic_if_the_tunnel_fails),
+                    subtitle = stringResource(R.string.when_every_retry_is_spent_hold_a),
                     checked = settings.killSwitch,
                     onCheckedChange = { onSettingsChange(settings.copy(killSwitch = it)) },
                     modifier = Modifier.testTag("kill-switch"),
@@ -1262,9 +1273,8 @@ fun TrafficScreen(
                 if (settings.killSwitch) {
                     Divider()
                     ToggleSettingRow(
-                        title = "Keep blocking after you disconnect",
-                        subtitle = "Nothing reaches the internet between sessions until you " +
-                            "lift it. The app says so while it is on.",
+                        title = stringResource(R.string.keep_blocking_after_you_disconnect),
+                        subtitle = stringResource(R.string.nothing_reaches_the_internet_between_sessions_un),
                         checked = settings.strictKillSwitch,
                         onCheckedChange = {
                             onSettingsChange(settings.copy(strictKillSwitch = it))
@@ -1275,9 +1285,8 @@ fun TrafficScreen(
 
                 Divider()
                 ToggleSettingRow(
-                    title = "Match rules on domain names",
-                    subtitle = "Reads the name from a connection's first bytes. Without it a " +
-                        "rule written against a domain never matches on this platform.",
+                    title = stringResource(R.string.match_rules_on_domain_names),
+                    subtitle = stringResource(R.string.reads_the_name_from_a_connection_s),
                     checked = settings.routeSniff,
                     onCheckedChange = { onSettingsChange(settings.copy(routeSniff = it)) },
                     modifier = Modifier.testTag("route-sniff-switch"),
@@ -1285,9 +1294,8 @@ fun TrafficScreen(
 
                 Divider()
                 ToggleSettingRow(
-                    title = "Replace a refused identity",
-                    subtitle = "If Cloudflare stops accepting the saved identity, register a " +
-                        "fresh one instead of holding a tunnel that carries nothing.",
+                    title = stringResource(R.string.replace_a_refused_identity),
+                    subtitle = stringResource(R.string.if_cloudflare_stops_accepting_the_saved_identity),
                     checked = settings.autoReprovision,
                     onCheckedChange = { onSettingsChange(settings.copy(autoReprovision = it)) },
                     modifier = Modifier.testTag("auto-reprovision-switch"),
@@ -1295,8 +1303,8 @@ fun TrafficScreen(
 
                 Divider()
                 ToggleSettingRow(
-                    title = "Check the connection works",
-                    subtitle = "Sends one test request after connecting. Leave this on.",
+                    title = stringResource(R.string.check_the_connection_works),
+                    subtitle = stringResource(R.string.sends_one_test_request_after_connecting_leave),
                     checked = settings.validationEnabled,
                     onCheckedChange = { onSettingsChange(settings.copy(validationEnabled = it)) },
                     modifier = Modifier.testTag("validation-switch"),
@@ -1304,9 +1312,8 @@ fun TrafficScreen(
 
                 Divider()
                 ToggleSettingRow(
-                    title = "Split the TLS handshake",
-                    subtitle = "Sends the first packet in pieces so filtering that reads the " +
-                        "site name cannot see it. Turn this on where connections are blocked.",
+                    title = stringResource(R.string.split_the_tls_handshake),
+                    subtitle = stringResource(R.string.sends_the_first_packet_in_pieces_so),
                     checked = settings.fragmentTls,
                     onCheckedChange = { onSettingsChange(settings.copy(fragmentTls = it)) },
                     modifier = Modifier.testTag("fragment-tls-switch"),
@@ -1314,9 +1321,8 @@ fun TrafficScreen(
 
                 Divider()
                 ToggleSettingRow(
-                    title = "Encrypted Client Hello",
-                    subtitle = "Hides which site is being reached. Only works where the network " +
-                        "on the other end supports it.",
+                    title = stringResource(R.string.encrypted_client_hello),
+                    subtitle = stringResource(R.string.hides_which_site_is_being_reached_only),
                     checked = settings.encryptedHello,
                     onCheckedChange = { onSettingsChange(settings.copy(encryptedHello = it)) },
                     modifier = Modifier.testTag("ech-switch"),
@@ -1326,8 +1332,8 @@ fun TrafficScreen(
                 // Read-only on purpose: the resolvers are fixed inside the engine
                 // and there is no config key to change them.
                 SettingRow(
-                    title = "DNS resolvers",
-                    subtitle = "Fixed in the engine. Not configurable yet.",
+                    title = stringResource(R.string.dns_resolvers),
+                    subtitle = stringResource(R.string.fixed_in_the_engine_not_configurable_yet),
                 ) {
                     Text("1.1.1.1", style = AetherType.Data, color = colors.text2)
                 }
@@ -1337,10 +1343,12 @@ fun TrafficScreen(
 }
 
 /** The three the engine's `from_profile` actually distinguishes. */
+// The wire name the engine wants, then the two resource ids the row shows.
+// Built once at class-load, so it holds ids rather than resolved text.
 private val NOIZE_PROFILES = listOf(
-    Triple("firewall", "Firewall", "Default. Padding tuned for ordinary filtering."),
-    Triple("gfw", "Aggressive", "Heavier padding for networks that inspect closely."),
-    Triple("none", "Off", "No obfuscation. Faster, but easier to block."),
+    Triple("firewall", R.string.noize_firewall, R.string.default_padding_tuned_for_ordinary_filtering),
+    Triple("gfw", R.string.noize_aggressive, R.string.heavier_padding_for_networks_that_inspect_closel),
+    Triple("none", R.string.noize_off, R.string.no_obfuscation_faster_but_easier_to_block),
 )
 
 /**
@@ -1477,19 +1485,17 @@ fun RoutingRulesScreen(
     var directText by remember(settings.routeDirect) { mutableStateOf(settings.routeDirect) }
 
     ScreenColumn {
-        CrumbBar("Routes · Rules", onBack = onBack)
+        CrumbBar(stringResource(R.string.routes_rules), onBack = onBack)
         PageTitle(
-            "Routing rules",
-            "Everything not named here goes through the tunnel.",
+            stringResource(R.string.routing_rules),
+            stringResource(R.string.everything_not_named_here_goes_through_the),
         )
 
         if (!settings.routeSniff) {
             AetherCard {
                 CardHead(
-                    "Domain rules will not match",
-                    "This app is always a tun front end, so a connection arrives as a bare " +
-                        "address. Turn on \"Match rules on domain names\" under Traffic, or " +
-                        "only the address rules below will do anything.",
+                    stringResource(R.string.domain_rules_will_not_match),
+                    stringResource(R.string.this_app_is_always_a_tun_front),
                 )
                 Spacer(Modifier.height(11.dp))
             }
@@ -1498,14 +1504,14 @@ fun RoutingRulesScreen(
 
         AetherCard {
             CardHead(
-                "Never connect",
-                "Refused before anything is dialled. One rule per line.",
+                stringResource(R.string.never_connect),
+                stringResource(R.string.refused_before_anything_is_dialled_one_rule),
             )
             Box(Modifier.padding(11.dp)) {
                 RuleField(
                     value = blockText,
                     tag = "route-block-field",
-                    placeholder = "ads.example.com\nkeyword:tracker\nport:25",
+                    placeholder = stringResource(R.string.ads_example_com_nkeyword_tracker_nport_25),
                     onValueChange = { entered ->
                         blockText = entered
                         onSettingsChange(settings.copy(routeBlock = entered))
@@ -1517,15 +1523,14 @@ fun RoutingRulesScreen(
         Spacer(Modifier.height(12.dp))
         AetherCard {
             CardHead(
-                "Skip the tunnel",
-                "Reached with this device's real address. For a bank or a domestic " +
-                    "service that refuses foreign ones.",
+                stringResource(R.string.skip_the_tunnel),
+                stringResource(R.string.reached_with_this_device_s_real_address),
             )
             Box(Modifier.padding(11.dp)) {
                 RuleField(
                     value = directText,
                     tag = "route-direct-field",
-                    placeholder = "bank.example.ir\nprivate\ncidr:10.0.0.0/8",
+                    placeholder = stringResource(R.string.bank_example_ir_nprivate_ncidr_10_0),
                     onValueChange = { entered ->
                         directText = entered
                         onSettingsChange(settings.copy(routeDirect = entered))
@@ -1535,16 +1540,12 @@ fun RoutingRulesScreen(
         }
 
         Note(
-            "A plain name matches it and everything under it. Prefixes narrow that: " +
-                "full: exactly, keyword: anywhere in the name, regexp: a pattern, cidr: an " +
-                "address block, port: a number or range, private: the local network. " +
-                "A line starting with # is a note.",
+            stringResource(R.string.a_plain_name_matches_it_and_everything),
         )
 
         if (settings.routeDirect.isNotBlank()) {
             Text(
-                "Anything under Skip the tunnel leaves with your real address. That is what " +
-                    "it is for, and it is also what makes it worth keeping short.",
+                stringResource(R.string.anything_under_skip_the_tunnel_leaves_with),
                 style = AetherType.Small,
                 color = colors.signalWorking,
                 modifier = Modifier.padding(horizontal = 2.dp, vertical = 8.dp),
@@ -1601,7 +1602,7 @@ private fun RuleField(
 @Composable
 private fun LanguageSetting(selected: AppLanguage, onSelect: (AppLanguage) -> Unit) {
     Column {
-        CardHead("Language", "The app's language, whatever your phone is set to.")
+        CardHead(stringResource(R.string.language), stringResource(R.string.the_app_s_language_whatever_your_phone))
         Box(Modifier.padding(11.dp)) {
             SegGroup(
                 options = AppLanguage.entries,
@@ -1636,16 +1637,16 @@ fun SettingsScreen(
     aboutModifier: Modifier = Modifier,
 ) {
     ScreenColumn {
-        CrumbBar("Settings")
-        PageTitle("Settings", "The app itself — nothing here changes how you connect.")
+        CrumbBar(stringResource(R.string.settings))
+        PageTitle(stringResource(R.string.settings), stringResource(R.string.the_app_itself_nothing_here_changes_how))
 
         AetherCard {
-            CardHead("Appearance", "System follows your phone's light or dark setting.")
+            CardHead(stringResource(R.string.appearance), stringResource(R.string.system_follows_your_phone_s_light_or))
             Box(Modifier.padding(11.dp)) {
                 SegGroup(
                     options = ThemeMode.entries,
                     selected = settings.themeMode,
-                    label = ThemeMode::label,
+                    label = { it.label },
                     onSelect = { onSettingsChange(settings.copy(themeMode = it)) },
                 )
             }
@@ -1656,8 +1657,8 @@ fun SettingsScreen(
             )
             Divider()
             ToggleSettingRow(
-                title = "Show advanced controls",
-                subtitle = "Opens every Advanced section by default across the app.",
+                title = stringResource(R.string.show_advanced_controls),
+                subtitle = stringResource(R.string.opens_every_advanced_section_by_default_across),
                 checked = settings.showAdvanced,
                 onCheckedChange = { onSettingsChange(settings.copy(showAdvanced = it)) },
                 modifier = Modifier.testTag("show-advanced-switch"),
@@ -1670,11 +1671,11 @@ fun SettingsScreen(
             Spacer(Modifier.height(12.dp))
             AetherCard {
                 SettingRow(
-                    title = "Add a quick settings tile",
-                    subtitle = "Connect and disconnect from the notification shade.",
+                    title = stringResource(R.string.add_a_quick_settings_tile),
+                    subtitle = stringResource(R.string.connect_and_disconnect_from_the_notification_sha),
                 ) {
                     OutlineButton(
-                        text = "Add",
+                        text = stringResource(R.string.add),
                         modifier = Modifier.testTag("add-tile-button"),
                         onClick = onAddTile,
                     )
@@ -1693,24 +1694,22 @@ fun SettingsScreen(
                     // The dialog was opened and changed nothing, so repeating
                     // it is the one thing already known not to work here.
                     CardHead(
-                        "Set this in your phone's settings",
-                        "This phone keeps its own battery rules beside Android's, and the " +
-                            "prompt did not change them. Open Settings, find Battery for " +
-                            "WhiteAesther, and choose the unrestricted option.",
+                        stringResource(R.string.set_this_in_your_phone_s_settings),
+                        stringResource(R.string.this_phone_keeps_its_own_battery_rules),
                     )
                     Column(
                         Modifier.padding(11.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         PrimaryButton(
-                            text = "Open app settings",
+                            text = stringResource(R.string.open_app_settings),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("battery-app-settings-button"),
                             onClick = onOpenAppSettings,
                         )
                         OutlineButton(
-                            text = "I've done this",
+                            text = stringResource(R.string.i_ve_done_this),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("battery-dismiss-button"),
@@ -1721,13 +1720,12 @@ fun SettingsScreen(
                     }
                 } else {
                     CardHead(
-                        "Keep running in the background",
-                        "Android is allowed to suspend WhiteAesther while the screen is off, " +
-                            "which drops the connection. Excluding it from battery optimisation stops that.",
+                        stringResource(R.string.keep_running_in_the_background),
+                        stringResource(R.string.android_is_allowed_to_suspend_whiteaesther_while),
                     )
                     Box(Modifier.padding(11.dp)) {
                         PrimaryButton(
-                            text = "Allow background running",
+                            text = stringResource(R.string.allow_background_running),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("battery-exemption-button"),
@@ -1742,24 +1740,24 @@ fun SettingsScreen(
         AetherCard {
             RowCard(
                 icon = AetherIcons.Key,
-                title = "Identity & access",
-                subtitle = "The device identity this app was issued",
+                title = stringResource(R.string.identity_access),
+                subtitle = stringResource(R.string.the_device_identity_this_app_was_issued),
                 modifier = identityModifier.testTag("settings-identity"),
                 onClick = onGoToIdentity,
             )
             Divider()
             RowCard(
                 icon = AetherIcons.Pulse,
-                title = "Diagnostics & logs",
-                subtitle = "See what happened, and send a report to the developer",
+                title = stringResource(R.string.diagnostics_logs),
+                subtitle = stringResource(R.string.see_what_happened_and_send_a_report),
                 modifier = diagnosticsModifier.testTag("settings-diagnostics"),
                 onClick = onGoToDiagnostics,
             )
             Divider()
             RowCard(
                 icon = AetherIcons.Info,
-                title = "About WhiteAesther",
-                subtitle = "Version, engine build, and licences",
+                title = stringResource(R.string.about_whiteaesther),
+                subtitle = stringResource(R.string.version_engine_build_and_licences),
                 modifier = aboutModifier.testTag("settings-about"),
                 onClick = onGoToAbout,
             )
@@ -1801,11 +1799,11 @@ private fun CommunityFooter() {
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Icon(AetherIcons.Telegram, null, Modifier.size(19.dp), colors.cyan)
-            Text("Join us on Telegram", style = AetherType.RowTitle, color = colors.cyan)
+            Text(stringResource(R.string.join_us_on_telegram), style = AetherType.RowTitle, color = colors.cyan)
         }
         if (unavailable) {
             Text(
-                "No app on this device can open the community link.",
+                stringResource(R.string.no_app_on_this_device_can_open),
                 style = AetherType.Small,
                 color = colors.signalFailed,
                 modifier = Modifier.padding(top = 8.dp).testTag("telegram-unavailable"),
@@ -1813,13 +1811,13 @@ private fun CommunityFooter() {
         }
         Spacer(Modifier.height(10.dp))
         Text(
-            "t.me/whitedns",
+            stringResource(R.string.t_me_whitedns),
             style = AetherType.Data.copy(fontSize = 12.5f.sp),
             color = colors.text3,
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            "News, releases and help",
+            stringResource(R.string.news_releases_and_help),
             style = AetherType.Small,
             color = colors.text3,
         )
@@ -1827,7 +1825,7 @@ private fun CommunityFooter() {
         Icon(AetherIcons.Globe, null, Modifier.size(22.dp), colors.text3.copy(alpha = 0.5f))
         Spacer(Modifier.height(6.dp))
         Text(
-            "WhiteAesther ${com.whitedns.whiteaesther.BuildConfig.VERSION_NAME}",
+            stringResource(R.string.whiteaesther_com_whitedns_whiteaesther_buildconf, com.whitedns.whiteaesther.BuildConfig.VERSION_NAME),
             style = AetherType.Small.copy(fontSize = 12.sp),
             color = colors.text3,
         )
@@ -1844,32 +1842,32 @@ fun IdentityScreen(
 ) {
     val colors = AetherTheme.colors
     ScreenColumn {
-        CrumbBar("Settings · Identity", onBack = onBack)
+        CrumbBar(stringResource(R.string.settings_identity), onBack = onBack)
         PageTitle(
-            "Identity & access",
-            "WhiteAesther issues this device its own identity. There is no account to create.",
+            stringResource(R.string.identity_access),
+            stringResource(R.string.whiteaesther_issues_this_device_its_own_identity),
         )
         AetherCard {
-            FactRow("Identity", "Generated on first connect")
+            FactRow("Identity", stringResource(R.string.generated_on_first_connect))
             Divider()
-            FactRow("Private key", "App-private storage")
+            FactRow(stringResource(R.string.private_key), stringResource(R.string.app_private_storage))
             Divider()
-            FactRow("Leaves this device", "Only if you save a backup")
+            FactRow(stringResource(R.string.leaves_this_device), stringResource(R.string.only_if_you_save_a_backup))
             Divider()
-            FactRow("Organisation team", "Not configured")
+            FactRow(stringResource(R.string.organisation_team), stringResource(R.string.not_configured))
         }
 
         Spacer(Modifier.height(12.dp))
         AetherCard {
             CardHead(
-                "Back up your identity",
-                "Uninstalling deletes it, and a new one is not always free to get.",
+                stringResource(R.string.back_up_your_identity),
+                stringResource(R.string.uninstalling_deletes_it_and_a_new_one),
             )
             Divider()
             RowCard(
                 icon = AetherIcons.Send,
-                title = "Save a backup",
-                subtitle = "Write this device's identity to a file you keep",
+                title = stringResource(R.string.save_a_backup),
+                subtitle = stringResource(R.string.write_this_device_s_identity_to_a),
                 iconTint = colors.cyan,
                 trailing = false,
                 onClick = onExport,
@@ -1877,8 +1875,8 @@ fun IdentityScreen(
             Divider()
             RowCard(
                 icon = AetherIcons.Key,
-                title = "Restore from a backup",
-                subtitle = "Use an identity saved from this or another device",
+                title = stringResource(R.string.restore_from_a_backup),
+                subtitle = stringResource(R.string.use_an_identity_saved_from_this_or),
                 iconTint = colors.brand,
                 trailing = false,
                 onClick = onImport,
@@ -1889,20 +1887,16 @@ fun IdentityScreen(
             Spacer(Modifier.height(12.dp))
             AttentionCard(
                 tone = if (message.isError) colors.signalFailed else colors.brand,
-                title = if (message.isError) "That did not work" else "Done",
+                title = if (message.isError) stringResource(R.string.that_did_not_work) else "Done",
                 body = message.text,
             )
         }
 
         Note(
-            "Cloudflare limits how many identities one network can register. Reinstalling throws " +
-                "yours away, and after a few times it can refuse to issue another -- which looks " +
-                "exactly like the app being broken. A backup skips all of that.",
+            stringResource(R.string.cloudflare_limits_how_many_identities_one_networ),
         )
         Note(
-            "Treat the file like a password: anyone who has it can present as this device. It is " +
-                "not encrypted, so keep it somewhere you would keep a password, and do not send " +
-                "it over a channel you would not send one.",
+            stringResource(R.string.treat_the_file_like_a_password_anyone),
         )
     }
 }
@@ -1910,11 +1904,11 @@ fun IdentityScreen(
 @Composable
 fun AboutScreen(nativeVersion: String?, settings: AppSettings, onBack: () -> Unit) {
     ScreenColumn {
-        CrumbBar("Settings · About", onBack = onBack)
-        PageTitle("About WhiteAesther")
+        CrumbBar(stringResource(R.string.settings_about), onBack = onBack)
+        PageTitle(stringResource(R.string.about_whiteaesther))
         AetherCard {
             FactRow(
-                "App version",
+                stringResource(R.string.app_version),
                 "${com.whitedns.whiteaesther.BuildConfig.VERSION_NAME} (${com.whitedns.whiteaesther.BuildConfig.VERSION_CODE})",
                 mono = true,
             )
@@ -1925,26 +1919,24 @@ fun AboutScreen(nativeVersion: String?, settings: AppSettings, onBack: () -> Uni
         }
         Spacer(Modifier.height(12.dp))
         AetherCard {
-            CardHead("Privacy by default")
+            CardHead(stringResource(R.string.privacy_by_default))
             Spacer(Modifier.height(6.dp))
-            FactRow("Proxy bind", settings.proxyBindLabel(), mono = true)
+            FactRow(stringResource(R.string.proxy_bind), settings.proxyBindLabel(), mono = true)
             Divider()
             FactRow("Backups", "Disabled")
             Divider()
-            FactRow("Cleartext traffic", "Blocked")
+            FactRow(stringResource(R.string.cleartext_traffic), "Blocked")
         }
         Spacer(Modifier.height(12.dp))
         AetherCard {
-            CardHead("Licence and source")
+            CardHead(stringResource(R.string.licence_and_source))
             Spacer(Modifier.height(6.dp))
             FactRow("Licence", "AGPL-3.0")
             Divider()
             FactRow("Source", "github.com/WhiteDNS/WhiteAestherMobile", mono = true)
         }
         Note(
-            "WhiteAestherMobile and the Aether engine it embeds are free software under " +
-                "AGPL-3.0. The complete source for this build, and the notices for the " +
-                "third-party code it includes, are published at the address above.",
+            stringResource(R.string.whiteaesthermobile_and_the_aether_engine_it_embe),
         )
     }
 }
@@ -1982,16 +1974,16 @@ fun DiagnosticsScreen(
     }
 
     ScreenColumn {
-        CrumbBar("Settings · Diagnostics", onBack = onBack)
-        PageTitle("Diagnostics", "If something is broken, send this to the developer — it is how fixes get written.")
+        CrumbBar(stringResource(R.string.settings_diagnostics), onBack = onBack)
+        PageTitle(stringResource(R.string.diagnostics), stringResource(R.string.if_something_is_broken_send_this_to))
 
         AetherCard {
-            CardHead("Detail level", "Turn Verbose on, reproduce the problem, then send the report.")
+            CardHead(stringResource(R.string.detail_level), stringResource(R.string.turn_verbose_on_reproduce_the_problem_then))
             Box(Modifier.padding(11.dp)) {
                 SegGroup(
                     options = LogDetail.entries,
                     selected = detail,
-                    label = LogDetail::label,
+                    label = { it.label },
                     onSelect = { detail = it },
                 )
             }
@@ -2000,14 +1992,14 @@ fun DiagnosticsScreen(
         Spacer(Modifier.height(12.dp))
         AetherCard {
             Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                SectionLabel("Activity")
+                SectionLabel(stringResource(R.string.activity))
                 Spacer(Modifier.height(4.dp))
-                Text("${shown.size} events", style = AetherType.Data, color = colors.text2)
+                Text(stringResource(R.string.shown_size_events, shown.size), style = AetherType.Data, color = colors.text2)
             }
             if (shown.isEmpty()) {
                 Divider()
                 Text(
-                    "Nothing recorded yet. Connect once and the events show up here.",
+                    stringResource(R.string.nothing_recorded_yet_connect_once_and_the),
                     style = AetherType.Small,
                     color = colors.text3,
                     modifier = Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
@@ -2043,26 +2035,26 @@ fun DiagnosticsScreen(
 
         Spacer(Modifier.height(12.dp))
         AetherCard {
-            CardHead("Send to the developer", "Nothing leaves your phone until you tap Send. Choose what to include.")
+            CardHead(stringResource(R.string.send_to_the_developer), stringResource(R.string.nothing_leaves_your_phone_until_you_tap))
             Spacer(Modifier.height(6.dp))
-            CheckRow("App and engine version", "Always included — a report without it cannot be read.", true, null)
+            CheckRow(stringResource(R.string.app_and_engine_version), stringResource(R.string.always_included_a_report_without_it_cannot), true, null)
             Divider()
-            CheckRow("Phone model and Android version", deviceLine(), includeDevice) { includeDevice = it }
+            CheckRow(stringResource(R.string.phone_model_and_android_version), deviceLine(), includeDevice) { includeDevice = it }
             Divider()
-            CheckRow("Connection log", "The events listed above.", includeEvents) { includeEvents = it }
+            CheckRow(stringResource(R.string.connection_log), stringResource(R.string.the_events_listed_above), includeEvents) { includeEvents = it }
             Divider()
-            CheckRow("Your settings", "Profile, transport, coverage and port.", includeSettings) { includeSettings = it }
+            CheckRow(stringResource(R.string.your_settings), stringResource(R.string.profile_transport_coverage_and_port), includeSettings) { includeSettings = it }
             Divider()
             ToggleSettingRow(
-                title = "Hide IP addresses",
-                subtitle = "Replaces them with placeholders. Most problems can still be diagnosed.",
+                title = stringResource(R.string.hide_ip_addresses),
+                subtitle = stringResource(R.string.replaces_them_with_placeholders_most_problems_ca),
                 checked = redact,
                 onCheckedChange = { redact = it },
                 modifier = Modifier.testTag("redact-switch"),
             )
             Divider()
             Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                SectionLabel("Exactly what will be sent")
+                SectionLabel(stringResource(R.string.exactly_what_will_be_sent))
                 Spacer(Modifier.height(8.dp))
                 Box(
                     Modifier
@@ -2082,13 +2074,13 @@ fun DiagnosticsScreen(
         Spacer(Modifier.height(12.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             OutlineButton(
-                text = "Copy",
+                text = stringResource(R.string.copy),
                 icon = AetherIcons.Copy,
                 modifier = Modifier.weight(1f),
                 onClick = { onCopy(report) },
             )
             PrimaryButton(
-                text = "Send",
+                text = stringResource(R.string.send),
                 icon = AetherIcons.Send,
                 modifier = Modifier
                     .weight(1f)
@@ -2098,8 +2090,8 @@ fun DiagnosticsScreen(
         }
 
         Spacer(Modifier.height(12.dp))
-        OutlineButton(text = "Clear log", modifier = Modifier.fillMaxWidth(), onClick = onClear)
-        Note("Reports are only used to fix problems. Sending opens your own share sheet, so you choose where it goes.")
+        OutlineButton(text = stringResource(R.string.clear_log), modifier = Modifier.fillMaxWidth(), onClick = onClear)
+        Note(stringResource(R.string.reports_are_only_used_to_fix_problems))
     }
 }
 

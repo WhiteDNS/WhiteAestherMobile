@@ -41,8 +41,10 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.ui.theme.AetherTheme
 import com.whitedns.whiteaesther.ui.theme.AetherType
 import kotlin.math.cos
@@ -81,7 +83,7 @@ fun ConnectOrb(
     }
     val signal by animateColorAsState(target, tween(500), label = "orb-signal")
 
-    val transition = rememberInfiniteTransition(label = "orb")
+    val transition = rememberInfiniteTransition(label = stringResource(R.string.orb))
     val sweep by transition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,

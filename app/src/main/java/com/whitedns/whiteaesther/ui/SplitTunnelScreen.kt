@@ -42,11 +42,13 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
+import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.InstalledApp
 import com.whitedns.whiteaesther.data.InstalledApps
@@ -98,10 +100,10 @@ fun SplitTunnelScreen(
         contentPadding = PaddingValues(horizontal = 18.dp),
     ) {
         item(key = "header") {
-            CrumbBar("Traffic · Apps", onBack = onBack)
+            CrumbBar(stringResource(R.string.traffic_apps), onBack = onBack)
             PageTitle(
-                "Which apps go through",
-                "Leave this on all apps unless something needs to see your real address.",
+                stringResource(R.string.which_apps_go_through),
+                stringResource(R.string.leave_this_on_all_apps_unless_something),
             )
 
             AetherCard {
@@ -116,11 +118,11 @@ fun SplitTunnelScreen(
                             title = mode.label,
                             subtitle = when (mode) {
                                 SplitTunnelMode.ALL ->
-                                    "Everything is covered. What most people want."
+                                    stringResource(R.string.everything_is_covered_what_most_people_want)
                                 SplitTunnelMode.ONLY ->
-                                    "Only what you pick. Anything installed later stays outside."
+                                    stringResource(R.string.only_what_you_pick_anything_installed_later)
                                 SplitTunnelMode.EXCEPT ->
-                                    "Everything but what you pick. For banking and local apps."
+                                    stringResource(R.string.everything_but_what_you_pick_for_banking)
                             },
                             selected = rules.mode == mode,
                             onClick = {
@@ -137,9 +139,7 @@ fun SplitTunnelScreen(
         if (!listing) {
             item(key = "all-note") {
                 Note(
-                    "Every app on the phone goes through the tunnel. Pick one of the other two " +
-                        "if an app needs to see your real address -- a bank that blocks foreign " +
-                        "addresses, or something that only works from inside the country.",
+                    stringResource(R.string.every_app_on_the_phone_goes_through),
                 )
                 Spacer(Modifier.height(26.dp))
             }
@@ -151,7 +151,7 @@ fun SplitTunnelScreen(
                 Spacer(Modifier.height(12.dp))
                 AttentionCard(
                     tone = colors.signalFailed,
-                    title = "Nothing would be carried",
+                    title = stringResource(R.string.nothing_would_be_carried),
                     body = problem,
                 )
             }
@@ -160,7 +160,7 @@ fun SplitTunnelScreen(
         item(key = "search") {
             Spacer(Modifier.height(12.dp))
             SectionLabel(
-                if (rules.mode == SplitTunnelMode.ONLY) "Apps to carry" else "Apps to leave out",
+                if (rules.mode == SplitTunnelMode.ONLY) stringResource(R.string.apps_to_carry) else stringResource(R.string.apps_to_leave_out),
             )
             Spacer(Modifier.height(4.dp))
             Text(rules.summary(), style = AetherType.Small, color = colors.text2)
@@ -173,7 +173,7 @@ fun SplitTunnelScreen(
                     .tvTextFieldSupport(searchInteraction)
                     .testTag("split-search"),
                 interactionSource = searchInteraction,
-                placeholder = { Text("Search apps", style = AetherType.Body, color = colors.text3) },
+                placeholder = { Text(stringResource(R.string.search_apps), style = AetherType.Body, color = colors.text3) },
                 textStyle = AetherType.Body.copy(color = colors.text),
                 singleLine = true,
                 shape = RoundedCornerShape(14.dp),
@@ -187,15 +187,15 @@ fun SplitTunnelScreen(
 
         if (apps == null) {
             item(key = "loading") {
-                Note("Reading the apps on this phone…")
+                Note(stringResource(R.string.reading_the_apps_on_this_phone))
             }
         } else if (visible.isEmpty()) {
             item(key = "empty") {
                 Note(
                     if (apps.orEmpty().isEmpty()) {
-                        "No apps to list. This device reports nothing with a launcher icon."
+                        stringResource(R.string.no_apps_to_list_this_device_reports)
                     } else {
-                        "Nothing matches \"$query\"."
+                        stringResource(R.string.nothing_matches_query, query)
                     },
                 )
             }
@@ -219,8 +219,7 @@ fun SplitTunnelScreen(
 
         item(key = "footer") {
             Note(
-                "WhiteAesther itself is never in this list. Routing the app through its own " +
-                    "tunnel would send the connection it is building back into itself.",
+                stringResource(R.string.whiteaesther_itself_is_never_in_this_list),
             )
             Spacer(Modifier.height(26.dp))
         }
@@ -300,7 +299,7 @@ private fun AppRow(app: InstalledApp, checked: Boolean, onToggle: (Boolean) -> U
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                if (app.system) "System app" else app.packageName,
+                if (app.system) stringResource(R.string.system_app) else app.packageName,
                 style = AetherType.Small,
                 color = colors.text3,
                 maxLines = 1,

@@ -1,18 +1,18 @@
 package com.whitedns.whiteaesther.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
-import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -43,24 +43,26 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalInputModeManager
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.whitedns.whiteaesther.AddressPair
 import com.whitedns.whiteaesther.ChainState
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.IdentityMessage
-import com.whitedns.whiteaesther.AddressPair
-import com.whitedns.whiteaesther.data.UpdateChecker
+import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.data.AppSettings
-import com.whitedns.whiteaesther.service.TrafficSample
+import com.whitedns.whiteaesther.data.UpdateChecker
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatus
 import com.whitedns.whiteaesther.service.LogEntry
+import com.whitedns.whiteaesther.service.TrafficSample
 import com.whitedns.whiteaesther.ui.theme.AetherTheme
 import com.whitedns.whiteaesther.ui.theme.AetherType
 
@@ -423,7 +425,7 @@ private fun TvNavigationRail(selected: Tab, onSelect: (Tab) -> Unit) {
             }
         }
         Spacer(Modifier.weight(1f))
-        SectionLabel("TV")
+        SectionLabel(stringResource(R.string.tv))
     }
 }
 
