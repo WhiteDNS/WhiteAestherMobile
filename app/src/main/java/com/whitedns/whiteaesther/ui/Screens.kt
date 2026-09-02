@@ -68,6 +68,7 @@ import com.whitedns.whiteaesther.data.EndpointMode
 import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.data.TunnelProtocol
 import com.whitedns.whiteaesther.data.ScanStrategy
+import com.whitedns.whiteaesther.data.AppLanguage
 import com.whitedns.whiteaesther.data.ThemeMode
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatus
@@ -1586,6 +1587,38 @@ private fun RuleField(
 
 // -------------------------------------------------------------- settings ----
 
+/**
+ * Which language the app speaks.
+ *
+ * Each option is written in its own language rather than translated into the
+ * current one. Someone who has landed in a language they cannot read needs a
+ * way back out, and "Persian" is no help to a reader who does not read English
+ * -- but the word in Persian is.
+ *
+ * Changing this rebuilds the screen. Resources are resolved when an activity is
+ * created, so nothing already drawn can change language in place.
+ */
+@Composable
+private fun LanguageSetting(selected: AppLanguage, onSelect: (AppLanguage) -> Unit) {
+    Column {
+        CardHead("Language", "The app's language, whatever your phone is set to.")
+        Box(Modifier.padding(11.dp)) {
+            SegGroup(
+                options = AppLanguage.entries,
+                selected = selected,
+                label = { language ->
+                    when (language) {
+                        AppLanguage.SYSTEM -> "System"
+                        AppLanguage.ENGLISH -> "English"
+                        AppLanguage.PERSIAN -> "فارسی"
+                    }
+                },
+                onSelect = onSelect,
+            )
+        }
+    }
+}
+
 @Composable
 fun SettingsScreen(
     settings: AppSettings,
@@ -1616,6 +1649,11 @@ fun SettingsScreen(
                     onSelect = { onSettingsChange(settings.copy(themeMode = it)) },
                 )
             }
+            Divider()
+            LanguageSetting(
+                selected = settings.language,
+                onSelect = { onSettingsChange(settings.copy(language = it)) },
+            )
             Divider()
             ToggleSettingRow(
                 title = "Show advanced controls",

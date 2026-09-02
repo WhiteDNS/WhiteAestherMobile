@@ -3,6 +3,7 @@ package com.whitedns.whiteaesther
 import android.Manifest
 import android.app.Activity
 import android.content.ClipData
+import android.content.Context
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.ActivityInfo
@@ -24,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.whitedns.whiteaesther.core.AppLocale
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.service.AetherVpnService
@@ -37,6 +39,15 @@ import com.whitedns.whiteaesther.ui.theme.WhiteAestherTheme
 
 class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<MainViewModel>()
+
+    /**
+     * The language this activity was built in.
+     *
+     * Resources are resolved once, when the activity is created, so changing
+     * the setting cannot repaint what is already on screen. Remembering what
+     * was used lets [onResume] notice the difference and rebuild.
+     */
+    private var builtInLanguage: String = ""
     private var pendingSettings: AppSettings? = null
     private var batteryExempt by mutableStateOf(true)
 
@@ -88,8 +99,29 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Applies the chosen language before any resource is read.
+     *
+     * This runs before onCreate and cannot suspend, which is why the choice is
+     * mirrored into SharedPreferences rather than read from DataStore here.
+     */
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(AppLocale.wrap(newBase))
+    }
+
     override fun onResume() {
         super.onResume()
+        // Every string on screen was resolved when this activity was created,
+        // so a language chosen since then has changed nothing the user can see.
+        // Recreating is what makes the setting take effect, and doing it here
+        // covers the case the settings screen cannot: a change made in another
+        // process, or one saved as the app was being backgrounded.
+        val chosen = AppLocale.current(this)
+        if (chosen != builtInLanguage) {
+            builtInLanguage = chosen
+            recreate()
+            return
+        }
         batteryExempt = isIgnoringBatteryOptimizations()
         // Only acts while nothing is connected, which is the whole point: the
         // address without the tunnel can only be read when there is no tunnel.
@@ -193,6 +225,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        builtInLanguage = AppLocale.current(this)
         super.onCreate(savedInstanceState)
         if (TvUiPolicy.isTelevision(resources.configuration.uiMode)) {
             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE

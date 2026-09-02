@@ -1,11 +1,13 @@
 package com.whitedns.whiteaesther.service
 
+import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import com.whitedns.whiteaesther.MainActivity
+import com.whitedns.whiteaesther.core.AppLocale
 import com.whitedns.whiteaesther.data.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +25,11 @@ import kotlinx.coroutines.launch
  */
 class AetherTileService : TileService() {
     private var scope: CoroutineScope? = null
+
+    /** The tile shows words too, and a service inherits none of the activity's. */
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(AppLocale.wrap(newBase))
+    }
 
     override fun onStartListening() {
         super.onStartListening()

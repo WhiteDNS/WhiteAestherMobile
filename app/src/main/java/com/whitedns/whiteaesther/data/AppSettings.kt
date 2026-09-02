@@ -104,6 +104,25 @@ enum class ThemeMode(val label: String) {
     DARK("Dark"),
 }
 
+/**
+ * Which language the app speaks.
+ *
+ * Separate from the phone's language on purpose. The two are routinely
+ * different for the people this app is built for: a phone kept in English
+ * because that is what the shops sell and the guides assume, used by someone
+ * who would rather read their own language -- and the reverse, a phone in
+ * Persian whose owner wants the English words because those are what every
+ * article about tunnels and protocols uses.
+ *
+ * [SYSTEM] follows the phone, which is right until the user says otherwise.
+ */
+enum class AppLanguage(val tag: String) {
+    /** Whatever the phone is set to, falling back to English. */
+    SYSTEM(""),
+    ENGLISH("en"),
+    PERSIAN("fa"),
+}
+
 object EndpointAddress {
     fun normalize(value: String): String? {
         val input = value.trim()
@@ -278,6 +297,7 @@ data class AppSettings(
     val batteryNoticeDismissed: Boolean = false,
     // Presentation only -- deliberately absent from toNativeJson.
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val language: AppLanguage = AppLanguage.SYSTEM,
     val showAdvanced: Boolean = false,
 ) {
     /**

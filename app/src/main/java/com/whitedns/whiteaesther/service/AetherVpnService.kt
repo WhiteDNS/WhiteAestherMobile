@@ -10,6 +10,7 @@ import android.os.ParcelFileDescriptor
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import com.whitedns.whiteaesther.core.AppLocale
 import com.whitedns.whiteaesther.MainActivity
 import com.whitedns.whiteaesther.core.ChainConfig
 import com.whitedns.whiteaesther.core.ChainController
@@ -38,6 +39,16 @@ import org.json.JSONObject
 import java.net.InetAddress
 
 class AetherVpnService : VpnService() {
+    /**
+     * The notification is the app's only face while it is in the background,
+     * so it has to speak the language the rest of the app does. A service gets
+     * its own context and none of the activity's, so the wrapping is repeated
+     * here rather than inherited.
+     */
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(AppLocale.wrap(newBase))
+    }
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val commandMutex = Mutex()
     private var sessionJob: Job? = null

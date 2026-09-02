@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.whitedns.whiteaesther.core.AppLocale
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -26,6 +27,7 @@ class SettingsRepository(private val context: Context) {
             customEndpointProtocol = preferences[CUSTOM_ENDPOINT_PROTOCOL]
                 ?.let { name -> TunnelProtocol.entries.firstOrNull { it.name == name } },
             themeMode = enumValueOrDefault(preferences[THEME_MODE], ThemeMode.SYSTEM),
+            language = enumValueOrDefault(preferences[LANGUAGE], AppLanguage.SYSTEM),
             showAdvanced = preferences[SHOW_ADVANCED] ?: false,
             fragmentTls = preferences[FRAGMENT_TLS] ?: false,
             encryptedHello = preferences[ENCRYPTED_HELLO] ?: false,
@@ -51,6 +53,9 @@ class SettingsRepository(private val context: Context) {
     }
 
     suspend fun save(settings: AppSettings) {
+        // Mirrored out to SharedPreferences because the language has to be
+        // readable before the activity exists, where nothing can suspend.
+        AppLocale.remember(context, settings.language)
         context.settingsDataStore.edit { preferences ->
             preferences[MODE] = settings.mode.name
             preferences[PROXY_PORT] = settings.proxyPort
@@ -63,6 +68,7 @@ class SettingsRepository(private val context: Context) {
             preferences[CUSTOM_ENDPOINT] = settings.customEndpoint
             preferences[CUSTOM_ENDPOINT_PROTOCOL] = settings.customEndpointProtocol?.name.orEmpty()
             preferences[THEME_MODE] = settings.themeMode.name
+            preferences[LANGUAGE] = settings.language.name
             preferences[SHOW_ADVANCED] = settings.showAdvanced
             preferences[FRAGMENT_TLS] = settings.fragmentTls
             preferences[ENCRYPTED_HELLO] = settings.encryptedHello
@@ -102,6 +108,7 @@ class SettingsRepository(private val context: Context) {
         val CUSTOM_ENDPOINT = stringPreferencesKey("custom_endpoint")
         val CUSTOM_ENDPOINT_PROTOCOL = stringPreferencesKey("custom_endpoint_protocol")
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        val LANGUAGE = stringPreferencesKey("language")
         val SHOW_ADVANCED = booleanPreferencesKey("show_advanced")
         val FRAGMENT_TLS = booleanPreferencesKey("fragment_tls")
         val ENCRYPTED_HELLO = booleanPreferencesKey("encrypted_hello")
