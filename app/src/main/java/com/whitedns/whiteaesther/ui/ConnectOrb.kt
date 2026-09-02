@@ -83,7 +83,7 @@ fun ConnectOrb(
     }
     val signal by animateColorAsState(target, tween(500), label = "orb-signal")
 
-    val transition = rememberInfiniteTransition(label = stringResource(R.string.orb))
+    val transition = rememberInfiniteTransition(label = "orb")
     val sweep by transition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,

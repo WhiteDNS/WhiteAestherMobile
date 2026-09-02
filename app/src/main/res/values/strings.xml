@@ -162,10 +162,10 @@
     <string name="this_app_is_always_a_tun_front">This app is always a tun front end, so a connection arrives as a bare address. Turn on &quot;Match rules on domain names&quot; under Traffic, or only the address rules below will do anything.</string>
     <string name="never_connect">Never connect</string>
     <string name="refused_before_anything_is_dialled_one_rule">Refused before anything is dialled. One rule per line.</string>
-    <string name="ads_example_com_nkeyword_tracker_nport_25">ads.example.com\nkeyword:tracker\nport:25</string>
+    <string name="ads_example_com_nkeyword_tracker_nport_25" translatable="false">ads.example.com\nkeyword:tracker\nport:25</string>
     <string name="skip_the_tunnel">Skip the tunnel</string>
     <string name="reached_with_this_device_s_real_address">Reached with this device\'s real address. For a bank or a domestic service that refuses foreign ones.</string>
-    <string name="bank_example_ir_nprivate_ncidr_10_0">bank.example.ir\nprivate\ncidr:10.0.0.0/8</string>
+    <string name="bank_example_ir_nprivate_ncidr_10_0" translatable="false">bank.example.ir\nprivate\ncidr:10.0.0.0/8</string>
     <string name="a_plain_name_matches_it_and_everything">A plain name matches it and everything under it. Prefixes narrow that: full: exactly, keyword: anywhere in the name, regexp: a pattern, cidr: an address block, port: a number or range, private: the local network. A line starting with # is a note.</string>
     <string name="anything_under_skip_the_tunnel_leaves_with">Anything under Skip the tunnel leaves with your real address. That is what it is for, and it is also what makes it worth keeping short.</string>
     <string name="language">Language</string>
@@ -268,13 +268,13 @@
     <string name="a_subscription_link_or_nodes_pasted_by">A subscription link, or nodes pasted by hand.</string>
     <string name="remove">Remove</string>
     <string name="add_a_subscription">Add a subscription</string>
-    <string name="https">https://…</string>
+    <string name="https" translatable="false">https://…</string>
     <string name="a_subscription_is_an_https_link_your">A subscription is an https:// link your provider gave you.</string>
     <string name="paste_nodes_by_hand">Paste nodes by hand</string>
     <string name="none_one_link_per_line_vless_vmess">None. One link per line: vless, vmess, trojan, ss, hysteria2</string>
     <string name="t_1_node">1 node</string>
     <string name="count_nodes">%1$s nodes</string>
-    <string name="vless">vless://…</string>
+    <string name="vless" translatable="false">vless://…</string>
     <string name="save_nodes">Save nodes</string>
     <string name="nodes">Nodes</string>
     <string name="whichever_one_is_ticked_is_carrying_your">Whichever one is ticked is carrying your traffic.</string>
@@ -308,7 +308,6 @@
     <string name="whiteaesther_itself_is_never_in_this_list">WhiteAesther itself is never in this list. Routing the app through its own tunnel would send the connection it is building back into itself.</string>
     <string name="system_app">System app</string>
     <string name="advanced">Advanced</string>
-    <string name="orb">orb</string>
     <string name="tv">TV</string>
     <string name="profile_adaptive">Adaptive</string>
     <string name="profile_manual">Manual</string>
