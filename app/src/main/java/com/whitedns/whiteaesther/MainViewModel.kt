@@ -16,6 +16,7 @@ import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.data.TunnelProtocol
 import com.whitedns.whiteaesther.data.SettingsRepository
 import com.whitedns.whiteaesther.data.UpdateChecker
+import com.whitedns.whiteaesther.service.AetherVpnService
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatusStore
 import com.whitedns.whiteaesther.service.TrafficMeter
@@ -129,6 +130,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val mutableEndpointScannerState = MutableStateFlow(EndpointScannerState())
     val endpointScannerState = mutableEndpointScannerState.asStateFlow()
     private var endpointJob: Job? = null
+    private var realAddressJob: Job? = null
 
     // Seeded with what the build can do, rather than waiting for a refresh
     // that only happens once connected. Whether the library is present is known
@@ -141,8 +143,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * The address the internet sees, on each side of the tunnel.
      *
      * Two separate lookups rather than one refreshed: the address without the
-     * tunnel is only ever read while there is no tunnel, so it is captured
-     * before connecting and then left alone. Asking again mid-session would
+     * tunnel is only ever read while there is no tunnel. It is re-read each
+     * time the app is idle, because a phone changes networks and the answer
+     * changes with them, but never while a session is up -- asking then would
      * push the user's real address out past the thing hiding it.
      */
     private val mutableAddresses = MutableStateFlow(AddressPair())
@@ -205,21 +208,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun captureRealAddressIfIdle() {
         if (EngineStatusStore.status.value.stage != EngineStage.IDLE) return
-        // Held values are revalidated too, not just stored ones: changing the
-        // setting while the app is open would otherwise leave the address that
-        // the old setting produced on screen until the process restarts.
-        val held = mutableAddresses.value.real
-        if (held != null && !held.contains(':')) return
-        viewModelScope.launch {
-            val stored = AddressReporter.realAddress(getApplication(), ipv4Only())
-            if (stored != null) {
+        // One at a time. onResume and the idle transition both arrive here, and
+        // often within the same moment; two fetches would race to write one
+        // field and the loser's answer would be the one left on screen.
+        if (realAddressJob?.isActive == true) return
+        realAddressJob = viewModelScope.launch {
+            val ipv4Only = ipv4Only()
+            val stored = AddressReporter.realAddress(getApplication(), ipv4Only)
+            // Shown first so the row is filled while the network is asked, then
+            // replaced by whatever the network answers.
+            if (stored != null && mutableAddresses.value.real != stored) {
                 mutableAddresses.value = mutableAddresses.value.copy(real = stored)
-                return@launch
             }
-            val fetched = AddressReporter.captureRealAddress(getApplication(), ipv4Only())
-            if (fetched != null) {
-                mutableAddresses.value = mutableAddresses.value.copy(real = fetched)
-            }
+            // Asked again every time, not only when nothing is stored. The
+            // stored answer was true of the network that produced it: move from
+            // wifi to mobile data, or let the ISP hand out a new address, and
+            // it becomes a confident lie that nothing in the app can clear --
+            // the first reading a device ever took would outlive every network
+            // it went on to join. Refreshing is unsafe only while a tunnel is
+            // carrying traffic, and this returns above when one is.
+            val fresh = AddressReporter.captureRealAddress(getApplication(), ipv4Only)
+            // Offline, or a blocked trace, leaves the stored answer standing
+            // rather than blanking a field the user was reading.
+            mutableAddresses.value = mutableAddresses.value.copy(real = fresh ?: stored)
         }
     }
 
@@ -497,6 +508,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 selected = reported.selected,
             )
         }
+    }
+
+    /**
+     * Forgets the endpoint entirely and looks for a new one.
+     *
+     * Three separate things remember an endpoint, and clearing one of them is
+     * what makes this look like it did nothing: the pinned address in settings,
+     * the results still listed on screen, and the transport the service saw
+     * work last. A pin survives the network it was found on -- an address that
+     * answered on home wifi is just an address that times out on mobile data --
+     * and with fallback off there is nothing to move on to, so the user reads a
+     * dead pin as the app being broken.
+     *
+     * The scan starts here rather than being left to the next connect so that
+     * the reset has something to show for itself.
+     */
+    fun resetEndpoint(settings: AppSettings) {
+        val cleared = settings.withoutPinnedEndpoint()
+        save(cleared)
+        AetherVpnService.forgetLastGoodTransport(getApplication())
+        mutableEndpointScannerState.value = EndpointScannerState()
+        scanEndpoints(cleared)
     }
 
     fun scanEndpoints(settings: AppSettings) {

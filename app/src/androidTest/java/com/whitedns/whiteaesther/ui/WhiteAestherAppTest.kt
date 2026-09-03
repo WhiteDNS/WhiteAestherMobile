@@ -41,6 +41,7 @@ class WhiteAestherAppTest {
     private fun setApp(
         initial: AppSettings = AppSettings(),
         onScan: () -> Unit = {},
+        onReset: () -> Unit = {},
         onSettings: (AppSettings) -> Unit = {},
         onConnect: () -> Unit = {},
         television: Boolean? = null,
@@ -61,6 +62,7 @@ class WhiteAestherAppTest {
                     onStop = {},
                     onScanEndpoints = { onScan() },
                     onTestEndpoint = {},
+                    onResetEndpoint = { onReset() },
                     onCancelEndpointScan = {},
                     addresses = addresses,
                     traffic = traffic,
@@ -103,6 +105,27 @@ class WhiteAestherAppTest {
         compose.onNodeWithText("Endpoint").performScrollTo().performClick()
         compose.onNodeWithTag("scan-endpoints-button").performScrollTo().performClick()
         compose.runOnIdle { assertTrue(scanRequested) }
+    }
+
+    @Test
+    fun forgettingTheEndpointClearsTheFieldAndAsksForAFreshSearch() {
+        var resetRequested = false
+        setApp(
+            initial = AppSettings(
+                endpointMode = EndpointMode.CUSTOM_FIRST,
+                customEndpoint = "162.159.197.3:443",
+            ),
+            onReset = { resetRequested = true },
+        )
+
+        compose.onNodeWithTag("tab-routes").performClick()
+        compose.onNodeWithText("Endpoint").performScrollTo().performClick()
+        compose.onNodeWithTag("custom-endpoint-field").assertTextContains("162.159.197.3:443")
+        compose.onNodeWithTag("reset-endpoint-button").performScrollTo().performClick()
+        compose.runOnIdle { assertTrue(resetRequested) }
+        // The field is cleared with the setting, not left showing an address
+        // the app has just been told to forget.
+        compose.onNodeWithTag("custom-endpoint-field").assertTextContains("")
     }
 
     @Test

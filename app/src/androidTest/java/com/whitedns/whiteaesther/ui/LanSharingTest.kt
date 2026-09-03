@@ -66,6 +66,7 @@ class LanSharingTest {
                     onStop = {},
                     onScanEndpoints = {},
                     onTestEndpoint = {},
+                    onResetEndpoint = {},
                     onCancelEndpointScan = {},
                     batteryExempt = true,
                 )

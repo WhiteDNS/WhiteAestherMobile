@@ -102,6 +102,7 @@
     <string name="if_this_address_stops_working_search_for">If this address stops working, search for another instead of failing.</string>
     <string name="test_this_one">Test this one</string>
     <string name="find_endpoints">Find endpoints</string>
+    <string name="forget_and_search_again">Forget this endpoint and search again</string>
     <string name="endpoints_that_worked">Endpoints that worked</string>
     <string name="not_searched_yet">Not searched yet</string>
     <string name="result_rttmillis_ms">%1$s ms</string>

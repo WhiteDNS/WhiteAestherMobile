@@ -59,6 +59,7 @@ class SplitTunnelScreenTest {
                     onStop = {},
                     onScanEndpoints = {},
                     onTestEndpoint = {},
+                    onResetEndpoint = {},
                     onCancelEndpointScan = {},
                     batteryExempt = true,
                 )
