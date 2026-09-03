@@ -24,6 +24,7 @@ import androidx.test.espresso.Espresso.pressBack
 import com.whitedns.whiteaesther.AddressPair
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.data.AppSettings
+import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.EndpointMode
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatus
@@ -126,6 +127,43 @@ class WhiteAestherAppTest {
         // The field is cleared with the setting, not left showing an address
         // the app has just been told to forget.
         compose.onNodeWithTag("custom-endpoint-field").assertTextContains("")
+    }
+
+    @Test
+    fun theCarrierCanBeChosenAndIsCarriedIntoTheSettings() {
+        var saved: AppSettings? = null
+        setApp(onSettings = { saved = it })
+
+        compose.onNodeWithTag("tab-routes").performClick()
+        compose.onNodeWithTag("option-psiphon").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(Carrier.PSIPHON, saved?.carrier) }
+    }
+
+    @Test
+    fun choosingACarrierSaysTheEngineControlsNoLongerApply() {
+        // The endpoint, the protocol and the discovery depth all describe a
+        // search for a Cloudflare gateway. A carrier that never looks for one
+        // leaves that whole half of the screen inert, and a screen full of
+        // controls that quietly do nothing is worse than a sentence saying so.
+        setApp(initial = AppSettings(carrier = Carrier.PSIPHON))
+
+        compose.onNodeWithTag("tab-routes").performClick()
+        compose.onNodeWithText(
+            "Endpoint, protocol and discovery depth below apply to Aether only. " +
+                "This carrier finds its own way out.",
+        ).performScrollTo().assertExists()
+    }
+
+    @Test
+    fun aetherIsTheCarrierUntilSomethingSaysOtherwise() {
+        // The default matters more than it looks. Psiphon is somebody else's
+        // network, and an install that silently began using it would be a
+        // decision made for the user rather than by them.
+        assertEquals(Carrier.AETHER, AppSettings().carrier)
+
+        setApp()
+        compose.onNodeWithTag("tab-routes").performClick()
+        compose.onNodeWithTag("option-aether").performScrollTo().assertExists()
     }
 
     @Test

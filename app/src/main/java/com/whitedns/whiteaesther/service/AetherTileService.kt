@@ -80,6 +80,7 @@ class AetherTileService : TileService() {
                 settings.splitTunnel.encode(),
                 settings.killSwitch,
                 settings.strictKillSwitch,
+                settings.carrier,
             )
         }
     }

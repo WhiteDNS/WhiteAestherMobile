@@ -70,6 +70,49 @@ enum class TunnelProtocol(val wireName: String, @StringRes val label: Int) {
         }
 }
 
+/**
+ * What carries the tunnel.
+ *
+ * Deliberately not another [TunnelProtocol]. Every member of that enum answers
+ * questions about Cloudflare endpoints -- which family it dials, what a scan
+ * probes it with, whether a retry may swap it for its sibling -- and Psiphon and
+ * Tor answer none of them, because neither has anything to do with an endpoint.
+ * Folding them in would mean inventing a family for a carrier that has none and
+ * then teaching every `when` to ignore it.
+ *
+ * They meet in one place instead: each carrier ends in a SOCKS5 listener on
+ * loopback, and mihomo routes the interface into whichever one is running.
+ */
+enum class Carrier(val wireName: String, @StringRes val label: Int) {
+    /** The MASQUE engine this app is built around. */
+    AETHER("aether", R.string.carrier_aether),
+
+    /**
+     * Psiphon, in its own process.
+     *
+     * Go, and the exit chain already spends this process's one Go runtime. Two
+     * `-buildmode=c-shared` libraries export the same runtime symbols into one
+     * linker namespace and the second call to bind to the wrong copy takes down
+     * the process, so Psiphon is loaded somewhere else entirely.
+     */
+    PSIPHON("psiphon", R.string.carrier_psiphon),
+    ;
+
+    /** True when the Aether engine is in the path at all. */
+    val usesEngine: Boolean get() = this == AETHER
+
+    /**
+     * True when the carrier needs mihomo to reach the interface.
+     *
+     * Everything that is not the engine arrives as a SOCKS5 listener, and a
+     * listener cannot carry a tun on its own. mihomo is what terminates the
+     * packets and dials them out through it -- so on a build without the chain
+     * library these carriers cannot run at all, and the screen says so rather
+     * than starting something that would route nothing.
+     */
+    val needsChain: Boolean get() = this != AETHER
+}
+
 /** Protocols sharing one set of endpoints, so an address found on one fits the other. */
 enum class EndpointFamily {
     MASQUE,
@@ -161,6 +204,14 @@ private const val NEWLINE = '\n'
 data class AppSettings(
     val mode: EngineMode = EngineMode.TUN,
     val proxyPort: Int = 1819,
+    /**
+     * Which engine carries the tunnel.
+     *
+     * Aether unless the user says otherwise. The others are here for the
+     * networks Aether cannot get out of, not as an equal choice: they are
+     * slower, and one of them is somebody else's network.
+     */
+    val carrier: Carrier = Carrier.AETHER,
     // Automatic, because the answer depends on the network and the user has no
     // way to know it. A fixed default of H3 meant every install on a network
     // that blocks UDP spent minutes failing before anything else was tried.

@@ -48,13 +48,47 @@ Shipped as `libwhiteaestherchain.so`.
 
 ### Getting the source
 
-Neither GPL-3.0 component is committed to this repository — both are fetched at
-build time, at the exact revisions above, by `native/chain/setup.ps1`. Those
+No GPL-3.0 component is committed to this repository. The chain's two are
+fetched at build time, at the exact revisions above, by `native/chain/setup.ps1`;
+psiphon-tunnel-core is resolved as a pinned maven dependency from Psiphon's own
+distribution, and its source for that version is the `v2.0.41` tag of the
+repository named above. Those
 revisions are pinned in that script, so the source corresponding to any binary
 we ship can be obtained by running it, or by fetching the revisions directly
 from the upstreams named above. `native/chain/README.md` describes the build.
 
 The GPL-3.0 text is in [licenses/GPL-3.0.txt](licenses/GPL-3.0.txt).
+
+## psiphon-tunnel-core — GPL-3.0
+
+The Psiphon carrier is
+[Psiphon-Labs/psiphon-tunnel-core](https://github.com/Psiphon-Labs/psiphon-tunnel-core),
+taken as `ca.psiphon:psiphontunnel:2.0.41` from Psiphon's own maven
+distribution at
+`https://raw.githubusercontent.com/Psiphon-Labs/psiphon-tunnel-core-Android-library/master`,
+which corresponds to the `v2.0.41` tag of the source repository.
+
+Unmodified. It runs in its own process (`:psiphon`) and this app talks to it
+through the library's published `PsiphonTunnel` API only.
+
+Shipped inside the APK as `libgojni.so`, which is the library that aar contains.
+
+**The server list.** `app/src/main/assets/psiphon_server_entries.txt` is
+Psiphon's public bootstrap list of server entries, fetched at build time by
+`native/psiphon/setup.ps1` at the pinned revision named in that script rather
+than committed here. It is data Psiphon publishes for clients to start from, not
+code, and tunnel-core verifies every entry itself.
+
+**The identifiers.** `PropagationChannelId` and `SponsorId` in
+`core/PsiphonConfig.kt` are the placeholder values documented in tunnel-core's
+own sample configuration, not a channel issued to this app. See
+`native/psiphon/README.md`.
+
+## mihomo, and this combination
+
+Both GPL-3.0 components above are combined with this AGPL-3.0 app under
+AGPL-3.0 section 13, which expressly permits it. Each part keeps its own
+licence; the GPL-3.0 text is in [licenses/GPL-3.0.txt](licenses/GPL-3.0.txt).
 
 ## BoringSSL Rust bindings — MIT
 

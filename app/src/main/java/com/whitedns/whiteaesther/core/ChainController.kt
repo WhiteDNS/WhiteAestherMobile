@@ -67,6 +67,74 @@ class ChainController(private val context: Context) {
     }
 
     /**
+     * Routes [tunFd] into a carrier's SOCKS5 listener.
+     *
+     * The same mihomo, doing less. [start] gives it a subscription to fetch and
+     * a group to choose from; this gives it one proxy and a default route, and
+     * uses it purely as the thing that turns an interface into connections. It
+     * is the only thing in the build that can: Psiphon produces a listener on
+     * loopback and nothing else, and a listener cannot carry a tun.
+     *
+     * No provider fetch happens here, which is why this returns in milliseconds
+     * where [start] can take a while -- there is nothing to go and get.
+     *
+     * @param socksPort the carrier's listener, tunnel already established.
+     * @param udp whether the carrier forwards datagrams.
+     * @return null on success, or why it failed.
+     */
+    fun startCarrier(
+        settings: ChainSettings,
+        socksPort: Int,
+        udp: Boolean,
+        tunFd: Int,
+    ): String? {
+        if (!isAvailable) return "This build cannot route a carrier: the chain library is missing"
+
+        return runCatching {
+            if (settings.enabled) {
+                // The exit chain, dialled through the carrier instead of through
+                // the engine. Same arrangement the engine path uses -- mihomo
+                // owns the interface and reaches each node through a loopback
+                // SOCKS5 -- so a user who has set up an exit chain keeps it when
+                // they switch carrier, rather than having it silently dropped.
+                //
+                // prepareHome, not a bare write: this path fetches providers,
+                // and that fetch travels through the carrier's listener, which
+                // is why the carrier has to be established before we get here.
+                prepareHome(settings, socksPort, ChainConfig.CARRIER_PROXY)
+            } else {
+                home.mkdirs()
+                File(home, "config.yaml").writeText(
+                    ChainConfig.renderCarrier(settings, socksPort, udp),
+                )
+            }
+
+            initialise()?.let { return it }
+            applyConfig()?.let { return it }
+            if (settings.enabled) selectNode(settings.node)
+            startLogging()
+
+            val failure = NativeChainBridge.startTun(
+                fd = tunFd,
+                stack = ChainConfig.TUN_STACK,
+                address = "${ChainConfig.TUN_IPV4},${ChainConfig.TUN_IPV6}",
+                dns = ChainConfig.TUN_DNS,
+            ).failureText()
+            if (failure == null) {
+                // Deliberately not a fingerprint of [settings]. A carrier's
+                // configuration is the port it was handed, and that changes
+                // every time the carrier restarts -- treating it as current
+                // because the user's chain settings have not moved would leave
+                // a config pointed at a port nothing is listening on.
+                applied = null
+            }
+            failure
+        }.getOrElse { error ->
+            error.message ?: "The carrier route did not start"
+        }
+    }
+
+    /**
      * Whether the running engine was configured from [settings].
      *
      * The node list comes from the live engine, so after editing a subscription
@@ -207,11 +275,15 @@ class ChainController(private val context: Context) {
         else -> LogLevel.INFO
     }
 
-    private fun prepareHome(settings: ChainSettings, socksPort: Int?) {
+    private fun prepareHome(
+        settings: ChainSettings,
+        socksPort: Int?,
+        proxyName: String = ChainConfig.TUNNEL_PROXY,
+    ) {
         home.mkdirs()
         val providers = File(home, "providers")
         providers.mkdirs()
-        File(home, "config.yaml").writeText(ChainConfig.render(settings, socksPort))
+        File(home, "config.yaml").writeText(ChainConfig.render(settings, socksPort, proxyName))
 
         // Cached node lists for subscriptions the user has since removed. They
         // are not merely clutter: mihomo keys its own state by provider name, so

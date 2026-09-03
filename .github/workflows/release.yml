@@ -127,6 +127,13 @@ jobs:
           ./native/chain/setup.ps1
           ./native/chain/build.ps1
 
+      # Data, not code, and not committed for the same reasons the chain's
+      # source is not. A release built without it ships a Psiphon carrier that
+      # reports its list missing the first time somebody taps connect.
+      - name: Fetch the Psiphon server list
+        shell: pwsh
+        run: ./native/psiphon/setup.ps1
+
       - name: Build signed APKs and bundle
         shell: bash
         run: |
@@ -161,6 +168,8 @@ jobs:
             # chain simply reporting itself unavailable. That is the one failure
             # nobody would notice before users did.
             jar tf "$apk" | grep -F "lib/${abi}/libwhiteaestherchain.so"
+            jar tf "$apk" | grep -F "lib/${abi}/libgojni.so"
+            jar tf "$apk" | grep -qF "assets/psiphon_server_entries.txt"
             test "$(jar tf "$apk" | grep -c '^lib/.*/libwhiteaestherchain\.so$')" -eq 1
             cp "$apk" "release-assets/${base}-${abi}.apk"
           done

@@ -62,6 +62,7 @@ import com.whitedns.whiteaesther.IdentityMessage
 import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.data.AppLanguage
 import com.whitedns.whiteaesther.data.AppSettings
+import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.EndpointAddress
 import com.whitedns.whiteaesther.data.EndpointFamily
 import com.whitedns.whiteaesther.data.EndpointMode
@@ -688,6 +689,39 @@ fun RoutesScreen(
                         if (pair.size == 1) Spacer(Modifier.weight(1f))
                     }
                 }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        AetherCard {
+            CardHead(
+                stringResource(R.string.carrier),
+                stringResource(R.string.carrier_subtitle),
+            )
+            Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Carrier.entries.forEach { carrier ->
+                    OptionRow(
+                        code = carrier.wireName.take(3).uppercase(),
+                        title = stringResource(carrier.label),
+                        subtitle = when (carrier) {
+                            Carrier.AETHER -> stringResource(R.string.carrier_aether_detail)
+                            Carrier.PSIPHON -> stringResource(R.string.carrier_psiphon_detail)
+                        },
+                        selected = settings.carrier == carrier,
+                        // OptionRow tags itself from the title, so this row is
+                        // reachable in a test as option-aether / option-psiphon.
+                        onClick = { onSettingsChange(settings.copy(carrier = carrier)) },
+                    )
+                }
+            }
+            // Said here rather than left for the user to discover at connect
+            // time. Everything below this card -- the endpoint, the protocol,
+            // the discovery depth -- describes a search for a Cloudflare
+            // gateway, and a carrier that never looks for one makes all of it
+            // inert. A screen full of controls that quietly do nothing is worse
+            // than a sentence saying so.
+            if (!settings.carrier.usesEngine) {
+                Note(stringResource(R.string.carrier_not_engine_note))
             }
         }
 

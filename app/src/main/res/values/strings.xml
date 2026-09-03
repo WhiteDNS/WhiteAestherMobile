@@ -457,4 +457,20 @@
     <string name="err_cannot_open_location">could not open that location</string>
     <string name="err_cannot_read_file">could not read that file</string>
     <string name="share_diagnostics">Send diagnostics</string>
+    <string name="carrier_aether">Aether</string>
+    <string name="carrier_psiphon">Psiphon</string>
+    <string name="carrier">Carrier</string>
+    <string name="carrier_subtitle">Which engine carries the tunnel</string>
+    <string name="carrier_aether_detail">MASQUE over Cloudflare. The fastest path, and the one everything else here is built around.</string>
+    <string name="carrier_psiphon_detail">Psiphon’s own network. Slower, and someone else’s servers — for networks Aether cannot get out of.</string>
+    <string name="carrier_needs_chain_notice">This build cannot run Psiphon: the routing library it needs is missing.</string>
+    <string name="carrier_whole_device_notice">Psiphon carries the whole device only. Switch Coverage back to Whole device, or choose Aether.</string>
+    <string name="status_starting_carrier">Preparing the carrier…</string>
+    <string name="status_carrier_connecting">Psiphon is looking for a way out. This can take a minute.</string>
+    <string name="status_carrier_carries">Connected through %1$s</string>
+    <string name="err_carrier_whole_device_only">Psiphon cannot run in proxy-only mode</string>
+    <string name="err_carrier_needs_chain">This build cannot route Psiphon: the chain library is missing</string>
+    <string name="err_carrier_failed">Psiphon could not connect</string>
+    <string name="err_carrier_stopped">Psiphon stopped</string>
+    <string name="carrier_not_engine_note">Endpoint, protocol and discovery depth below apply to Aether only. This carrier finds its own way out.</string>
 </resources>

@@ -47,10 +47,19 @@ object ChainConfig {
     private const val HEALTH_CHECK_URL = "http://www.gstatic.com/generate_204"
 
     /**
-     * @param socksPort the port Aether's SOCKS5 listener is on, or null to dial
-     *   nodes directly rather than through the tunnel.
+     * @param socksPort the port the carrying tunnel's SOCKS5 listener is on, or
+     *   null to dial nodes directly rather than through a tunnel.
+     * @param proxyName what that tunnel is called in the config it appears in.
+     *   Named rather than fixed because the engine is no longer the only thing
+     *   that can be in front of the chain: a carrier ends in the same shape of
+     *   listener, and a config calling Psiphon "aether" would mislead every log
+     *   line and screen that reads a proxy name back.
      */
-    fun render(settings: ChainSettings, socksPort: Int?): String = buildString {
+    fun render(
+        settings: ChainSettings,
+        socksPort: Int?,
+        proxyName: String = TUNNEL_PROXY,
+    ): String = buildString {
         // No external-controller. The desktop needs one because mihomo is a
         // separate process there; in-process we drive it through the action
         // protocol, so binding a control API would add an attack surface that
@@ -62,15 +71,15 @@ object ChainConfig {
         // for every connection costs a /proc walk per socket on a phone.
         append("find-process-mode: off\n")
 
-        appendDns(socksPort)
+        appendDns(socksPort, proxyName)
 
         val through = if (socksPort != null) {
             append("proxies:\n")
             append(
-                "  - {name: $TUNNEL_PROXY, type: socks5, server: 127.0.0.1, " +
+                "  - {name: $proxyName, type: socks5, server: 127.0.0.1, " +
                     "port: $socksPort, udp: true}\n",
             )
-            "\n    dialer-proxy: $TUNNEL_PROXY"
+            "\n    dialer-proxy: $proxyName"
         } else {
             ""
         }
@@ -85,6 +94,82 @@ object ChainConfig {
         append("  - name: $EXIT_GROUP\n    type: select\n    use: [${names.joinToString(", ")}]\n")
 
         appendRules(settings)
+    }
+
+    /** The SOCKS5 proxy standing in for a carrier that is not the engine. */
+    const val CARRIER_PROXY = "carrier"
+
+    /**
+     * Everything through one upstream SOCKS5, with no exit chain in front.
+     *
+     * This is what a carrier that is not the engine needs from mihomo, and it is
+     * less than [render] does: there are no nodes to choose from and no group to
+     * choose with, only a proxy and a default route into it. mihomo is here as
+     * the thing that terminates the interface -- Psiphon hands us a listener on
+     * loopback, and a listener cannot carry a tun.
+     *
+     * The user's block and direct rules still apply. They are the same rules the
+     * engine path honours, and a different carrier is not a reason to stop.
+     *
+     * \nparam socksPort the carrier's SOCKS5 listener, with its tunnel already
+     *   established. A port that is merely listening is not enough: traffic
+     *   routed into a proxy whose tunnel has not come up is dropped rather than
+     *   refused, which the phone experiences as everything hanging.
+     * \nparam udp whether the carrier forwards UDP. Psiphon does. Tor does not,
+     *   and a proxy declared `udp: true` that cannot carry it swallows every
+     *   datagram -- DNS and QUIC failing silently while TCP works, which is the
+     *   hardest shape of broken to recognise.
+     */
+    fun renderCarrier(settings: ChainSettings, socksPort: Int, udp: Boolean = true): String =
+        buildString {
+            append("mode: rule\n")
+            append("log-level: info\n")
+            append("ipv6: true\n")
+            append("find-process-mode: off\n")
+
+            appendDns(socksPort, CARRIER_PROXY)
+
+            append("proxies:\n")
+            append(
+                "  - {name: $CARRIER_PROXY, type: socks5, server: 127.0.0.1, " +
+                    "port: $socksPort, udp: $udp}\n",
+            )
+
+            // A group of one, rather than routing to the proxy by name. mihomo
+            // reports health and traffic per group, so the screens and the logs
+            // can describe a carrier exactly as they describe an exit node
+            // instead of having a second shape to understand.
+            append("proxy-groups:\n")
+            append("  - name: $EXIT_GROUP\n    type: select\n    proxies: [$CARRIER_PROXY]\n")
+
+            appendCarrierRules(settings, udp)
+        }
+
+    /**
+     * The rules for a carrier: the ordinary ones, plus what it cannot do.
+     *
+     * A carrier with no UDP gets an explicit refusal for it. Without one the
+     * datagrams match `MATCH` and are handed to a proxy that drops them, and
+     * dropping is worse than refusing: a refused datagram makes a resolver fall
+     * back to TCP and a browser fall back off QUIC, while a dropped one makes
+     * both wait out a timeout on every request.
+     */
+    private fun StringBuilder.appendCarrierRules(settings: ChainSettings, udp: Boolean) {
+        append("rules:\n")
+        settings.blockRules().forEach { pattern ->
+            mihomoRules(pattern, "REJECT").forEach { append("  - $it\n") }
+        }
+        settings.directRules().forEach { pattern ->
+            mihomoRules(pattern, "DIRECT").forEach { append("  - $it\n") }
+        }
+        if (!udp) {
+            // After the user's rules and before MATCH: a destination they chose
+            // to block stays blocked, and one they chose to send direct still
+            // goes direct over UDP, because direct does not go through this
+            // carrier at all.
+            append("  - NETWORK,udp,REJECT\n")
+        }
+        append("  - MATCH,$EXIT_GROUP\n")
     }
 
     /**
@@ -176,8 +261,8 @@ object ChainConfig {
      * question. The `#$TUNNEL_PROXY` fragment is mihomo's syntax for dialling a
      * resolver through a named proxy, which is what keeps that from happening.
      */
-    private fun StringBuilder.appendDns(socksPort: Int?) {
-        val via = if (socksPort != null) "#$TUNNEL_PROXY" else ""
+    private fun StringBuilder.appendDns(socksPort: Int?, proxyName: String = TUNNEL_PROXY) {
+        val via = if (socksPort != null) "#$proxyName" else ""
         append("dns:\n")
         append("  enable: true\n")
         append("  ipv6: true\n")

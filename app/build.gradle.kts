@@ -156,6 +156,13 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.2.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
+    // Psiphon, as its own carrier. Pinned: this is a 44MB binary from outside
+    // the usual supply chain, and "whatever is newest" is not a thing to be
+    // relaxed about there. It runs in its own process -- see PsiphonService --
+    // because it is Go, and the exit chain is already the one Go runtime this
+    // process is allowed to have.
+    implementation("ca.psiphon:psiphontunnel:2.0.41")
+
     implementation("androidx.compose.ui:ui:1.11.4")
     implementation("androidx.compose.ui:ui-tooling-preview:1.11.4")
     implementation("androidx.compose.foundation:foundation:1.11.4")

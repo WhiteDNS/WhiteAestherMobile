@@ -18,6 +18,7 @@ class SettingsRepository(private val context: Context) {
             mode = enumValueOrDefault(preferences[MODE], EngineMode.TUN),
             proxyPort = preferences[PROXY_PORT]?.coerceIn(1_024, 65_535) ?: 1819,
             transport = enumValueOrDefault(preferences[TRANSPORT], TunnelProtocol.AUTO),
+            carrier = enumValueOrDefault(preferences[CARRIER], Carrier.AETHER),
             scanStrategy = enumValueOrDefault(preferences[SCAN], ScanStrategy.BALANCED),
             dualStack = preferences[DUAL_STACK] ?: true,
             validationEnabled = preferences[VALIDATION] ?: true,
@@ -60,6 +61,7 @@ class SettingsRepository(private val context: Context) {
             preferences[MODE] = settings.mode.name
             preferences[PROXY_PORT] = settings.proxyPort
             preferences[TRANSPORT] = settings.transport.name
+            preferences[CARRIER] = settings.carrier.name
             preferences[SCAN] = settings.scanStrategy.name
             preferences[DUAL_STACK] = settings.dualStack
             preferences[VALIDATION] = settings.validationEnabled
@@ -100,6 +102,7 @@ class SettingsRepository(private val context: Context) {
         val MODE = stringPreferencesKey("mode")
         val PROXY_PORT = intPreferencesKey("proxy_port")
         val TRANSPORT = stringPreferencesKey("transport")
+        val CARRIER = stringPreferencesKey("carrier")
         val SCAN = stringPreferencesKey("scan")
         val DUAL_STACK = booleanPreferencesKey("dual_stack")
         val VALIDATION = booleanPreferencesKey("validation")
