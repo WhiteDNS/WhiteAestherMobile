@@ -74,6 +74,7 @@ error. It is the first thing to read.
 | What you see | What it means |
 | --- | --- |
 | `... · retry 3 of 8 in 12s` | A path failed and it is trying another. Normal on a hostile network. |
+| `Psiphon is looking for a way out` | The Psiphon carrier is establishing. It tries many protocols at once and a minute is normal. |
 | `Stopped after 8 attempts` | Nothing worked here. Try a different profile or network. |
 | `custom endpoint ... failed MASQUE validation` | The address you pinned is not reachable. Switch **Endpoint** back to Automatic. |
 | `Connected to a different endpoint` | Your pinned address failed and fallback substituted a working one. |
@@ -93,6 +94,10 @@ handshake against them, and only accepts a route once real traffic returns
 through it. The app then either raises an Android `VpnService` tunnel that
 captures IPv4, IPv6 and DNS, or exposes a loopback SOCKS5 proxy.
 
+- **Carrier** — Aether by default. Under **Routes**, Psiphon can carry the
+  tunnel instead: it finds its own way out and the app routes the whole device
+  into it. Slower, and someone else's network, so it is there for the networks
+  Aether cannot get out of rather than as an equal choice
 - **Transports** — MASQUE over HTTP/3 (QUIC) and HTTP/2 (TLS over TCP, for
   networks that block UDP)
 - **Obfuscation** — padding profiles that make tunnel traffic harder to
@@ -125,12 +130,31 @@ Rust bridge itself.
 `./gradlew :app:compileStableDebugKotlin` skips the native build and is the fast
 loop when only touching Kotlin.
 
+Two things Gradle does not build for you. The exit chain's Go library, which the
+Psiphon carrier also needs to reach the interface:
+
+```powershell
+pwsh -File native/chain/setup.ps1
+pwsh -File native/chain/build.ps1
+```
+
+and Psiphon's bootstrap server list, which is data rather than code and is not
+committed:
+
+```powershell
+pwsh -File native/psiphon/setup.ps1
+```
+
+A build missing either still installs and runs; the feature that needs it says
+so rather than failing at connect time on somebody's phone.
+
 ## Repository layout
 
 | Path | |
 | --- | --- |
 | `app/` | The Android application |
 | `native/aether/` | Vendored Aether engine |
+| `native/psiphon/` | The Psiphon carrier: what to fetch, and why it is a separate process |
 | `native/android-bridge/` | Rust JNI bridge between the two |
 | `design/` | Clickable design prototype and the notes from building it |
 | `docs/` | Release process and device test plan |

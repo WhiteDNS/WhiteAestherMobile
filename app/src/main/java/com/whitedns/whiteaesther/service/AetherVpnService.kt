@@ -18,6 +18,8 @@ import com.whitedns.whiteaesther.core.ChainController
 import com.whitedns.whiteaesther.core.NativeAetherBridge
 import com.whitedns.whiteaesther.core.NativeEngineListener
 import com.whitedns.whiteaesther.core.NativeSocketProtector
+import com.whitedns.whiteaesther.core.PsiphonClient
+import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.ChainSettings
 import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.data.SplitTunnel
@@ -73,7 +75,16 @@ class AetherVpnService : VpnService() {
     private var baseConfigJson: String? = null
     private var chainJson: String? = null
     private var splitJson: String? = null
+    /**
+     * Which engine is carrying this session.
+     *
+     * Held rather than read from the config, because it is not the engine's
+     * business: the JSON handed to the bridge describes MASQUE, and a
+     * carrier that is not the engine never reaches the bridge at all.
+     */
+    private var carrier: Carrier = Carrier.AETHER
     private val chain by lazy { ChainController(this) }
+    private val psiphon by lazy { PsiphonClient(this) }
 
     override fun onCreate() {
         super.onCreate()
@@ -101,6 +112,9 @@ class AetherVpnService : VpnService() {
                 }
                 val chainSettings = intent.getStringExtra(EXTRA_CHAIN)
                 val splitSettings = intent.getStringExtra(EXTRA_SPLIT)
+                carrier = Carrier.entries
+                    .firstOrNull { it.wireName == intent.getStringExtra(EXTRA_CARRIER) }
+                    ?: Carrier.AETHER
                 // Held for the life of the session: giveUp runs long after
                 // this, and is not a place that can read DataStore.
                 blockOnFailure = intent.getBooleanExtra(EXTRA_KILL_SWITCH, false)
@@ -110,6 +124,7 @@ class AetherVpnService : VpnService() {
                         putString(LAST_TUN_CONFIG, configJson)
                         putString(LAST_CHAIN_CONFIG, chainSettings)
                         putString(LAST_SPLIT_CONFIG, splitSettings)
+                        putString(LAST_CARRIER, carrier.wireName)
                     }
                     restartPolicy = START_STICKY
                 } else {
@@ -117,6 +132,7 @@ class AetherVpnService : VpnService() {
                         remove(LAST_TUN_CONFIG)
                         remove(LAST_CHAIN_CONFIG)
                         remove(LAST_SPLIT_CONFIG)
+                        remove(LAST_CARRIER)
                     }
                 }
                 startForegroundNow(sayNow(R.string.status_preparing_connection), sayNow(R.string.status_validating_engine))
@@ -127,6 +143,9 @@ class AetherVpnService : VpnService() {
                 if (configJson == null) {
                     stopSelf(startId)
                 } else {
+                    carrier = Carrier.entries
+                        .firstOrNull { it.wireName == preferences.getString(LAST_CARRIER, null) }
+                        ?: Carrier.AETHER
                     restartPolicy = START_STICKY
                     startForegroundNow(sayNow(R.string.status_restoring), sayNow(R.string.status_reconnecting_tun))
                     replaceSession(
@@ -154,6 +173,7 @@ class AetherVpnService : VpnService() {
         dropBlackhole()
         generation += 1
         runCatching { chain.stop() }
+        runCatching { psiphon.stop() }
         NativeAetherBridge.stop()
         runCatching { NativeAetherBridge.setSocketProtector(null) }
         serviceScope.cancel()
@@ -174,6 +194,7 @@ class AetherVpnService : VpnService() {
                 splitJson = splitSettings
                 NativeAetherBridge.stop()
                 runCatching { chain.stop() }
+                runCatching { psiphon.stop() }
                 sessionJob?.join()
                 val sessionGeneration = generation
                 sessionJob = serviceScope.launch {
@@ -193,6 +214,12 @@ class AetherVpnService : VpnService() {
 
         val chainSettings = ChainSettings.decode(chainJson)
         val splitTunnel = SplitTunnel.decode(splitJson)
+
+        if (carrier != Carrier.AETHER) {
+            runCarrierSession(configJson, mode, chainSettings, splitTunnel, sessionGeneration)
+            return
+        }
+
         val useChain =
             chainSettings.enabled && resolveChainUsage(chainSettings, mode, sessionGeneration)
         if (chainSettings.enabled && !useChain) return
@@ -356,6 +383,158 @@ class AetherVpnService : VpnService() {
             mode = mode,
             sessionGeneration = sessionGeneration,
         )
+    }
+
+    /**
+     * Runs a carrier that is not the engine.
+     *
+     * Shorter than the engine path because there is no endpoint to find, no
+     * identity to provision and no MASQUE handshake to validate: the carrier
+     * either produces a working SOCKS5 listener or it does not, and everything
+     * after that is mihomo turning the interface into connections through it.
+     *
+     * The order is the same one [runChainSession] is careful about, and for the
+     * same reason. The interface is raised first because raising it needs the
+     * user's consent and that is worth failing on early; but it is handed to
+     * mihomo last, after the carrier is up and the rules are written, because
+     * mihomo with no configuration routes everything DIRECT and a DIRECT route
+     * from this process leaves the phone in the clear.
+     */
+    private suspend fun runCarrierSession(
+        configJson: String,
+        mode: EngineMode,
+        chainSettings: ChainSettings,
+        splitTunnel: SplitTunnel,
+        sessionGeneration: Long,
+    ) {
+        val name = carrier.wireName
+        EngineLog.record(LogLevel.INFO, "carrier", "carrying this session on $name")
+        startEngineLogPump(sessionGeneration)
+
+        // Whole-device only, and refused rather than quietly substituted. In
+        // proxy mode the app's own listener is what applications are pointed
+        // at, and this carrier has no listener of ours to offer -- Psiphon's is
+        // on a port it chose, without the validation or the LAN rules that
+        // listener carries. Starting anyway would leave the user pointed at a
+        // port that answers nothing.
+        if (mode != EngineMode.TUN) {
+            reportError(mode, sayNow(R.string.err_carrier_whole_device_only))
+            finishIfCurrent(sessionGeneration)
+            return
+        }
+
+        // The one build-time failure worth naming precisely. Without the chain
+        // library there is nothing that can turn an interface into connections,
+        // so this carrier cannot run at all -- and saying "not available in this
+        // build" beats an interface that comes up and carries nothing.
+        if (!chain.isAvailable) {
+            reportError(mode, sayNow(R.string.err_carrier_needs_chain))
+            finishIfCurrent(sessionGeneration)
+            return
+        }
+
+        EngineStatusStore.update(
+            EngineStatus(EngineStage.PREPARING, mode, message = sayNow(R.string.status_starting_carrier)),
+        )
+        updateNotification(mode, sayNow(R.string.status_starting_carrier))
+
+        if (prepare(this) != null) {
+            reportError(mode, sayNow(R.string.err_permission_required))
+            finishIfCurrent(sessionGeneration)
+            return
+        }
+
+        // forChain, because that is exactly what this is from the interface's
+        // point of view: mihomo owns it, the addresses are its, and this
+        // package is excluded from it. That exclusion is not a nicety here --
+        // the carrier runs in another process and protect() cannot reach its
+        // sockets, so the interface not carrying our own uid is the only thing
+        // keeping the carrier's traffic out of the tunnel it is building.
+        val tun = establishTun("", "", forChain = true, transport = name, splitTunnel = splitTunnel)
+        if (tun == null) {
+            reportError(mode, sayNow(R.string.err_no_interface))
+            finishIfCurrent(sessionGeneration)
+            return
+        }
+        val tunFd = tun.detachFd()
+
+        if (sessionGeneration != generation) {
+            runCatching { psiphon.stop() }
+            return
+        }
+
+        EngineStatusStore.update(
+            EngineStatus(EngineStage.CONNECTING, mode, null, sayNow(R.string.status_carrier_connecting)),
+        )
+        updateNotification(mode, sayNow(R.string.status_carrier_connecting))
+
+        val port = psiphon.start("", PSIPHON_WAIT_MS).getOrElse { error ->
+            val reason = error.message ?: sayNow(R.string.err_carrier_failed)
+            EngineLog.record(LogLevel.ERROR, "carrier", reason)
+            runCatching { psiphon.stop() }
+            if (sessionGeneration != generation) return
+            scheduleReconnect(configJson, sessionGeneration, mode, reason)
+            return
+        }
+
+        if (sessionGeneration != generation) {
+            runCatching { psiphon.stop() }
+            return
+        }
+
+        EngineLog.record(LogLevel.INFO, "carrier", "$name is up on 127.0.0.1:$port")
+        EngineStatusStore.update(
+            EngineStatus(EngineStage.CONNECTING, mode, null, sayNow(R.string.status_starting_chain)),
+        )
+
+        val failure = withContext(Dispatchers.IO) {
+            chain.startCarrier(
+                settings = chainSettings,
+                socksPort = port,
+                // Psiphon forwards UDP over its own tunnel. The flag exists for
+                // the carriers that do not, where declaring it would make DNS
+                // and QUIC fail silently rather than fall back.
+                udp = true,
+                tunFd = tunFd,
+            )
+        }
+        if (failure != null) {
+            EngineLog.record(LogLevel.ERROR, "chain", failure)
+            runCatching { chain.stop() }
+            runCatching { psiphon.stop() }
+            if (sessionGeneration != generation) return
+            scheduleReconnect(configJson, sessionGeneration, mode, failure)
+            return
+        }
+
+        serviceScope.launch {
+            while (sessionGeneration == generation) {
+                delay(EVENT_DRAIN_MS)
+                withContext(Dispatchers.IO) { chain.collectEvents() }
+            }
+        }
+
+        reconnectAttempt = 0
+        reportConnected(mode, null, sayNow(R.string.status_carrier_carries, sayNow(carrier.label)))
+
+        // Watched rather than assumed. The carrier is in another process and can
+        // be killed on its own -- by the system reclaiming memory, or by its own
+        // tunnel giving up -- and mihomo would keep the interface up dialling a
+        // listener that has gone, which the phone experiences as connected and
+        // carrying nothing.
+        psiphon.state.collect { snapshot ->
+            if (sessionGeneration != generation) return@collect
+            if (snapshot.state == PsiphonService.State.FAILED ||
+                snapshot.state == PsiphonService.State.STOPPED
+            ) {
+                val reason = snapshot.failure ?: sayNow(R.string.err_carrier_stopped)
+                EngineLog.record(LogLevel.ERROR, "carrier", reason)
+                runCatching { chain.stop() }
+                runCatching { psiphon.stop() }
+                scheduleReconnect(configJson, sessionGeneration, mode, reason)
+                return@collect
+            }
+        }
     }
 
     /**
@@ -1170,6 +1349,12 @@ class AetherVpnService : VpnService() {
         private const val LAST_CHAIN_CONFIG = "last_chain_config"
         private const val LAST_SPLIT_CONFIG = "last_split_config"
         private const val LAST_GOOD_TRANSPORT = "last_good_transport"
+        private const val EXTRA_CARRIER = "carrier"
+        private const val LAST_CARRIER = "last_carrier"
+        // Psiphon establishes over a network that is actively hostile to it,
+        // and its own timeout is two minutes. Ours has to be the longer of
+        // the two or we would tear down a tunnel that was about to arrive.
+        private const val PSIPHON_WAIT_MS = 150_000L
         private const val PREFS_NAME = "aether_service"
         // How long the chain waits for the tunnel it dials its nodes through.
         // Generous, because that tunnel is itself still searching for a route.
@@ -1207,6 +1392,7 @@ class AetherVpnService : VpnService() {
             splitJson: String? = null,
             killSwitch: Boolean = false,
             strictKillSwitch: Boolean = false,
+            carrier: Carrier = Carrier.AETHER,
         ) {
             ContextCompat.startForegroundService(
                 context,
@@ -1216,7 +1402,12 @@ class AetherVpnService : VpnService() {
                     .putExtra(EXTRA_CHAIN, chainJson)
                     .putExtra(EXTRA_SPLIT, splitJson)
                     .putExtra(EXTRA_KILL_SWITCH, killSwitch)
-                    .putExtra(EXTRA_STRICT_KILL, strictKillSwitch),
+                    .putExtra(EXTRA_STRICT_KILL, strictKillSwitch)
+                    // By name rather than by ordinal. An ordinal is a promise
+                    // about the order of an enum that nothing enforces, and a
+                    // carrier added in the middle of the list would silently
+                    // reinterpret a pending intent written by the old build.
+                    .putExtra(EXTRA_CARRIER, carrier.wireName),
             )
         }
 

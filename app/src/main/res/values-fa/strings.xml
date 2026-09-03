@@ -451,4 +451,20 @@
     <string name="err_cannot_open_location">آن مکان باز نشد</string>
     <string name="err_cannot_read_file">آن فایل خوانده نشد</string>
     <string name="share_diagnostics">ارسال اطلاعات تشخیصی</string>
+    <string name="carrier_aether">اتر</string>
+    <string name="carrier_psiphon">سایفون</string>
+    <string name="carrier">حامل</string>
+    <string name="carrier_subtitle">کدام موتور تونل را حمل می‌کند</string>
+    <string name="carrier_aether_detail">MASQUE روی کلودفلر. سریع‌ترین مسیر، و چیزی که بقیهٔ اپ حول آن ساخته شده.</string>
+    <string name="carrier_psiphon_detail">شبکهٔ خودِ سایفون. کندتر، و سرورهای شخص دیگری — برای شبکه‌هایی که اتر از آن‌ها بیرون نمی‌رود.</string>
+    <string name="carrier_needs_chain_notice">این نسخه نمی‌تواند سایفون را اجرا کند: کتابخانهٔ مسیریابی موردنیازش موجود نیست.</string>
+    <string name="carrier_whole_device_notice">سایفون فقط کل دستگاه را حمل می‌کند. پوشش را به «کل دستگاه» برگردانید یا اتر را انتخاب کنید.</string>
+    <string name="status_starting_carrier">آماده‌سازی حامل…</string>
+    <string name="status_carrier_connecting">سایفون دنبال راه خروج می‌گردد. ممکن است یک دقیقه طول بکشد.</string>
+    <string name="status_carrier_carries">متصل از طریق %1$s</string>
+    <string name="err_carrier_whole_device_only">سایفون در حالت فقط-پراکسی اجرا نمی‌شود</string>
+    <string name="err_carrier_needs_chain">این نسخه نمی‌تواند سایفون را مسیریابی کند: کتابخانهٔ زنجیره موجود نیست</string>
+    <string name="err_carrier_failed">سایفون نتوانست وصل شود</string>
+    <string name="err_carrier_stopped">سایفون متوقف شد</string>
+    <string name="carrier_not_engine_note">نقطهٔ پایانی، پروتکل و عمق جست‌وجوی پایین فقط برای اتر هستند. این حامل خودش راه خروجش را پیدا می‌کند.</string>
 </resources>

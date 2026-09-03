@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!--
       Lets the app list what the user can actually launch, for per-app routing.
       QUERY_ALL_PACKAGES would return every service and provider too, is a
@@ -49,9 +50,18 @@
     -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!--
+      tools:replace, because psiphontunnel declares backup rules of its own and
+      this app does not do backups at all. The merger cannot decide between
+      "false" and a rules file, and getting this wrong is not a build problem:
+      it is Psiphon's data store, which holds what the device has connected to,
+      being eligible for Google's cloud backup on a phone whose owner was told
+      in PRIVACY.md that nothing here is backed up. Ours wins deliberately.
+    -->
     <application
         android:name=".WhiteAestherApplication"
         android:allowBackup="false"
+        tools:replace="android:fullBackupContent"
         android:banner="@drawable/tv_banner"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
@@ -112,5 +122,22 @@
                 android:name="android.service.quicksettings.ACTIVE_TILE"
                 android:value="false" />
         </service>
+
+        <!--
+          Psiphon, in its own process, and that is the entire point of the
+          declaration. Its tunnel core is Go and so is the exit chain; one
+          process may host one Go runtime, because two of them export the same
+          runtime symbols into a single linker namespace and a call that binds
+          to the wrong copy takes the process down.
+
+          Not exported and not startable from outside: it takes no action that
+          another app has any business asking for, and the only thing it
+          produces is a proxy on loopback.
+        -->
+        <service
+            android:name=".service.PsiphonService"
+            android:process=":psiphon"
+            android:exported="false" />
+
     </application>
 </manifest>

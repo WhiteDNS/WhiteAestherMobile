@@ -48,6 +48,14 @@ jobs:
           cargo test --manifest-path native/android-bridge/Cargo.toml --locked
           cargo clippy --manifest-path native/android-bridge/Cargo.toml --locked --all-targets -- -D warnings
 
+      # Psiphon's bootstrap list, which is data rather than code and is not
+      # committed. Gradle packages whatever is staged, so without this the
+      # preview APK installs with the Psiphon carrier present and unable to
+      # start -- the shape of failure that only shows up on a device.
+      - name: Fetch the Psiphon server list
+        shell: pwsh
+        run: ./native/psiphon/setup.ps1
+
       - name: Test, lint and package Android
         run: >-
           ./gradlew
@@ -65,6 +73,13 @@ jobs:
             apk="${apk_dir}/app-preview-${abi}-debug.apk"
             test -f "$apk"
             jar tf "$apk" | grep -F "lib/${abi}/libwhiteaesther_core.so"
+            # The Psiphon carrier, both halves of it. The tunnel core is a
+            # native library that has to match the ABI, and the server list is
+            # an asset a fetch step can silently skip -- either one missing is
+            # a carrier that cannot start on a phone that has already installed
+            # the build.
+            jar tf "$apk" | grep -F "lib/${abi}/libgojni.so"
+            jar tf "$apk" | grep -qF "assets/psiphon_server_entries.txt"
             test "$(jar tf "$apk" | grep -c '^lib/.*/libwhiteaesther_core\.so$')" -eq 1
             ! jar tf "$apk" | grep -E 'lib(quiche|boringtun.*)\.so'
             "${ANDROID_HOME}/build-tools/${ANDROID_BUILD_TOOLS}/aapt2" \

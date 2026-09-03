@@ -24,3 +24,8 @@ native/chain/build/
 # Bundled history of the retired WhiteAesther-Android repository. Large, local,
 # and the only surviving copy -- keep a duplicate off this drive.
 archive/
+
+# Psiphon's bootstrap server list. Fetched by native/psiphon/setup.ps1 at a
+# pinned revision and checked against a SHA-256 -- large, regenerable, and not
+# ours, which is the same reason native/chain/third_party is not committed.
+app/src/main/assets/psiphon_server_entries.txt

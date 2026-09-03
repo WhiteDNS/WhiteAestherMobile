@@ -426,6 +426,7 @@ class MainActivity : ComponentActivity() {
             settings.splitTunnel.encode(),
             settings.killSwitch,
             settings.strictKillSwitch,
+            settings.carrier,
         )
     }
 }
