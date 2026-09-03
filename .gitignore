@@ -20,3 +20,7 @@ memory.md
 set-signing-secrets.ps1
 native/chain/third_party/
 native/chain/build/
+
+# Bundled history of the retired WhiteAesther-Android repository. Large, local,
+# and the only surviving copy -- keep a duplicate off this drive.
+archive/
