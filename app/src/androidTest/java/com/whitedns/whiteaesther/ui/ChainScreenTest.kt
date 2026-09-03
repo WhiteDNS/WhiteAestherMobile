@@ -59,6 +59,7 @@ class ChainScreenTest {
                     onStop = {},
                     onScanEndpoints = {},
                     onTestEndpoint = {},
+                    onResetEndpoint = {},
                     onCancelEndpointScan = {},
                     onSelectChainNode = { selected = it },
                     batteryExempt = true,

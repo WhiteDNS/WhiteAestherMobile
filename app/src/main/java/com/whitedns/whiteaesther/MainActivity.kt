@@ -264,6 +264,7 @@ class MainActivity : ComponentActivity() {
                     onStop = { AetherVpnService.stop(this) },
                     onScanEndpoints = viewModel::scanEndpoints,
                     onTestEndpoint = viewModel::testEndpoint,
+                    onResetEndpoint = viewModel::resetEndpoint,
                     onCancelEndpointScan = viewModel::cancelEndpointScan,
                     onRefreshChainNodes = { viewModel.refreshChainNodes(settings) },
                     onSelectChainNode = { node -> viewModel.selectChainNode(settings, node) },

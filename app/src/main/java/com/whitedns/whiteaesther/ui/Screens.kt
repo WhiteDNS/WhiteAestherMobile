@@ -794,6 +794,7 @@ fun EndpointScreen(
     onSettingsChange: (AppSettings) -> Unit,
     onScanEndpoints: (AppSettings) -> Unit,
     onTestEndpoint: (AppSettings) -> Unit,
+    onResetEndpoint: (AppSettings) -> Unit,
     onCancelEndpointScan: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -823,11 +824,7 @@ fun EndpointScreen(
                 actions = listOf(
                     stringResource(R.string.use_automatic) to {
                         onSettingsChange(
-                            settings.copy(
-                                endpointMode = EndpointMode.AUTOMATIC,
-                                customEndpoint = "",
-                                customEndpointProtocol = null,
-                            ),
+                            settings.withoutPinnedEndpoint(),
                         )
                     },
                 ),
@@ -939,6 +936,23 @@ fun EndpointScreen(
                 },
             )
         }
+
+        // Separate from "Find endpoints" above, which searches while leaving a
+        // pinned address in place. This drops the pin first, so a phone that
+        // keeps returning to an address that no longer answers has a way out
+        // that does not involve clearing the field by hand and knowing to.
+        Spacer(Modifier.height(9.dp))
+        OutlineButton(
+            text = stringResource(R.string.forget_and_search_again),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("reset-endpoint-button"),
+            enabled = scannerState.operation == null && !engineBusy,
+            onClick = {
+                endpointText = ""
+                onResetEndpoint(settings)
+            },
+        )
 
         Spacer(Modifier.height(12.dp))
         AetherCard {

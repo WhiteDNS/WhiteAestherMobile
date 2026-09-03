@@ -401,6 +401,21 @@ data class AppSettings(
     }
 
     /**
+     * These settings with no endpoint pinned to them.
+     *
+     * Three fields, and clearing two of them is worse than clearing none: an
+     * address left behind with the mode back on automatic is invisible on the
+     * screen but reappears the moment the mode changes, and a protocol left
+     * behind without an address is what [endpointProtocolMismatch] reads to
+     * accuse a pin that no longer exists. They move together or not at all.
+     */
+    fun withoutPinnedEndpoint(): AppSettings = copy(
+        endpointMode = EndpointMode.AUTOMATIC,
+        customEndpoint = "",
+        customEndpointProtocol = null,
+    )
+
+    /**
      * Set when the pinned address belongs to a protocol other than the one now
      * selected, which is a mismatch the user can only fix by knowing about it.
      */

@@ -1170,6 +1170,7 @@ class AetherVpnService : VpnService() {
         private const val LAST_CHAIN_CONFIG = "last_chain_config"
         private const val LAST_SPLIT_CONFIG = "last_split_config"
         private const val LAST_GOOD_TRANSPORT = "last_good_transport"
+        private const val PREFS_NAME = "aether_service"
         // How long the chain waits for the tunnel it dials its nodes through.
         // Generous, because that tunnel is itself still searching for a route.
         private const val TUNNEL_WAIT_MS = 120_000L
@@ -1182,6 +1183,22 @@ class AetherVpnService : VpnService() {
         private const val RECONNECT_DELAY_MS = 3_000L
         private const val MAX_RECONNECT_DELAY_MS = 60_000L
         private const val MAX_RECONNECT_ATTEMPTS = 8
+
+        /**
+         * Forgets which transport last carried traffic here.
+         *
+         * That memory is what makes the second connect on a network faster than
+         * the first, and it is also what keeps a phone trying a route that
+         * stopped working -- the ladder starts at the remembered rung, so a
+         * network the device has since left still shapes where it looks. Part
+         * of resetting the endpoint, and pointless on its own: the remembered
+         * rung is only a starting position, and a fresh search finds it again
+         * within one session if it is still the right one.
+         */
+        fun forgetLastGoodTransport(context: Context) {
+            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit { remove(LAST_GOOD_TRANSPORT) }
+        }
 
         fun start(
             context: Context,
@@ -1232,6 +1249,6 @@ class AetherVpnService : VpnService() {
     private var blockAfterStop = false
 
     private val preferences by lazy {
-        getSharedPreferences("aether_service", MODE_PRIVATE)
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
     }
 }

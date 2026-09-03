@@ -38,6 +38,7 @@ class IdentityBackupTest {
                     onStop = {},
                     onScanEndpoints = {},
                     onTestEndpoint = {},
+                    onResetEndpoint = {},
                     onCancelEndpointScan = {},
                     identityMessage = message,
                     onExportIdentity = { exported++ },

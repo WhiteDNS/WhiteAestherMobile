@@ -46,6 +46,7 @@ class BatteryNoticeTest {
                     onStop = {},
                     onScanEndpoints = {},
                     onTestEndpoint = {},
+                    onResetEndpoint = {},
                     onCancelEndpointScan = {},
                     batteryExempt = batteryExempt,
                 )

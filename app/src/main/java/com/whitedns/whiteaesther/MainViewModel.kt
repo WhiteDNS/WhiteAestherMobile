@@ -16,6 +16,7 @@ import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.data.TunnelProtocol
 import com.whitedns.whiteaesther.data.SettingsRepository
 import com.whitedns.whiteaesther.data.UpdateChecker
+import com.whitedns.whiteaesther.service.AetherVpnService
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatusStore
 import com.whitedns.whiteaesther.service.TrafficMeter
@@ -507,6 +508,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 selected = reported.selected,
             )
         }
+    }
+
+    /**
+     * Forgets the endpoint entirely and looks for a new one.
+     *
+     * Three separate things remember an endpoint, and clearing one of them is
+     * what makes this look like it did nothing: the pinned address in settings,
+     * the results still listed on screen, and the transport the service saw
+     * work last. A pin survives the network it was found on -- an address that
+     * answered on home wifi is just an address that times out on mobile data --
+     * and with fallback off there is nothing to move on to, so the user reads a
+     * dead pin as the app being broken.
+     *
+     * The scan starts here rather than being left to the next connect so that
+     * the reset has something to show for itself.
+     */
+    fun resetEndpoint(settings: AppSettings) {
+        val cleared = settings.withoutPinnedEndpoint()
+        save(cleared)
+        AetherVpnService.forgetLastGoodTransport(getApplication())
+        mutableEndpointScannerState.value = EndpointScannerState()
+        scanEndpoints(cleared)
     }
 
     fun scanEndpoints(settings: AppSettings) {

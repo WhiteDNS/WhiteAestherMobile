@@ -100,6 +100,7 @@
     <string name="if_this_address_stops_working_search_for">اگر این آدرس از کار افتاد، به‌جای شکست خوردن دنبال آدرس دیگری بگرد.</string>
     <string name="test_this_one">همین را آزمایش کن</string>
     <string name="find_endpoints">یافتن نقاط پایانی</string>
+    <string name="forget_and_search_again">فراموش کردن این نقطهٔ پایانی و جست‌وجوی دوباره</string>
     <string name="endpoints_that_worked">نقاطی که کار کردند</string>
     <string name="not_searched_yet">هنوز جست‌وجو نشده</string>
     <string name="result_rttmillis_ms">%1$s میلی‌ثانیه</string>

@@ -13,6 +13,27 @@ class EndpointProtocolTest {
     )
 
     @Test
+    fun forgettingThePinClearsTheAddressTheModeAndTheProtocolTogether() {
+        val cleared = pinned.withoutPinnedEndpoint()
+        assertEquals(EndpointMode.AUTOMATIC, cleared.endpointMode)
+        assertEquals("", cleared.customEndpoint)
+        assertNull(cleared.customEndpointProtocol)
+        // The three move together or the reset is not one: an address kept
+        // behind an automatic mode comes back the moment the mode changes.
+        assertNull(cleared.endpointValidationError())
+        assertNull(cleared.endpointProtocolMismatch())
+    }
+
+    @Test
+    fun forgettingThePinLeavesEverythingElseAlone() {
+        // A reset of the endpoint is not a reset of the settings. The transport
+        // the user chose is the one the fresh search should probe with.
+        val cleared = pinned.copy(transport = TunnelProtocol.H2).withoutPinnedEndpoint()
+        assertEquals(TunnelProtocol.H2, cleared.transport)
+        assertEquals(pinned.copy(transport = TunnelProtocol.H2).dualStack, cleared.dualStack)
+    }
+
+    @Test
     fun anAddressPinnedForTheCurrentProtocolIsNotAMismatch() {
         assertNull(pinned.endpointProtocolMismatch())
         assertNull(pinned.copy(transport = TunnelProtocol.H2).endpointProtocolMismatch())

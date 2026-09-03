@@ -102,6 +102,7 @@ fun WhiteAestherApp(
     onStop: () -> Unit,
     onScanEndpoints: (AppSettings) -> Unit,
     onTestEndpoint: (AppSettings) -> Unit,
+    onResetEndpoint: (AppSettings) -> Unit,
     onCancelEndpointScan: () -> Unit,
     onRefreshChainNodes: () -> Unit = {},
     onSelectChainNode: (String) -> Unit = {},
@@ -261,6 +262,7 @@ fun WhiteAestherApp(
                     onSettingsChange = onSettingsChange,
                     onScanEndpoints = onScanEndpoints,
                     onTestEndpoint = onTestEndpoint,
+                    onResetEndpoint = onResetEndpoint,
                     onCancelEndpointScan = onCancelEndpointScan,
                     onBack = ::goBack,
                 )
