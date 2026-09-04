@@ -98,8 +98,9 @@ class AetherVpnService : VpnService() {
      */
     private var torBridge: TorBridge = TorBridge.NONE
     private var torBridges: String = ""
+    private var psiphonRegion: String = ""
     private val chain by lazy { ChainController(this) }
-    private val psiphon by lazy { PsiphonClient(this) }
+    private var psiphonClient: PsiphonClient? = null
     private var torClient: TorClient? = null
 
     /**
@@ -112,7 +113,7 @@ class AetherVpnService : VpnService() {
     private val carrierClient: CarrierClient?
         get() = when (carrier) {
             Carrier.AETHER -> null
-            Carrier.PSIPHON -> psiphon
+            Carrier.PSIPHON -> psiphonClient
             // Rebuilt when the bridge changes rather than held: the choice is
             // part of how tor is started, not something it can be told later.
             Carrier.TOR -> torClient
@@ -151,6 +152,7 @@ class AetherVpnService : VpnService() {
                     .firstOrNull { it.wireName == intent.getStringExtra(EXTRA_TOR_BRIDGE) }
                     ?: TorBridge.NONE
                 torBridges = intent.getStringExtra(EXTRA_TOR_BRIDGES).orEmpty()
+                psiphonRegion = intent.getStringExtra(EXTRA_PSIPHON_REGION).orEmpty()
                 // Held for the life of the session: giveUp runs long after
                 // this, and is not a place that can read DataStore.
                 blockOnFailure = intent.getBooleanExtra(EXTRA_KILL_SWITCH, false)
@@ -163,6 +165,7 @@ class AetherVpnService : VpnService() {
                         putString(LAST_CARRIER, carrier.wireName)
                         putString(LAST_TOR_BRIDGE, torBridge.wireName)
                         putString(LAST_TOR_BRIDGES, torBridges)
+                        putString(LAST_PSIPHON_REGION, psiphonRegion)
                     }
                     restartPolicy = START_STICKY
                 } else {
@@ -173,6 +176,7 @@ class AetherVpnService : VpnService() {
                         remove(LAST_CARRIER)
                         remove(LAST_TOR_BRIDGE)
                         remove(LAST_TOR_BRIDGES)
+                        remove(LAST_PSIPHON_REGION)
                     }
                 }
                 startForegroundNow(sayNow(R.string.status_preparing_connection), sayNow(R.string.status_validating_engine))
@@ -190,6 +194,7 @@ class AetherVpnService : VpnService() {
                         .firstOrNull { it.wireName == preferences.getString(LAST_TOR_BRIDGE, null) }
                         ?: TorBridge.NONE
                     torBridges = preferences.getString(LAST_TOR_BRIDGES, null).orEmpty()
+                    psiphonRegion = preferences.getString(LAST_PSIPHON_REGION, null).orEmpty()
                     restartPolicy = START_STICKY
                     startForegroundNow(sayNow(R.string.status_restoring), sayNow(R.string.status_reconnecting_tun))
                     replaceSession(
@@ -467,7 +472,7 @@ class AetherVpnService : VpnService() {
     }
 
     private fun stopCarrier() {
-        runCatching { psiphon.stop() }
+        runCatching { psiphonClient?.stop() }
         runCatching { torClient?.stop() }
     }
 
@@ -539,6 +544,13 @@ class AetherVpnService : VpnService() {
         )
         updateNotification(mode, sayNow(R.string.status_carrier_connecting, sayNow(carrier.label)))
 
+        if (carrier == Carrier.PSIPHON) {
+            // Rebuilt per session for the same reason Tor's client is: the exit
+            // country is part of the configuration tunnel-core reads when it
+            // starts, not something it can be told afterwards.
+            psiphonClient?.let { runCatching { it.stop() } }
+            psiphonClient = PsiphonClient(this, psiphonRegion)
+        }
         if (carrier == Carrier.TOR) {
             // Rebuilt rather than reused. The bridge is part of the torrc tor
             // reads at startup, so a client built for the previous choice would
@@ -1448,6 +1460,8 @@ class AetherVpnService : VpnService() {
         private const val EXTRA_TOR_BRIDGE = "torBridge"
         private const val EXTRA_TOR_BRIDGES = "torBridges"
         private const val LAST_TOR_BRIDGES = "last_tor_bridges"
+        private const val EXTRA_PSIPHON_REGION = "psiphonRegion"
+        private const val LAST_PSIPHON_REGION = "last_psiphon_region"
         private const val LAST_TOR_BRIDGE = "last_tor_bridge"
         // Psiphon establishes over a network that is actively hostile to it,
         // and its own timeout is two minutes. Ours has to be the longer of
@@ -1493,6 +1507,7 @@ class AetherVpnService : VpnService() {
             carrier: Carrier = Carrier.AETHER,
             torBridge: TorBridge = TorBridge.NONE,
             torBridges: String = "",
+            psiphonRegion: String = "",
         ) {
             ContextCompat.startForegroundService(
                 context,
@@ -1509,7 +1524,8 @@ class AetherVpnService : VpnService() {
                     // reinterpret a pending intent written by the old build.
                     .putExtra(EXTRA_CARRIER, carrier.wireName)
                     .putExtra(EXTRA_TOR_BRIDGE, torBridge.wireName)
-                    .putExtra(EXTRA_TOR_BRIDGES, torBridges),
+                    .putExtra(EXTRA_TOR_BRIDGES, torBridges)
+                    .putExtra(EXTRA_PSIPHON_REGION, psiphonRegion),
             )
         }
 

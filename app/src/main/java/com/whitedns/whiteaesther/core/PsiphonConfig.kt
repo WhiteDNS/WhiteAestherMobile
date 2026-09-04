@@ -38,6 +38,27 @@ object PsiphonConfig {
     const val SERVER_ENTRIES_ASSET = "psiphon_server_entries.txt"
 
     /**
+     * The exit countries Psiphon last said it had, newest answer wins.
+     *
+     * Written by the Psiphon process and read by the screen, which are two
+     * processes -- hence a file rather than a field. tunnel-core reports this
+     * after a handshake, so before the first connection there is nothing to
+     * offer and the screen says only "best available", which is honest: we do
+     * not know what it has until it tells us.
+     */
+    fun regionsFile(context: Context): File = File(dataDirectory(context), "regions.txt")
+
+    fun availableRegions(context: Context): List<String> = runCatching {
+        regionsFile(context).readLines().map { it.trim() }.filter { it.length == 2 }.sorted()
+    }.getOrDefault(emptyList())
+
+    fun rememberRegions(context: Context, regions: List<String>) {
+        runCatching {
+            regionsFile(context).writeText(regions.filter { it.length == 2 }.joinToString("\n"))
+        }
+    }
+
+    /**
      * How long tunnel-core tries before giving up and letting us decide.
      *
      * Not unlimited, which is its default. An unlimited establish means a

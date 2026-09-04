@@ -108,6 +108,13 @@ class PsiphonService : Service() {
             override fun getPsiphonConfig(): String =
                 PsiphonConfig.render(this@PsiphonService, egressRegion)
 
+            override fun onAvailableEgressRegions(regions: MutableList<String>?) {
+                // Recorded rather than reported. It changes rarely and nothing
+                // is waiting on it -- the screen reads it the next time it is
+                // opened, which is soon enough for a list of countries.
+                PsiphonConfig.rememberRegions(this@PsiphonService, regions.orEmpty())
+            }
+
             override fun onListeningSocksProxyPort(port: Int) {
                 socksPort.set(port)
                 // Not connected yet: the listener is up before a tunnel is, and

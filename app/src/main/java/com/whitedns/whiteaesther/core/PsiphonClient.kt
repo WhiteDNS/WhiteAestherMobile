@@ -25,7 +25,10 @@ import kotlinx.coroutines.withTimeoutOrNull
  * cannot be missed by a client that was not listening yet: the service answers
  * a registration with the current state rather than only the next one.
  */
-class PsiphonClient(private val context: Context) : CarrierClient {
+class PsiphonClient(
+    private val context: Context,
+    private val egressRegion: String,
+) : CarrierClient {
     private val mutableState = MutableStateFlow(CarrierSnapshot())
     override val state = mutableState
 
@@ -69,11 +72,12 @@ class PsiphonClient(private val context: Context) : CarrierClient {
         context.startService(
             Intent(context, PsiphonService::class.java)
                 .setAction(PsiphonService.ACTION_START)
-                // Whichever exit Psiphon considers best. Their own client
-                // treats a region as a preference and fails rather than
-                // substituting when it cannot be had, so offering one here
-                // would be offering a way to make the carrier stop working.
-                .putExtra(PsiphonService.EXTRA_REGION, ""),
+                // Empty means whichever exit Psiphon considers best, which
+                // is the default. A named one is a preference and not a
+                // guarantee: tunnel-core keeps trying rather than substituting,
+                // so a country with no capacity is a slow connect rather than a
+                // different exit than the user asked for.
+                .putExtra(PsiphonService.EXTRA_REGION, egressRegion),
         )
 
         val settled = withTimeoutOrNull(timeoutMs) {

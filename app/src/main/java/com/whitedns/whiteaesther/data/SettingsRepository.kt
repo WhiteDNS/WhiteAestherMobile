@@ -19,6 +19,7 @@ class SettingsRepository(private val context: Context) {
             proxyPort = preferences[PROXY_PORT]?.coerceIn(1_024, 65_535) ?: 1819,
             transport = enumValueOrDefault(preferences[TRANSPORT], TunnelProtocol.AUTO),
             carrier = enumValueOrDefault(preferences[CARRIER], Carrier.AETHER),
+            psiphonRegion = preferences[PSIPHON_REGION].orEmpty(),
             torBridge = enumValueOrDefault(preferences[TOR_BRIDGE], TorBridge.NONE),
             torBridges = preferences[TOR_BRIDGES].orEmpty(),
             scanStrategy = enumValueOrDefault(preferences[SCAN], ScanStrategy.BALANCED),
@@ -64,6 +65,7 @@ class SettingsRepository(private val context: Context) {
             preferences[PROXY_PORT] = settings.proxyPort
             preferences[TRANSPORT] = settings.transport.name
             preferences[CARRIER] = settings.carrier.name
+            preferences[PSIPHON_REGION] = settings.psiphonRegion
             preferences[TOR_BRIDGE] = settings.torBridge.name
             preferences[TOR_BRIDGES] = settings.torBridges
             preferences[SCAN] = settings.scanStrategy.name
@@ -107,6 +109,7 @@ class SettingsRepository(private val context: Context) {
         val PROXY_PORT = intPreferencesKey("proxy_port")
         val TRANSPORT = stringPreferencesKey("transport")
         val CARRIER = stringPreferencesKey("carrier")
+        val PSIPHON_REGION = stringPreferencesKey("psiphon_region")
         val TOR_BRIDGE = stringPreferencesKey("tor_bridge")
         val TOR_BRIDGES = stringPreferencesKey("tor_bridges")
         val SCAN = stringPreferencesKey("scan")

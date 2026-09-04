@@ -268,6 +268,7 @@ class MainActivity : ComponentActivity() {
                     onFetchBridges = { viewModel.fetchBridges(settings) },
                     bridgesFetching = viewModel.bridgesFetching.collectAsStateWithLifecycle().value,
                     bridgesMessage = viewModel.bridgesMessage.collectAsStateWithLifecycle().value,
+                    psiphonRegions = viewModel.psiphonRegions.collectAsStateWithLifecycle().value,
                     onCancelEndpointScan = viewModel::cancelEndpointScan,
                     onRefreshChainNodes = { viewModel.refreshChainNodes(settings) },
                     onSelectChainNode = { node -> viewModel.selectChainNode(settings, node) },
@@ -432,6 +433,7 @@ class MainActivity : ComponentActivity() {
             settings.carrier,
             settings.torBridge,
             settings.torBridges,
+            settings.psiphonRegion,
         )
     }
 }
