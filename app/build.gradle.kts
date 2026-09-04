@@ -110,6 +110,21 @@ android {
     }
 
     packaging {
+        // Compressed in the APK, and extracted at install.
+        //
+        // AGP's default since minSdk 23 is the opposite: store every .so
+        // uncompressed and page-aligned so the loader can map it straight out
+        // of the APK. That trade is right for an app people download from a
+        // store over wifi, and wrong for this one. Three native engines --
+        // mihomo, Psiphon and Aether -- come to about 82MB, and stored
+        // uncompressed that is the download. They deflate better than 3:1.
+        //
+        // What it costs is disk on the device, because the extracted copies sit
+        // beside the APK that still holds them, and a few seconds at install.
+        // What it buys is the download, over a mobile connection, in a country
+        // where that is metered and slow, for an app that is often fetched
+        // again after every block. That is not a close call.
+        jniLibs.useLegacyPackaging = true
         jniLibs.excludes += setOf(
             "**/libboringtun-*.so",
             "**/libquiche.so",
