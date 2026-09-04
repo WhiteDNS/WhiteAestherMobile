@@ -134,6 +134,16 @@ jobs:
         shell: pwsh
         run: ./native/psiphon/setup.ps1
 
+      # Tor's pluggable transports. Go again, and the same toolchain the chain
+      # step above installed. Without them Tor still runs and only its bridge
+      # modes are unavailable, which is a worse release than it needs to be on
+      # exactly the networks Tor is wanted for.
+      - name: Build the pluggable transports
+        shell: pwsh
+        run: |
+          ./native/tor/setup.ps1
+          ./native/tor/build.ps1
+
       - name: Build signed APKs and bundle
         shell: bash
         run: |
@@ -170,6 +180,12 @@ jobs:
             jar tf "$apk" | grep -F "lib/${abi}/libwhiteaestherchain.so"
             jar tf "$apk" | grep -F "lib/${abi}/libgojni.so"
             jar tf "$apk" | grep -qF "assets/psiphon_server_entries.txt"
+            # Tor and both of its transports. A transport that did not make it
+            # into the APK is a bridge mode that fails on a phone which has
+            # already installed the build.
+            jar tf "$apk" | grep -F "lib/${abi}/libtor.so"
+            jar tf "$apk" | grep -F "lib/${abi}/liblyrebird.so"
+            jar tf "$apk" | grep -F "lib/${abi}/libsnowflake.so"
             test "$(jar tf "$apk" | grep -c '^lib/.*/libwhiteaestherchain\.so$')" -eq 1
             cp "$apk" "release-assets/${base}-${abi}.apk"
           done

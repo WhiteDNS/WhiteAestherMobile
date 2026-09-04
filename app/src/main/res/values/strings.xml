@@ -466,7 +466,7 @@
     <string name="carrier_needs_chain_notice">This build cannot run Psiphon: the routing library it needs is missing.</string>
     <string name="carrier_whole_device_notice">Psiphon carries the whole device only. Switch Coverage back to Whole device, or choose Aether.</string>
     <string name="status_starting_carrier">Preparing the carrier…</string>
-    <string name="status_carrier_connecting">Psiphon is looking for a way out. This can take a minute.</string>
+    <string name="status_carrier_connecting">%1$s is looking for a way out. This can take a minute.</string>
     <string name="status_carrier_carries">Connected through %1$s</string>
     <string name="err_carrier_whole_device_only">Psiphon cannot run in proxy-only mode</string>
     <string name="err_carrier_needs_chain">This build cannot route Psiphon: the chain library is missing</string>
@@ -475,4 +475,13 @@
     <string name="carrier_not_engine_note">Endpoint, protocol and discovery depth below apply to Aether only. This carrier finds its own way out.</string>
     <string name="carrier_tor">Tor</string>
     <string name="carrier_tor_detail">Three relays, and the exit does not know who asked. The slowest option, and it carries no UDP.</string>
+    <string name="tor_bridge_none">Direct</string>
+    <string name="tor_bridge_obfs4">obfs4 bridge</string>
+    <string name="tor_bridge_snowflake">Snowflake</string>
+    <string name="tor_bridge">How Tor connects</string>
+    <string name="tor_bridge_subtitle">Direct is fastest and blocked wherever Tor is</string>
+    <string name="tor_bridge_none_detail">Straight to the Tor network. Fastest, and the first thing a censor blocks.</string>
+    <string name="tor_bridge_obfs4_detail">Hides the shape of the traffic. Uses the public bridges, which are also the first ones blocked.</string>
+    <string name="tor_bridge_snowflake_detail">Through whichever volunteer browser answers. Survives a lot, and varies in speed.</string>
+    <string name="tor_bridge_missing">This build ships no pluggable transports, so only Direct can run.</string>
 </resources>

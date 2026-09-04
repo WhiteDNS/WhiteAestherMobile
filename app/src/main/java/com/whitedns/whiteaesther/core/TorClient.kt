@@ -9,6 +9,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
+import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.service.TorCarrierService
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,7 +25,10 @@ import kotlinx.coroutines.withTimeoutOrNull
  * the tunnel is already up is told the current state rather than waiting for a
  * change that has been and gone.
  */
-class TorClient(private val context: Context) : CarrierClient {
+class TorClient(
+    private val context: Context,
+    private val bridge: TorBridge,
+) : CarrierClient {
     private val mutableState = MutableStateFlow(CarrierSnapshot())
     override val state = mutableState
 
@@ -58,7 +62,8 @@ class TorClient(private val context: Context) : CarrierClient {
         bind()
         context.startService(
             Intent(context, TorCarrierService::class.java)
-                .setAction(TorCarrierService.ACTION_START),
+                .setAction(TorCarrierService.ACTION_START)
+                .putExtra(TorCarrierService.EXTRA_BRIDGE, bridge.wireName),
         )
 
         val settled = withTimeoutOrNull(timeoutMs) {

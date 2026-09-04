@@ -39,26 +39,38 @@ Refused, a resolver falls back to TCP and a browser falls back off QUIC, both
 within a round trip. DNS still resolves because the chain's resolvers are
 DNS-over-HTTPS, which is TCP.
 
-## Pluggable transports are missing, and why
+## The transports, and why we start them
 
-Direct Tor only, for now. Where tor is blocked outright — which is the case this
-carrier is most wanted for — it will not connect.
+obfs4 and snowflake, both working. Built from source by `setup.ps1` and
+`build.ps1` as ordinary Go programs cross-compiled for Android, shipped as
+`liblyrebird.so` and `libsnowflake.so` -- executables named like libraries
+because that is the only form Android extracts and leaves executable, which is
+also why `jniLibs.useLegacyPackaging` being on is a prerequisite here rather
+than only a size decision.
 
-The obvious dependency is IPtProxy, which packages lyrebird (obfs4, meek,
-webtunnel) and snowflake. It cannot be used here: it is a gomobile library, so
-it ships `libgojni.so` and the `go.*` support classes, and so does Psiphon. Two
-of them in one APK is a duplicate-class failure at build time, and worse, one
-`libgojni.so` quietly winning over the other at packaging time — which would
-break whichever carrier lost, at run time, on a device.
+tor would normally launch them itself: `ClientTransportPlugin obfs4 exec <path>`.
+This build cannot. It aborts inside `pt_parse_transport_line` before logging a
+word, which is what a libtor built without the fork it needs looks like; the
+identical torrc with `socks5` in place of `exec` starts cleanly. Measured, not
+assumed.
 
-The way in is the way tor itself expects: transports as their own executables,
-launched with `ClientTransportPlugin`. lyrebird and snowflake are ordinary Go
-programs, and a Go program cross-compiled for Android with `-buildmode=pie` and
-shipped in `jniLibs` as `lib*.so` is extracted to `nativeLibraryDir` and can be
-executed from there. That extraction is why `useLegacyPackaging` being on is a
-prerequisite rather than only a size decision.
+So `PluggableTransport` does tor's half of the managed-proxy protocol -- sets the
+`TOR_PT_*` environment, starts the binary, reads the `CMETHOD` line naming the
+loopback port -- and the torrc hands tor that port. This is the same arrangement
+Orbot arrives at through IPtProxy, by a different road.
 
-That build is not written yet.
+meek is deliberately not offered. lyrebird starts it and tor accepts it, and then
+it never finishes bootstrapping: seven minutes on the public bridge, repeatedly,
+where obfs4 and snowflake took under a minute from the same network. The plumbing
+is generic, so it is a two-line change when there is a bridge worth pointing at.
+
+## Bootstrapped is not the same as listening
+
+`TorService` broadcasts `STATUS_ON` when tor's control connection comes up, which
+is before it has a consensus or a circuit. Reporting that as connected is how a
+slow transport ends up looking connected while carrying nothing -- which is
+exactly what meek did. `TorCarrierService` polls `status/bootstrap-phase` and
+only reports CONNECTED at `PROGRESS=100`.
 
 ## Licence
 

@@ -63,6 +63,7 @@ import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.data.AppLanguage
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.Carrier
+import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.data.EndpointAddress
 import com.whitedns.whiteaesther.data.EndpointFamily
 import com.whitedns.whiteaesther.data.EndpointMode
@@ -723,6 +724,35 @@ fun RoutesScreen(
             // than a sentence saying so.
             if (!settings.carrier.usesEngine) {
                 Note(stringResource(R.string.carrier_not_engine_note))
+            }
+        }
+
+        // Only under Tor, because it is the only carrier that has this choice:
+        // Psiphon picks its own protocols and gives no say in it, and offering
+        // a control that belongs to one carrier under all of them is how a
+        // screen stops meaning anything.
+        if (settings.carrier == Carrier.TOR) {
+            Spacer(Modifier.height(12.dp))
+            AetherCard {
+                CardHead(
+                    stringResource(R.string.tor_bridge),
+                    stringResource(R.string.tor_bridge_subtitle),
+                )
+                Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    TorBridge.entries.forEach { bridge ->
+                        OptionRow(
+                            code = null,
+                            title = stringResource(bridge.label),
+                            subtitle = when (bridge) {
+                                TorBridge.NONE -> stringResource(R.string.tor_bridge_none_detail)
+                                TorBridge.OBFS4 -> stringResource(R.string.tor_bridge_obfs4_detail)
+                                TorBridge.SNOWFLAKE -> stringResource(R.string.tor_bridge_snowflake_detail)
+                            },
+                            selected = settings.torBridge == bridge,
+                            onClick = { onSettingsChange(settings.copy(torBridge = bridge)) },
+                        )
+                    }
+                }
             }
         }
 

@@ -95,10 +95,21 @@ Maven Central and neither is modified.
 tor is BSD-3-Clause and both wrappers are BSD-3-Clause. Shipped inside the APK
 as `libtor.so`.
 
-Its pluggable transports are not here. IPtProxy is the obvious way to get them
-and it cannot be used alongside Psiphon: both are gomobile libraries, so both
-ship `libgojni.so` and the `go.*` support classes, and one of the two would
-silently win at packaging time. See `native/tor/README.md`.
+## lyrebird and snowflake — BSD-3-Clause
+
+Tor's pluggable transports, built from source at the revisions pinned in
+`native/tor/setup.ps1`:
+
+- [lyrebird](https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird)
+  `lyrebird-0.8.1`, which provides obfs4
+- [snowflake](https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake)
+  `v2.14.1`
+
+Both are BSD-3-Clause and neither is modified. They are ordinary Go programs,
+cross-compiled for Android and shipped in the APK as `liblyrebird.so` and
+`libsnowflake.so` — executables named like libraries because that is the only
+form Android extracts and leaves executable. Neither is committed; both are
+fetched and built by `native/tor/setup.ps1` and `native/tor/build.ps1`.
 
 ## mihomo, and this combination
 

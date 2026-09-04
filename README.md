@@ -74,7 +74,7 @@ error. It is the first thing to read.
 | What you see | What it means |
 | --- | --- |
 | `... · retry 3 of 8 in 12s` | A path failed and it is trying another. Normal on a hostile network. |
-| `Psiphon is looking for a way out` | The Psiphon carrier is establishing. It tries many protocols at once and a minute is normal. |
+| `... is looking for a way out` | A carrier is establishing. Psiphon tries many protocols at once; Tor fetches a consensus and builds a circuit. A minute is normal, and behind a bridge rather more. |
 | `Stopped after 8 attempts` | Nothing worked here. Try a different profile or network. |
 | `custom endpoint ... failed MASQUE validation` | The address you pinned is not reachable. Switch **Endpoint** back to Automatic. |
 | `Connected to a different endpoint` | Your pinned address failed and fallback substituted a working one. |
@@ -139,11 +139,19 @@ pwsh -File native/chain/setup.ps1
 pwsh -File native/chain/build.ps1
 ```
 
-and Psiphon's bootstrap server list, which is data rather than code and is not
+Psiphon's bootstrap server list, which is data rather than code and is not
 committed:
 
 ```powershell
 pwsh -File native/psiphon/setup.ps1
+```
+
+and Tor's pluggable transports, which are Go programs built as Android
+executables:
+
+```powershell
+pwsh -File native/tor/setup.ps1
+pwsh -File native/tor/build.ps1
 ```
 
 A build missing either still installs and runs; the feature that needs it says

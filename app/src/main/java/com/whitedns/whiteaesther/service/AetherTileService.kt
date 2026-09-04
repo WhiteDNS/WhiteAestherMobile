@@ -81,6 +81,7 @@ class AetherTileService : TileService() {
                 settings.killSwitch,
                 settings.strictKillSwitch,
                 settings.carrier,
+                settings.torBridge,
             )
         }
     }
