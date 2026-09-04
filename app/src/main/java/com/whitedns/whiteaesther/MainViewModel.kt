@@ -40,6 +40,14 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * Something the bridge fetch has to say, and whether it is a fault.
+ *
+ * Tor answering "nothing recommended here" is not a failure and must not be
+ * dressed as one; failing to reach Tor at all is.
+ */
+data class BridgeMessage(val text: String, val isError: Boolean)
+
 /** Something to tell the user about their identity, after an export or import. */
 data class IdentityMessage(val text: String, val isError: Boolean = false)
 
@@ -143,8 +151,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val mutableBridgesFetching = MutableStateFlow(false)
     val bridgesFetching = mutableBridgesFetching.asStateFlow()
 
-    /** Why the last bridge fetch failed, or null. */
-    private val mutableBridgesMessage = MutableStateFlow<String?>(null)
+    /**
+     * What the last bridge fetch had to say, and whether it went wrong.
+     *
+     * The two are separate because they read differently. "Tor recommends
+     * nothing for your country" is Tor saying this network needs no help, which
+     * is true of most of the world; painting that red tells the user something
+     * broke when nothing did.
+     */
+    private val mutableBridgesMessage = MutableStateFlow<BridgeMessage?>(null)
     val bridgesMessage = mutableBridgesMessage.asStateFlow()
 
     /**
@@ -591,7 +606,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * service would otherwise be told about Singapore and answer about
      * Singapore, which is useless to somebody in Iran.
      */
-    fun fetchBridges(settings: AppSettings) {
+    /**
+     * The country the fetch will ask about unless told otherwise.
+     *
+     * Shown so it can be corrected. It comes from the network operator, which
+     * is right for somebody at home and wrong for somebody testing for a place
+     * they are not -- and Tor answers per country, so asking as the wrong one
+     * gets a correct answer to the wrong question.
+     */
+    fun detectedCountry(): String = MoatClient.country(getApplication())
+
+    fun fetchBridges(settings: AppSettings, country: String = "") {
         if (bridgeJob?.isActive == true) return
         mutableBridgesMessage.value = null
         mutableBridgesFetching.value = true
@@ -600,13 +625,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val through = EngineStatusStore.status.value
                 .takeIf { it.stage == EngineStage.CONNECTED }
                 ?.carrierSocksPort
-            val country = MoatClient.country(context)
-            val result = MoatClient.recommendations(country, through)
+            val asked = country.trim().lowercase().takeIf { it.length == 2 }
+                ?: MoatClient.country(context)
+            val result = MoatClient.recommendations(asked, through)
             mutableBridgesFetching.value = false
 
             val recommendations = result.getOrElse { error ->
                 EngineLog.record(LogLevel.WARN, "bridges", error.message ?: "fetch failed")
-                mutableBridgesMessage.value = say(R.string.tor_bridges_failed)
+                mutableBridgesMessage.value =
+                    BridgeMessage(say(R.string.tor_bridges_failed), isError = true)
                 return@launch
             }
             // The first one Tor lists, because it lists them in the order it
@@ -617,13 +644,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // true of most of the world and is not a fault to report as one.
             val best = recommendations.firstOrNull { it.lines.isNotEmpty() }
             if (best == null) {
-                mutableBridgesMessage.value = say(R.string.tor_bridges_none_recommended, country.uppercase())
+                mutableBridgesMessage.value = BridgeMessage(
+                    say(R.string.tor_bridges_none_recommended, asked.uppercase()),
+                    isError = false,
+                )
                 return@launch
             }
             EngineLog.record(
                 LogLevel.INFO,
                 "bridges",
-                "tor recommends ${best.transport} for $country: ${best.lines.size} bridges",
+                "tor recommends ${best.transport} for $asked: ${best.lines.size} bridges",
             )
             save(
                 settings.copy(

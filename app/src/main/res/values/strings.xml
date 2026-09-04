@@ -505,4 +505,5 @@
     <string name="off_traffic_leaves_from_carrier">Off. Traffic leaves from %1$s</string>
     <string name="on_dialled_through_carrier">On, dialled through %1$s</string>
     <string name="nodes_dialled_through_carrier">Your nodes are dialled through %1$s. It has one way out and they take it, so there is nothing to choose here.</string>
+    <string name="tor_bridges_country">Ask as this country</string>
 </resources>

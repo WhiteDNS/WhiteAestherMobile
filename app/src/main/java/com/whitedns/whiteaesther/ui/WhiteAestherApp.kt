@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.whitedns.whiteaesther.AddressPair
 import com.whitedns.whiteaesther.ChainState
+import com.whitedns.whiteaesther.BridgeMessage
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.IdentityMessage
 import com.whitedns.whiteaesther.R
@@ -104,9 +105,10 @@ fun WhiteAestherApp(
     onTestEndpoint: (AppSettings) -> Unit,
     onResetEndpoint: (AppSettings) -> Unit,
     onCancelEndpointScan: () -> Unit,
-    onFetchBridges: () -> Unit = {},
+    onFetchBridges: (String) -> Unit = {},
     bridgesFetching: Boolean = false,
-    bridgesMessage: String? = null,
+    bridgesMessage: BridgeMessage? = null,
+    detectedCountry: String = "",
     psiphonRegions: List<String> = emptyList(),
     onRefreshChainNodes: () -> Unit = {},
     onSelectChainNode: (String) -> Unit = {},
@@ -246,6 +248,7 @@ fun WhiteAestherApp(
                     onFetchBridges = onFetchBridges,
                     bridgesFetching = bridgesFetching,
                     bridgesMessage = bridgesMessage,
+                    detectedCountry = detectedCountry,
                     psiphonRegions = psiphonRegions,
                     endpointModifier = Modifier.focusRequester(endpointFocus),
                     chainModifier = Modifier.focusRequester(chainFocus),

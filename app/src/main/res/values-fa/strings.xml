@@ -499,4 +499,5 @@
     <string name="off_traffic_leaves_from_carrier">خاموش. ترافیک از %1$s خارج می‌شود</string>
     <string name="on_dialled_through_carrier">روشن، از داخل %1$s شماره‌گیری می‌شود</string>
     <string name="nodes_dialled_through_carrier">نودهای شما از داخل %1$s شماره‌گیری می‌شوند. یک راه خروج دارد و نودها از همان می‌روند، پس اینجا چیزی برای انتخاب نیست.</string>
+    <string name="tor_bridges_country">به‌عنوان این کشور بپرس</string>
 </resources>
