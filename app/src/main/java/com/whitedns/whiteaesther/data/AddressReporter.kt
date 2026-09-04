@@ -8,6 +8,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.net.URL
 
 /**
@@ -39,6 +41,13 @@ object AddressReporter {
     private const val TRACE_V4 = "https://1.1.1.1/cdn-cgi/trace"
 
     private const val TIMEOUT_MS = 6_000
+
+    /**
+     * Longer than the direct one, because it is three hops rather than none.
+     * Tor in particular answers in its own time, and a timeout short enough for
+     * a local network reads as "no answer" for a circuit that was working.
+     */
+    private const val CARRIER_TIMEOUT_MS = 20_000
 
     private val Context.addressStore by preferencesDataStore(name = "whiteaesther_address")
     private val REAL_ADDRESS = stringPreferencesKey("real_address")
@@ -78,6 +87,40 @@ object AddressReporter {
      * exit while a new one is negotiating would be a confident lie.
      */
     suspend fun tunnelAddress(ipv4Only: Boolean = false): String? = fetch(ipv4Only)
+
+    /**
+     * The address seen from beyond a carrier, asked through the carrier itself.
+     *
+     * [tunnelAddress] cannot answer this. It dials from this process, and this
+     * process is excluded from the interface, so what it measures on a carrier
+     * session is the phone's own address -- reported under a heading that says
+     * the opposite.
+     *
+     * By name rather than by literal, unlike everywhere else here. The address
+     * form is how the direct lookup avoids the resolver choosing IPv6, and it
+     * is exactly wrong through a carrier: Psiphon's servers refuse a port
+     * forward to 1.1.1.1, and a name is resolved at the far end where it also
+     * cannot leak.
+     */
+    suspend fun carrierAddress(socksPort: Int): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
+            val connection = (URL(TRACE_HOST).openConnection(proxy) as HttpURLConnection).apply {
+                connectTimeout = CARRIER_TIMEOUT_MS
+                readTimeout = CARRIER_TIMEOUT_MS
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", "")
+            }
+            try {
+                if (connection.responseCode != HttpURLConnection.HTTP_OK) return@runCatching null
+                connection.inputStream.bufferedReader().useLines { lines ->
+                    lines.firstOrNull { it.startsWith("ip=") }?.removePrefix("ip=")?.trim()
+                }
+            } finally {
+                connection.disconnect()
+            }
+        }.getOrNull()?.takeUnless { it.isNullOrBlank() }
+    }
 
     /**
      * Reads the address, over the family the user chose.

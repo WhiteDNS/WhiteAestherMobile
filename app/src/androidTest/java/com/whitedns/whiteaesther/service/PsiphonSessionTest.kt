@@ -1,6 +1,7 @@
 package com.whitedns.whiteaesther.service
 
 import androidx.test.platform.app.InstrumentationRegistry
+import com.whitedns.whiteaesther.data.AddressReporter
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.ChainSettings
@@ -8,9 +9,11 @@ import com.whitedns.whiteaesther.data.EngineMode
 import org.junit.After
 import org.junit.Before
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import android.util.Log
+import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import java.net.InetSocketAddress
 import java.net.Proxy
@@ -181,6 +184,41 @@ class PsiphonSessionTest {
 
         assertTrue("psiphon returned nothing for a plain request", body.isNotBlank())
         EngineLog.record(LogLevel.INFO, "carrier", "psiphon exits at $body")
+    }
+
+    @Test
+    fun theExitAddressReportedIsTheCarriersAndNotThePhonesOwn() {
+        assumeTrue("no psiphon argument, skipping the live carrier test", requested)
+
+        val settings = AppSettings(mode = EngineMode.TUN, carrier = Carrier.PSIPHON)
+        AetherVpnService.start(
+            context,
+            settings.toNativeJson(context),
+            settings.chainForService().encode(),
+            carrier = Carrier.PSIPHON,
+        )
+        assertEquals(
+            EngineStage.CONNECTED,
+            awaitStage(EngineStage.CONNECTED, timeoutMs = 180_000),
+        )
+
+        val port = EngineStatusStore.status.value.carrierSocksPort
+        assertTrue("the session did not publish the carrier's port", (port ?: 0) > 0)
+
+        // The bug this exists for: everything this process opens is excluded
+        // from the interface, so the ordinary "what does the internet see"
+        // lookup leaves by the physical network and answers with the address
+        // the tunnel is there to hide -- displayed under a heading that says
+        // the opposite. The two must not agree.
+        val throughCarrier = runBlocking { AddressReporter.carrierAddress(port!!) }
+        val fromThisProcess = runBlocking { AddressReporter.tunnelAddress(ipv4Only = true) }
+        assertTrue("no address came back through the carrier", !throughCarrier.isNullOrBlank())
+        assertNotEquals(
+            "the reported exit is this phone's own address",
+            fromThisProcess,
+            throughCarrier,
+        )
+        Log.i("carrier-diag", "carrier exit $throughCarrier, this process $fromThisProcess")
     }
 
     @Test

@@ -568,7 +568,12 @@ class AetherVpnService : VpnService() {
         }
 
         reconnectAttempt = 0
-        reportConnected(mode, null, sayNow(R.string.status_carrier_carries, sayNow(carrier.label)))
+        reportConnected(
+            mode,
+            null,
+            sayNow(R.string.status_carrier_carries, sayNow(carrier.label)),
+            carrierSocksPort = port,
+        )
 
         // Watched rather than assumed. The carrier is in another process and can
         // be killed on its own -- by the system reclaiming memory, or by its own
@@ -757,7 +762,12 @@ class AetherVpnService : VpnService() {
         else -> LogLevel.INFO
     }
 
-    private fun reportConnected(mode: EngineMode, peer: String?, message: String) {
+    private fun reportConnected(
+        mode: EngineMode,
+        peer: String?,
+        message: String,
+        carrierSocksPort: Int? = null,
+    ) {
         // A working tunnel is the answer to whatever the blocking was for.
         dropBlackhole()
         // The session's byte counting starts here, not when a screen opens, so
@@ -770,6 +780,7 @@ class AetherVpnService : VpnService() {
                 peer,
                 message,
                 connectedAtMillis = System.currentTimeMillis(),
+                carrierSocksPort = carrierSocksPort,
             ),
         )
         updateNotification(mode, message)
