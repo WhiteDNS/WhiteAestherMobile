@@ -28,6 +28,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 class TorClient(
     private val context: Context,
     private val bridge: TorBridge,
+    private val customBridges: String,
 ) : CarrierClient {
     private val mutableState = MutableStateFlow(CarrierSnapshot())
     override val state = mutableState
@@ -63,7 +64,8 @@ class TorClient(
         context.startService(
             Intent(context, TorCarrierService::class.java)
                 .setAction(TorCarrierService.ACTION_START)
-                .putExtra(TorCarrierService.EXTRA_BRIDGE, bridge.wireName),
+                .putExtra(TorCarrierService.EXTRA_BRIDGE, bridge.wireName)
+                .putExtra(TorCarrierService.EXTRA_BRIDGES, customBridges),
         )
 
         val settled = withTimeoutOrNull(timeoutMs) {

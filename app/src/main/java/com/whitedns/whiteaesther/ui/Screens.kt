@@ -63,6 +63,7 @@ import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.data.AppLanguage
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.Carrier
+import com.whitedns.whiteaesther.core.TorBridges
 import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.data.EndpointAddress
 import com.whitedns.whiteaesther.data.EndpointFamily
@@ -644,12 +645,19 @@ fun RoutesScreen(
     onGoToEndpoint: () -> Unit,
     onGoToChain: () -> Unit = {},
     onGoToRoutingRules: () -> Unit = {},
+    onFetchBridges: () -> Unit = {},
+    bridgesFetching: Boolean = false,
+    bridgesMessage: String? = null,
     endpointModifier: Modifier = Modifier,
     chainModifier: Modifier = Modifier,
     routingRulesModifier: Modifier = Modifier,
 ) {
     var advanced by rememberSaveable(settings.showAdvanced) { mutableStateOf(settings.showAdvanced) }
     val active = settings.activeProfile()
+    // Held locally so typing is not fought by the settings flow round-tripping
+    // through DataStore, and refreshed when something else writes them -- which
+    // is what the fetch button does.
+    var bridgeText by rememberSaveable(settings.torBridges) { mutableStateOf(settings.torBridges) }
 
     ScreenColumn {
         CrumbBar(stringResource(R.string.routes))
@@ -747,10 +755,71 @@ fun RoutesScreen(
                                 TorBridge.NONE -> stringResource(R.string.tor_bridge_none_detail)
                                 TorBridge.OBFS4 -> stringResource(R.string.tor_bridge_obfs4_detail)
                                 TorBridge.SNOWFLAKE -> stringResource(R.string.tor_bridge_snowflake_detail)
+                                TorBridge.CUSTOM -> stringResource(R.string.tor_bridge_custom_detail)
                             },
                             selected = settings.torBridge == bridge,
                             onClick = { onSettingsChange(settings.copy(torBridge = bridge)) },
                         )
+                    }
+                }
+
+                if (settings.torBridge == TorBridge.CUSTOM) {
+                    Divider()
+                    Column(Modifier.padding(15.dp)) {
+                        // What the user has, before what they can do about it.
+                        // A button above a field they have not filled in reads
+                        // as the only way to fill it, and pasting is the way
+                        // that works when the fetch cannot reach anything.
+                        Text(
+                            TorBridges.summarise(settings.torBridges)
+                                ?.let { stringResource(R.string.tor_bridges_have, it) }
+                                ?: stringResource(R.string.tor_bridges_none_yet),
+                            style = AetherTheme.type.Data,
+                            color = AetherTheme.colors.text2,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        PrimaryButton(
+                            text = if (bridgesFetching) {
+                                stringResource(R.string.tor_bridges_fetching)
+                            } else {
+                                stringResource(R.string.tor_bridges_fetch)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("fetch-bridges-button"),
+                            enabled = !bridgesFetching,
+                            onClick = onFetchBridges,
+                        )
+                        bridgesMessage?.let {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                it,
+                                style = AetherTheme.type.Data,
+                                color = AetherTheme.colors.signalFailed,
+                            )
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = bridgeText,
+                            onValueChange = {
+                                bridgeText = it
+                                onSettingsChange(settings.copy(torBridges = it))
+                            },
+                            label = { Text(stringResource(R.string.tor_bridges_field)) },
+                            placeholder = { Text(stringResource(R.string.tor_bridges_hint)) },
+                            textStyle = AetherTheme.type.Data.copy(color = AetherTheme.colors.text),
+                            minLines = 3,
+                            maxLines = 8,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("tor-bridges-field"),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = AetherTheme.colors.ink1,
+                                unfocusedContainerColor = AetherTheme.colors.ink1,
+                            ),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Note(stringResource(R.string.tor_bridges_where))
                     }
                 }
             }

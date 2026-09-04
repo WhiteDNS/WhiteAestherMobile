@@ -484,4 +484,16 @@
     <string name="tor_bridge_obfs4_detail">Hides the shape of the traffic. Uses the public bridges, which are also the first ones blocked.</string>
     <string name="tor_bridge_snowflake_detail">Through whichever volunteer browser answers. Survives a lot, and varies in speed.</string>
     <string name="tor_bridge_missing">This build ships no pluggable transports, so only Direct can run.</string>
+    <string name="tor_bridge_custom">Bridges you were given</string>
+    <string name="tor_bridge_custom_detail">Bridges handed out one at a time rather than published. The only kind with a real chance where Tor is properly blocked.</string>
+    <string name="tor_bridges_field">Bridge lines, one per line</string>
+    <string name="tor_bridges_hint">obfs4 1.2.3.4:443 FINGERPRINT cert=... iat-mode=0</string>
+    <string name="tor_bridges_fetch">Fetch bridges for my network</string>
+    <string name="tor_bridges_fetching">Asking Tor…</string>
+    <string name="tor_bridges_fetched">Got %1$s bridges</string>
+    <string name="tor_bridges_none_yet">No bridges yet. Fetch them, or paste ones you were given.</string>
+    <string name="tor_bridges_have">%1$s bridges</string>
+    <string name="tor_bridges_failed">Could not reach Tor\'s bridge service. Connect with Aether or Psiphon first, then try again.</string>
+    <string name="tor_bridges_where">Or get them yourself from bridges.torproject.org, the @GetBridgesBot on Telegram, or by emailing bridges@torproject.org.</string>
+    <string name="tor_bridges_none_recommended">Tor has no bridge recommendation for %1$s. Direct or the built-in bridges should work here.</string>
 </resources>

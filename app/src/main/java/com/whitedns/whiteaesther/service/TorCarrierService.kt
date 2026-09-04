@@ -15,6 +15,7 @@ import android.os.Messenger
 import android.os.RemoteException
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.whitedns.whiteaesther.core.TorBridges
 import com.whitedns.whiteaesther.core.TorConfig
 import com.whitedns.whiteaesther.data.TorBridge
 import java.io.File
@@ -144,6 +145,7 @@ class TorCarrierService : android.app.Service() {
                 TorBridge.entries.firstOrNull { it.wireName == intent.getStringExtra(EXTRA_BRIDGE) }
                     ?: TorBridge.NONE,
                 intent.getStringExtra(EXTRA_COUNTRY),
+                intent.getStringExtra(EXTRA_BRIDGES).orEmpty(),
             )
             ACTION_STOP -> {
                 stopTor()
@@ -160,7 +162,7 @@ class TorCarrierService : android.app.Service() {
         super.onDestroy()
     }
 
-    private fun start(bridge: TorBridge, exitCountry: String?) {
+    private fun start(bridge: TorBridge, exitCountry: String?, customBridges: String) {
         if (started) return
         started = true
         state = State.CONNECTING
@@ -173,9 +175,13 @@ class TorCarrierService : android.app.Service() {
         // so a bridge mode whose proxy will not start has to fail here rather
         // than become a tor that quietly connects directly.
         var listening: String? = null
-        val wanted = TorConfig.transportName(bridge)
+        TorConfig.refusal(bridge, customBridges)?.let {
+            fail("No usable bridge lines. Paste the ones you were given, or fetch them.")
+            return
+        }
+        val wanted = TorConfig.transportName(bridge, customBridges)
         if (wanted != null) {
-            val binary = transportBinary(bridge)
+            val binary = transportBinary(wanted)
             if (binary == null) {
                 fail("This build ships no pluggable transports")
                 return
@@ -200,7 +206,7 @@ class TorCarrierService : android.app.Service() {
             // startup. TorService owns torrc-defaults -- that is where the
             // SOCKS port lands -- so this is the file for everything else.
             TorService.getTorrc(this).writeText(
-                TorConfig.render(bridge, exitCountry, listening),
+                TorConfig.render(bridge, exitCountry, listening, customBridges),
             )
         }.onFailure { error ->
             fail("Could not write tor's configuration: ${error.message}")
@@ -249,17 +255,9 @@ class TorCarrierService : android.app.Service() {
      * has tor and no transports, and the bridge modes have to be unavailable
      * rather than produce a torrc naming files that are not there.
      */
-    private fun transportBinary(bridge: TorBridge): File? {
+    private fun transportBinary(transport: String): File? {
         val dir = File(applicationInfo.nativeLibraryDir)
-        // Snowflake is its own program; obfs4 and meek_lite both come out of
-        // lyrebird. Named by which binary provides it rather than by the
-        // transport, because asking the wrong one for a transport it does not
-        // implement is a CMETHOD-ERROR and a bridge mode that never works.
-        val name = when (bridge) {
-            TorBridge.SNOWFLAKE -> "libsnowflake.so"
-            else -> "liblyrebird.so"
-        }
-        return File(dir, name).takeIf { it.exists() }
+        return File(dir, TorBridges.binaryFor(transport)).takeIf { it.exists() }
     }
 
     /**
@@ -346,6 +344,7 @@ class TorCarrierService : android.app.Service() {
         const val ACTION_STOP = "com.whitedns.whiteaesther.TOR_STOP"
         const val EXTRA_COUNTRY = "country"
         const val EXTRA_BRIDGE = "bridge"
+        const val EXTRA_BRIDGES = "bridges"
         const val EXTRA_FAILURE = "failure"
 
         const val MSG_REGISTER = 1
