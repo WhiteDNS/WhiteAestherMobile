@@ -467,4 +467,6 @@
     <string name="err_carrier_failed">سایفون نتوانست وصل شود</string>
     <string name="err_carrier_stopped">سایفون متوقف شد</string>
     <string name="carrier_not_engine_note">نقطهٔ پایانی، پروتکل و عمق جست‌وجوی پایین فقط برای اتر هستند. این حامل خودش راه خروجش را پیدا می‌کند.</string>
+    <string name="carrier_tor">تور</string>
+    <string name="carrier_tor_detail">سه رله، و خروجی نمی‌داند چه کسی درخواست کرده. کندترین گزینه، و UDP را حمل نمی‌کند.</string>
 </resources>

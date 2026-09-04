@@ -94,10 +94,11 @@ handshake against them, and only accepts a route once real traffic returns
 through it. The app then either raises an Android `VpnService` tunnel that
 captures IPv4, IPv6 and DNS, or exposes a loopback SOCKS5 proxy.
 
-- **Carrier** — Aether by default. Under **Routes**, Psiphon can carry the
-  tunnel instead: it finds its own way out and the app routes the whole device
-  into it. Slower, and someone else's network, so it is there for the networks
-  Aether cannot get out of rather than as an equal choice
+- **Carrier** — Aether by default. Under **Routes**, Psiphon or Tor can carry
+  the tunnel instead: each finds its own way out and the app routes the whole
+  device into it. Both are slower, and one of them is someone else's network, so
+  they are there for the networks Aether cannot get out of rather than as equal
+  choices. Tor carries no UDP, which the app declares rather than discovers
 - **Transports** — MASQUE over HTTP/3 (QUIC) and HTTP/2 (TLS over TCP, for
   networks that block UDP)
 - **Obfuscation** — padding profiles that make tunnel traffic harder to

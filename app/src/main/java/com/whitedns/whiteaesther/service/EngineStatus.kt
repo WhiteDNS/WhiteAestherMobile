@@ -28,6 +28,18 @@ data class EngineStatus(
     val message: String = "",
     /** When the tunnel came up, so elapsed time survives the UI being recreated. */
     val connectedAtMillis: Long? = null,
+    /**
+     * The carrier's loopback SOCKS5 port, when a carrier is running.
+     *
+     * Here because of what this process is not allowed to be. Everything it
+     * opens is excluded from the interface -- that exclusion is what keeps the
+     * carrier's own traffic out of the tunnel it is building -- so a request
+     * made from here to ask "what does the internet see" leaves by the physical
+     * network and answers with the address the tunnel exists to hide. Asking
+     * through this port is the only way to get the true answer from inside the
+     * app, and it is the carrier's own listener, so it costs nothing extra.
+     */
+    val carrierSocksPort: Int? = null,
 )
 
 object EngineStatusStore {

@@ -15,19 +15,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * What the Psiphon process is doing, as seen from this one.
- *
- * [port] is set as soon as the listener exists, which is before the tunnel is
- * established -- the two are separate because routing into a listener with no
- * tunnel behind it is a way to drop traffic silently.
- */
-data class PsiphonState(
-    val state: PsiphonService.State = PsiphonService.State.STOPPED,
-    val port: Int = 0,
-    val failure: String? = null,
-)
-
-/**
  * The near side of [PsiphonService].
  *
  * Binding rather than broadcasting, for two reasons that both matter here. A
@@ -38,9 +25,9 @@ data class PsiphonState(
  * cannot be missed by a client that was not listening yet: the service answers
  * a registration with the current state rather than only the next one.
  */
-class PsiphonClient(private val context: Context) {
-    private val mutableState = MutableStateFlow(PsiphonState())
-    val state = mutableState
+class PsiphonClient(private val context: Context) : CarrierClient {
+    private val mutableState = MutableStateFlow(CarrierSnapshot())
+    override val state = mutableState
 
     private var outgoing: Messenger? = null
     private var connection: ServiceConnection? = null
@@ -52,10 +39,15 @@ class PsiphonClient(private val context: Context) {
                     super.handleMessage(message)
                     return
                 }
-                val state = PsiphonService.State.entries
+                val reported = PsiphonService.State.entries
                     .getOrElse(message.arg1) { PsiphonService.State.STOPPED }
-                mutableState.value = PsiphonState(
-                    state = state,
+                mutableState.value = CarrierSnapshot(
+                    stage = when (reported) {
+                        PsiphonService.State.STOPPED -> CarrierStage.STOPPED
+                        PsiphonService.State.CONNECTING -> CarrierStage.CONNECTING
+                        PsiphonService.State.CONNECTED -> CarrierStage.CONNECTED
+                        PsiphonService.State.FAILED -> CarrierStage.FAILED
+                    },
                     port = message.arg2,
                     failure = message.peekData()?.getString(PsiphonService.EXTRA_FAILURE),
                 )
@@ -72,19 +64,23 @@ class PsiphonClient(private val context: Context) {
      *   and a proxy with no tunnel behind it swallows packets rather than
      *   refusing them.
      */
-    suspend fun start(egressRegion: String, timeoutMs: Long): Result<Int> {
+    override suspend fun start(timeoutMs: Long): Result<Int> {
         bind()
         context.startService(
             Intent(context, PsiphonService::class.java)
                 .setAction(PsiphonService.ACTION_START)
-                .putExtra(PsiphonService.EXTRA_REGION, egressRegion),
+                // Whichever exit Psiphon considers best. Their own client
+                // treats a region as a preference and fails rather than
+                // substituting when it cannot be had, so offering one here
+                // would be offering a way to make the carrier stop working.
+                .putExtra(PsiphonService.EXTRA_REGION, ""),
         )
 
         val settled = withTimeoutOrNull(timeoutMs) {
             mutableState.first { snapshot ->
-                when (snapshot.state) {
-                    PsiphonService.State.CONNECTED -> snapshot.port > 0
-                    PsiphonService.State.FAILED -> true
+                when (snapshot.stage) {
+                    CarrierStage.CONNECTED -> snapshot.port > 0
+                    CarrierStage.FAILED -> true
                     // STOPPED is the state before the service has answered as
                     // much as it is the state after it gives up, so it is not
                     // an outcome on its own.
@@ -97,21 +93,21 @@ class PsiphonClient(private val context: Context) {
             settled == null -> Result.failure(
                 IllegalStateException("Psiphon did not connect in ${timeoutMs / 1000}s"),
             )
-            settled.state == PsiphonService.State.FAILED -> Result.failure(
+            settled.stage == CarrierStage.FAILED -> Result.failure(
                 IllegalStateException(settled.failure ?: "Psiphon failed to start"),
             )
             else -> Result.success(settled.port)
         }
     }
 
-    fun stop() {
+    override fun stop() {
         runCatching {
             context.startService(
                 Intent(context, PsiphonService::class.java).setAction(PsiphonService.ACTION_STOP),
             )
         }
         unbind()
-        mutableState.value = PsiphonState()
+        mutableState.value = CarrierSnapshot()
     }
 
     private suspend fun bind() {
@@ -134,8 +130,8 @@ class PsiphonClient(private val context: Context) {
                 // whatever it last said, because the caller is waiting on a
                 // state that is never going to arrive now.
                 outgoing = null
-                mutableState.value = PsiphonState(
-                    state = PsiphonService.State.FAILED,
+                mutableState.value = CarrierSnapshot(
+                    stage = CarrierStage.FAILED,
                     failure = "The Psiphon process stopped unexpectedly",
                 )
             }

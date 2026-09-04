@@ -706,6 +706,7 @@ fun RoutesScreen(
                         subtitle = when (carrier) {
                             Carrier.AETHER -> stringResource(R.string.carrier_aether_detail)
                             Carrier.PSIPHON -> stringResource(R.string.carrier_psiphon_detail)
+                            Carrier.TOR -> stringResource(R.string.carrier_tor_detail)
                         },
                         selected = settings.carrier == carrier,
                         // OptionRow tags itself from the title, so this row is

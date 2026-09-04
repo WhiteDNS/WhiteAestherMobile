@@ -139,5 +139,31 @@
             android:process=":psiphon"
             android:exported="false" />
 
+        <!--
+          Tor, and the service that drives it, in one process of their own.
+
+          tor is C and has no Go runtime to collide with mihomo's, so unlike
+          Psiphon this is not forced. It is still right: tor is loaded through a
+          JNI library with process-wide static state and a lock, so a failure in
+          it should take down something restartable rather than the process
+          holding the interface.
+
+          TorService is Guardian Project's and arrives from its own manifest,
+          which is why android:process is a replacement rather than a plain
+          attribute: the merger has to be told which of the two declarations
+          wins.
+        -->
+        <service
+            android:name=".service.TorCarrierService"
+            android:process=":tor"
+            android:exported="false" />
+
+        <service
+            android:name="org.torproject.jni.TorService"
+            android:process=":tor"
+            android:exported="false"
+            tools:node="merge"
+            tools:replace="android:process" />
+
     </application>
 </manifest>

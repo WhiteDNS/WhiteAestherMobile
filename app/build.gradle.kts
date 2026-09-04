@@ -36,7 +36,11 @@ plugins {
 
 android {
     namespace = "com.whitedns.whiteaesther"
-    compileSdk = 36
+    // 37 because tor-android requires it, and only for compiling:
+    // targetSdk stays at 36 deliberately. Raising that is a behaviour
+    // change for every permission and background rule in the app, and it
+    // is not something to carry in on the back of a dependency bump.
+    compileSdk = 37
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
@@ -110,6 +114,21 @@ android {
     }
 
     packaging {
+        // Compressed in the APK, and extracted at install.
+        //
+        // AGP's default since minSdk 23 is the opposite: store every .so
+        // uncompressed and page-aligned so the loader can map it straight out
+        // of the APK. That trade is right for an app people download from a
+        // store over wifi, and wrong for this one. Three native engines --
+        // mihomo, Psiphon and Aether -- come to about 82MB, and stored
+        // uncompressed that is the download. They deflate better than 3:1.
+        //
+        // What it costs is disk on the device, because the extracted copies sit
+        // beside the APK that still holds them, and a few seconds at install.
+        // What it buys is the download, over a mobile connection, in a country
+        // where that is metered and slow, for an app that is often fetched
+        // again after every block. That is not a close call.
+        jniLibs.useLegacyPackaging = true
         jniLibs.excludes += setOf(
             "**/libboringtun-*.so",
             "**/libquiche.so",
@@ -162,6 +181,22 @@ dependencies {
     // because it is Go, and the exit chain is already the one Go runtime this
     // process is allowed to have.
     implementation("ca.psiphon:psiphontunnel:2.0.41")
+
+    // Tor, as a third carrier. Guardian Project's build, which is Orbot's,
+    // rather than a cross-compile of our own: tor needs openssl, libevent and
+    // zlib built for every ABI, and that is a job somebody already does
+    // properly. It is C, and runs in ":tor" for isolation rather than because
+    // it has to.
+    //
+    // Its pluggable transports are deliberately not here. IPtProxy is the
+    // obvious dependency and it cannot be used: it is a gomobile library, so it
+    // ships `libgojni.so` and the `go.*` support classes -- and so does
+    // Psiphon. Two of them in one APK is a duplicate-class failure at build
+    // time and, worse, one `libgojni.so` silently winning over the other at
+    // packaging time. The transports come as their own executables instead, in
+    // native/tor, which is also how tor expects to launch them.
+    implementation("info.guardianproject:tor-android:0.4.9.11")
+    implementation("info.guardianproject:jtorctl:0.4.5.7")
 
     implementation("androidx.compose.ui:ui:1.11.4")
     implementation("androidx.compose.ui:ui-tooling-preview:1.11.4")

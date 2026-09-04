@@ -84,6 +84,22 @@ code, and tunnel-core verifies every entry itself.
 own sample configuration, not a channel issued to this app. See
 `native/psiphon/README.md`.
 
+## tor — BSD-3-Clause, via Guardian Project
+
+The Tor carrier is [`info.guardianproject:tor-android:0.4.9.11`](https://github.com/guardianproject/tor-android),
+Guardian Project's Android build of [tor](https://gitlab.torproject.org/tpo/core/tor)
+0.4.9.11 — the same build Orbot uses — together with
+`info.guardianproject:jtorctl:0.4.5.7` for its control protocol. Both come from
+Maven Central and neither is modified.
+
+tor is BSD-3-Clause and both wrappers are BSD-3-Clause. Shipped inside the APK
+as `libtor.so`.
+
+Its pluggable transports are not here. IPtProxy is the obvious way to get them
+and it cannot be used alongside Psiphon: both are gomobile libraries, so both
+ship `libgojni.so` and the `go.*` support classes, and one of the two would
+silently win at packaging time. See `native/tor/README.md`.
+
 ## mihomo, and this combination
 
 Both GPL-3.0 components above are combined with this AGPL-3.0 app under

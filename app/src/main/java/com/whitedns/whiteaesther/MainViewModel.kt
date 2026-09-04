@@ -251,10 +251,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             // network and reports the address the tunnel exists
                             // to hide. It said "seen by websites" over the
                             // user's real IP.
-                            val exit = if (chainCarriesTraffic()) {
-                                null
-                            } else {
-                                AddressReporter.tunnelAddress(ipv4Only())
+                            val carrierPort = EngineStatusStore.status.value.carrierSocksPort
+                            val exit = when {
+                                // The chain's node is the exit, and nothing
+                                // reachable from this process can measure it.
+                                chainCarriesTraffic() -> null
+                                // A carrier, asked through its own listener.
+                                // Measuring it the ordinary way reports this
+                                // phone's address under a heading that says the
+                                // opposite, because this process is excluded
+                                // from the interface on purpose -- which is
+                                // exactly what it did before this existed.
+                                carrierPort != null -> AddressReporter.carrierAddress(carrierPort)
+                                else -> AddressReporter.tunnelAddress(ipv4Only())
                             }
                             mutableAddresses.value = mutableAddresses.value.copy(tunnel = exit)
                             // Only here. Asking GitHub from an unprotected
