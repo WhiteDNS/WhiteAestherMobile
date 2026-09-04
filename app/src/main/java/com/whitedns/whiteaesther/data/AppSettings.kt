@@ -96,10 +96,32 @@ enum class Carrier(val wireName: String, @StringRes val label: Int) {
      * the process, so Psiphon is loaded somewhere else entirely.
      */
     PSIPHON("psiphon", R.string.carrier_psiphon),
+
+    /**
+     * Tor, in its own process.
+     *
+     * Slower than either of the others and not a general-purpose tunnel: it is
+     * three relays deep by design, and it carries no UDP at all. It is here for
+     * the networks where nothing else gets out, and because what it hides is
+     * different from what the others hide -- an exit relay does not know who
+     * asked.
+     */
+    TOR("tor", R.string.carrier_tor),
     ;
 
     /** True when the Aether engine is in the path at all. */
     val usesEngine: Boolean get() = this == AETHER
+
+    /**
+     * Whether this carrier forwards datagrams.
+     *
+     * Tor does not, and saying so is not a detail. A proxy declared as carrying
+     * UDP that cannot swallows every datagram instead of refusing it, and a
+     * phone experiences that as DNS and QUIC hanging while TCP works -- the
+     * hardest shape of broken to recognise. Declared false, mihomo refuses them
+     * and everything falls back to TCP within a round trip.
+     */
+    val carriesUdp: Boolean get() = this != TOR
 
     /**
      * True when the carrier needs mihomo to reach the interface.

@@ -33,6 +33,7 @@ runs:
         set -o pipefail
         sdkmanager \
           "platforms;android-36" \
+          "platforms;android-37.2" \
           "build-tools;36.0.0" \
           "platform-tools" \
           "ndk;29.0.14206865" \

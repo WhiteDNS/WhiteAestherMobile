@@ -18,7 +18,11 @@ import com.whitedns.whiteaesther.core.ChainController
 import com.whitedns.whiteaesther.core.NativeAetherBridge
 import com.whitedns.whiteaesther.core.NativeEngineListener
 import com.whitedns.whiteaesther.core.NativeSocketProtector
+import com.whitedns.whiteaesther.core.CarrierClient
+import com.whitedns.whiteaesther.core.CarrierStage
 import com.whitedns.whiteaesther.core.PsiphonClient
+import com.whitedns.whiteaesther.core.TorClient
+import com.whitedns.whiteaesther.core.TorConfig
 import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.ChainSettings
 import com.whitedns.whiteaesther.data.EngineMode
@@ -85,6 +89,21 @@ class AetherVpnService : VpnService() {
     private var carrier: Carrier = Carrier.AETHER
     private val chain by lazy { ChainController(this) }
     private val psiphon by lazy { PsiphonClient(this) }
+    private val tor by lazy { TorClient(this) }
+
+    /**
+     * The carrier this session is using, or null when the engine is.
+     *
+     * Resolved once per session rather than branched on at each use: what
+     * the session does with a carrier is the same whichever one it is, and
+     * a `when` at every call site is a place for the two to drift apart.
+     */
+    private val carrierClient: CarrierClient?
+        get() = when (carrier) {
+            Carrier.AETHER -> null
+            Carrier.PSIPHON -> psiphon
+            Carrier.TOR -> tor
+        }
 
     override fun onCreate() {
         super.onCreate()
@@ -173,7 +192,7 @@ class AetherVpnService : VpnService() {
         dropBlackhole()
         generation += 1
         runCatching { chain.stop() }
-        runCatching { psiphon.stop() }
+        runCatching { stopCarrier() }
         NativeAetherBridge.stop()
         runCatching { NativeAetherBridge.setSocketProtector(null) }
         serviceScope.cancel()
@@ -194,7 +213,7 @@ class AetherVpnService : VpnService() {
                 splitJson = splitSettings
                 NativeAetherBridge.stop()
                 runCatching { chain.stop() }
-                runCatching { psiphon.stop() }
+                runCatching { stopCarrier() }
                 sessionJob?.join()
                 val sessionGeneration = generation
                 sessionJob = serviceScope.launch {
@@ -400,6 +419,33 @@ class AetherVpnService : VpnService() {
      * mihomo with no configuration routes everything DIRECT and a DIRECT route
      * from this process leaves the phone in the clear.
      */
+    /**
+     * Stops every carrier, not merely the current one.
+     *
+     * The setting can change between one session and the next, and the process
+     * that was carrying the last one does not stop merely because nothing is
+     * pointed at it any more. Stopping only [carrierClient] would leave a tunnel
+     * running, and paying for it, behind a session that has moved on.
+     */
+    /**
+     * How long to give this carrier before calling it a failure.
+     *
+     * Not one number for all of them. Psiphon races a dozen protocols and is
+     * either up in seconds or not coming; tor fetches a consensus and builds a
+     * circuit through three relays, and on a filtered network spends most of
+     * that working out which directory authorities it can reach. A timeout set
+     * for the first would report the second broken for working normally.
+     */
+    private fun carrierWaitMs(): Long = when (carrier) {
+        Carrier.TOR -> TorConfig.BOOTSTRAP_TIMEOUT_MS
+        else -> PSIPHON_WAIT_MS
+    }
+
+    private fun stopCarrier() {
+        runCatching { psiphon.stop() }
+        runCatching { tor.stop() }
+    }
+
     private suspend fun runCarrierSession(
         configJson: String,
         mode: EngineMode,
@@ -459,7 +505,7 @@ class AetherVpnService : VpnService() {
         val tunFd = tun.detachFd()
 
         if (sessionGeneration != generation) {
-            runCatching { psiphon.stop() }
+            stopCarrier()
             return
         }
 
@@ -468,17 +514,22 @@ class AetherVpnService : VpnService() {
         )
         updateNotification(mode, sayNow(R.string.status_carrier_connecting))
 
-        val port = psiphon.start("", PSIPHON_WAIT_MS).getOrElse { error ->
+        val client = carrierClient ?: run {
+            reportError(mode, sayNow(R.string.err_carrier_failed))
+            finishIfCurrent(sessionGeneration)
+            return
+        }
+        val port = client.start(carrierWaitMs()).getOrElse { error ->
             val reason = error.message ?: sayNow(R.string.err_carrier_failed)
             EngineLog.record(LogLevel.ERROR, "carrier", reason)
-            runCatching { psiphon.stop() }
+            stopCarrier()
             if (sessionGeneration != generation) return
             scheduleReconnect(configJson, sessionGeneration, mode, reason)
             return
         }
 
         if (sessionGeneration != generation) {
-            runCatching { psiphon.stop() }
+            stopCarrier()
             return
         }
 
@@ -491,17 +542,19 @@ class AetherVpnService : VpnService() {
             chain.startCarrier(
                 settings = chainSettings,
                 socksPort = port,
-                // Psiphon forwards UDP over its own tunnel. The flag exists for
-                // the carriers that do not, where declaring it would make DNS
-                // and QUIC fail silently rather than fall back.
-                udp = true,
+                // Psiphon forwards UDP over its own tunnel; Tor carries none at
+                // all. Declaring it either way is not cosmetic: a proxy that
+                // says it takes datagrams and then drops them makes DNS and
+                // QUIC hang, while one that refuses them makes both fall back
+                // within a round trip.
+                udp = carrier.carriesUdp,
                 tunFd = tunFd,
             )
         }
         if (failure != null) {
             EngineLog.record(LogLevel.ERROR, "chain", failure)
             runCatching { chain.stop() }
-            runCatching { psiphon.stop() }
+            stopCarrier()
             if (sessionGeneration != generation) return
             scheduleReconnect(configJson, sessionGeneration, mode, failure)
             return
@@ -522,15 +575,13 @@ class AetherVpnService : VpnService() {
         // tunnel giving up -- and mihomo would keep the interface up dialling a
         // listener that has gone, which the phone experiences as connected and
         // carrying nothing.
-        psiphon.state.collect { snapshot ->
+        client.state.collect { snapshot ->
             if (sessionGeneration != generation) return@collect
-            if (snapshot.state == PsiphonService.State.FAILED ||
-                snapshot.state == PsiphonService.State.STOPPED
-            ) {
+            if (snapshot.stage == CarrierStage.FAILED || snapshot.stage == CarrierStage.STOPPED) {
                 val reason = snapshot.failure ?: sayNow(R.string.err_carrier_stopped)
                 EngineLog.record(LogLevel.ERROR, "carrier", reason)
                 runCatching { chain.stop() }
-                runCatching { psiphon.stop() }
+                stopCarrier()
                 scheduleReconnect(configJson, sessionGeneration, mode, reason)
                 return@collect
             }
