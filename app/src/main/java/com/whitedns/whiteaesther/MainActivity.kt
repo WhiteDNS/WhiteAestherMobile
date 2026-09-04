@@ -427,6 +427,7 @@ class MainActivity : ComponentActivity() {
             settings.killSwitch,
             settings.strictKillSwitch,
             settings.carrier,
+            settings.torBridge,
         )
     }
 }

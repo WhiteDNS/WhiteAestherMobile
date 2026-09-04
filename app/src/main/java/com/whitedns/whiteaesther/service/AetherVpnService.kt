@@ -24,6 +24,7 @@ import com.whitedns.whiteaesther.core.PsiphonClient
 import com.whitedns.whiteaesther.core.TorClient
 import com.whitedns.whiteaesther.core.TorConfig
 import com.whitedns.whiteaesther.data.Carrier
+import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.data.ChainSettings
 import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.data.SplitTunnel
@@ -87,9 +88,18 @@ class AetherVpnService : VpnService() {
      * carrier that is not the engine never reaches the bridge at all.
      */
     private var carrier: Carrier = Carrier.AETHER
+
+    /**
+     * How Tor should reach its first hop this session.
+     *
+     * Held beside the carrier because it is part of how tor is started rather
+     * than something it can be told afterwards: the choice becomes lines in a
+     * torrc that tor reads once.
+     */
+    private var torBridge: TorBridge = TorBridge.NONE
     private val chain by lazy { ChainController(this) }
     private val psiphon by lazy { PsiphonClient(this) }
-    private val tor by lazy { TorClient(this) }
+    private var torClient: TorClient? = null
 
     /**
      * The carrier this session is using, or null when the engine is.
@@ -102,7 +112,9 @@ class AetherVpnService : VpnService() {
         get() = when (carrier) {
             Carrier.AETHER -> null
             Carrier.PSIPHON -> psiphon
-            Carrier.TOR -> tor
+            // Rebuilt when the bridge changes rather than held: the choice is
+            // part of how tor is started, not something it can be told later.
+            Carrier.TOR -> torClient
         }
 
     override fun onCreate() {
@@ -134,6 +146,9 @@ class AetherVpnService : VpnService() {
                 carrier = Carrier.entries
                     .firstOrNull { it.wireName == intent.getStringExtra(EXTRA_CARRIER) }
                     ?: Carrier.AETHER
+                torBridge = TorBridge.entries
+                    .firstOrNull { it.wireName == intent.getStringExtra(EXTRA_TOR_BRIDGE) }
+                    ?: TorBridge.NONE
                 // Held for the life of the session: giveUp runs long after
                 // this, and is not a place that can read DataStore.
                 blockOnFailure = intent.getBooleanExtra(EXTRA_KILL_SWITCH, false)
@@ -144,6 +159,7 @@ class AetherVpnService : VpnService() {
                         putString(LAST_CHAIN_CONFIG, chainSettings)
                         putString(LAST_SPLIT_CONFIG, splitSettings)
                         putString(LAST_CARRIER, carrier.wireName)
+                        putString(LAST_TOR_BRIDGE, torBridge.wireName)
                     }
                     restartPolicy = START_STICKY
                 } else {
@@ -152,6 +168,7 @@ class AetherVpnService : VpnService() {
                         remove(LAST_CHAIN_CONFIG)
                         remove(LAST_SPLIT_CONFIG)
                         remove(LAST_CARRIER)
+                        remove(LAST_TOR_BRIDGE)
                     }
                 }
                 startForegroundNow(sayNow(R.string.status_preparing_connection), sayNow(R.string.status_validating_engine))
@@ -165,6 +182,9 @@ class AetherVpnService : VpnService() {
                     carrier = Carrier.entries
                         .firstOrNull { it.wireName == preferences.getString(LAST_CARRIER, null) }
                         ?: Carrier.AETHER
+                    torBridge = TorBridge.entries
+                        .firstOrNull { it.wireName == preferences.getString(LAST_TOR_BRIDGE, null) }
+                        ?: TorBridge.NONE
                     restartPolicy = START_STICKY
                     startForegroundNow(sayNow(R.string.status_restoring), sayNow(R.string.status_reconnecting_tun))
                     replaceSession(
@@ -437,13 +457,13 @@ class AetherVpnService : VpnService() {
      * for the first would report the second broken for working normally.
      */
     private fun carrierWaitMs(): Long = when (carrier) {
-        Carrier.TOR -> TorConfig.BOOTSTRAP_TIMEOUT_MS
+        Carrier.TOR -> TorConfig.bootstrapTimeoutMs(torBridge)
         else -> PSIPHON_WAIT_MS
     }
 
     private fun stopCarrier() {
         runCatching { psiphon.stop() }
-        runCatching { tor.stop() }
+        runCatching { torClient?.stop() }
     }
 
     private suspend fun runCarrierSession(
@@ -510,10 +530,17 @@ class AetherVpnService : VpnService() {
         }
 
         EngineStatusStore.update(
-            EngineStatus(EngineStage.CONNECTING, mode, null, sayNow(R.string.status_carrier_connecting)),
+            EngineStatus(EngineStage.CONNECTING, mode, null, sayNow(R.string.status_carrier_connecting, sayNow(carrier.label))),
         )
-        updateNotification(mode, sayNow(R.string.status_carrier_connecting))
+        updateNotification(mode, sayNow(R.string.status_carrier_connecting, sayNow(carrier.label)))
 
+        if (carrier == Carrier.TOR) {
+            // Rebuilt rather than reused. The bridge is part of the torrc tor
+            // reads at startup, so a client built for the previous choice would
+            // start tor with the previous configuration and report success.
+            torClient?.let { runCatching { it.stop() } }
+            torClient = TorClient(this, torBridge)
+        }
         val client = carrierClient ?: run {
             reportError(mode, sayNow(R.string.err_carrier_failed))
             finishIfCurrent(sessionGeneration)
@@ -1413,6 +1440,8 @@ class AetherVpnService : VpnService() {
         private const val LAST_GOOD_TRANSPORT = "last_good_transport"
         private const val EXTRA_CARRIER = "carrier"
         private const val LAST_CARRIER = "last_carrier"
+        private const val EXTRA_TOR_BRIDGE = "torBridge"
+        private const val LAST_TOR_BRIDGE = "last_tor_bridge"
         // Psiphon establishes over a network that is actively hostile to it,
         // and its own timeout is two minutes. Ours has to be the longer of
         // the two or we would tear down a tunnel that was about to arrive.
@@ -1455,6 +1484,7 @@ class AetherVpnService : VpnService() {
             killSwitch: Boolean = false,
             strictKillSwitch: Boolean = false,
             carrier: Carrier = Carrier.AETHER,
+            torBridge: TorBridge = TorBridge.NONE,
         ) {
             ContextCompat.startForegroundService(
                 context,
@@ -1469,7 +1499,8 @@ class AetherVpnService : VpnService() {
                     // about the order of an enum that nothing enforces, and a
                     // carrier added in the middle of the list would silently
                     // reinterpret a pending intent written by the old build.
-                    .putExtra(EXTRA_CARRIER, carrier.wireName),
+                    .putExtra(EXTRA_CARRIER, carrier.wireName)
+                    .putExtra(EXTRA_TOR_BRIDGE, torBridge.wireName),
             )
         }
 

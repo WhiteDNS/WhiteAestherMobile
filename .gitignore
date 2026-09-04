@@ -29,3 +29,5 @@ archive/
 # pinned revision and checked against a SHA-256 -- large, regenerable, and not
 # ours, which is the same reason native/chain/third_party is not committed.
 app/src/main/assets/psiphon_server_entries.txt
+native/tor/third_party/
+native/tor/build/

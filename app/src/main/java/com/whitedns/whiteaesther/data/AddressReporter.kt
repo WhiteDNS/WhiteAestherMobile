@@ -43,11 +43,15 @@ object AddressReporter {
     private const val TIMEOUT_MS = 6_000
 
     /**
-     * Longer than the direct one, because it is three hops rather than none.
-     * Tor in particular answers in its own time, and a timeout short enough for
-     * a local network reads as "no answer" for a circuit that was working.
+     * Longer than the direct one, and generously so.
+     *
+     * This is three hops rather than none, and on meek every one of them is a
+     * CDN round trip -- measured at over twenty seconds for a single request on
+     * a working circuit. Nothing waits on this but a row on a screen, so the
+     * cost of being patient is a field that fills in late, and the cost of not
+     * being is a blank one under a tunnel that is working.
      */
-    private const val CARRIER_TIMEOUT_MS = 20_000
+    private const val CARRIER_TIMEOUT_MS = 60_000
 
     private val Context.addressStore by preferencesDataStore(name = "whiteaesther_address")
     private val REAL_ADDRESS = stringPreferencesKey("real_address")

@@ -135,6 +135,31 @@ enum class Carrier(val wireName: String, @StringRes val label: Int) {
     val needsChain: Boolean get() = this != AETHER
 }
 
+/**
+ * How Tor reaches its first hop.
+ *
+ * Ordered by how much they cost and how much they survive, which is the order a
+ * user should try them in. Direct is fastest and blocked wherever Tor is; obfs4
+ * hides the shape of the traffic; snowflake goes through whichever volunteer
+ * browser answers; meek rides a CDN, which is slow and very hard to block
+ * without blocking the CDN.
+ */
+enum class TorBridge(val wireName: String, @StringRes val label: Int) {
+    NONE("none", R.string.tor_bridge_none),
+    OBFS4("obfs4", R.string.tor_bridge_obfs4),
+    SNOWFLAKE("snowflake", R.string.tor_bridge_snowflake),
+    // meek is deliberately absent. lyrebird starts it and tor accepts it, and
+    // then it never finishes bootstrapping -- seven minutes on the public
+    // bridge, repeatedly, while obfs4 and snowflake took under a minute from
+    // the same network. Offering it would be offering a mode that hangs and
+    // then fails. The plumbing is generic, so it is a two-line change to bring
+    // back when there is a bridge worth pointing at.
+    ;
+
+    /** True when this needs a transport executable that a build may not ship. */
+    val needsTransports: Boolean get() = this != NONE
+}
+
 /** Protocols sharing one set of endpoints, so an address found on one fits the other. */
 enum class EndpointFamily {
     MASQUE,
@@ -234,6 +259,16 @@ data class AppSettings(
      * slower, and one of them is somebody else's network.
      */
     val carrier: Carrier = Carrier.AETHER,
+    /**
+     * How Tor reaches its first hop, when Tor is the carrier.
+     *
+     * Direct by default, which is both the fastest and the one that fails on
+     * exactly the networks this carrier is wanted for. Defaulting to a bridge
+     * instead would make every user pay for a hop most of them do not need, and
+     * would put the app's traffic on three well-known public bridges that are
+     * blocked in the places a bridge is required.
+     */
+    val torBridge: TorBridge = TorBridge.NONE,
     // Automatic, because the answer depends on the network and the user has no
     // way to know it. A fixed default of H3 meant every install on a network
     // that blocks UDP spent minutes failing before anything else was tried.

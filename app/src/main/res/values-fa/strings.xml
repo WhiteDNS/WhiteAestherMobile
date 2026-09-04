@@ -460,7 +460,7 @@
     <string name="carrier_needs_chain_notice">این نسخه نمی‌تواند سایفون را اجرا کند: کتابخانهٔ مسیریابی موردنیازش موجود نیست.</string>
     <string name="carrier_whole_device_notice">سایفون فقط کل دستگاه را حمل می‌کند. پوشش را به «کل دستگاه» برگردانید یا اتر را انتخاب کنید.</string>
     <string name="status_starting_carrier">آماده‌سازی حامل…</string>
-    <string name="status_carrier_connecting">سایفون دنبال راه خروج می‌گردد. ممکن است یک دقیقه طول بکشد.</string>
+    <string name="status_carrier_connecting">%1$s دارد دنبال راه خروج می‌گردد. ممکن است یک دقیقه طول بکشد.</string>
     <string name="status_carrier_carries">متصل از طریق %1$s</string>
     <string name="err_carrier_whole_device_only">سایفون در حالت فقط-پراکسی اجرا نمی‌شود</string>
     <string name="err_carrier_needs_chain">این نسخه نمی‌تواند سایفون را مسیریابی کند: کتابخانهٔ زنجیره موجود نیست</string>
@@ -469,4 +469,13 @@
     <string name="carrier_not_engine_note">نقطهٔ پایانی، پروتکل و عمق جست‌وجوی پایین فقط برای اتر هستند. این حامل خودش راه خروجش را پیدا می‌کند.</string>
     <string name="carrier_tor">تور</string>
     <string name="carrier_tor_detail">سه رله، و خروجی نمی‌داند چه کسی درخواست کرده. کندترین گزینه، و UDP را حمل نمی‌کند.</string>
+    <string name="tor_bridge_none">مستقیم</string>
+    <string name="tor_bridge_obfs4">پل obfs4</string>
+    <string name="tor_bridge_snowflake">اسنوفلیک</string>
+    <string name="tor_bridge">تور چطور وصل شود</string>
+    <string name="tor_bridge_subtitle">مستقیم سریع‌ترین است و هرجا تور بسته باشد کار نمی‌کند</string>
+    <string name="tor_bridge_none_detail">مستقیم به شبکهٔ تور. سریع‌ترین، و اولین چیزی که فیلتر می‌شود.</string>
+    <string name="tor_bridge_obfs4_detail">شکل ترافیک را پنهان می‌کند. از پل‌های عمومی استفاده می‌کند که خودشان زودتر از همه بسته می‌شوند.</string>
+    <string name="tor_bridge_snowflake_detail">از طریق مرورگر داوطلبی که جواب بدهد. مقاوم است و سرعتش ثابت نیست.</string>
+    <string name="tor_bridge_missing">این نسخه ترنسپورتی همراه ندارد، پس فقط حالت مستقیم اجرا می‌شود.</string>
 </resources>

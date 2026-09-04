@@ -16,6 +16,8 @@ import android.os.RemoteException
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.whitedns.whiteaesther.core.TorConfig
+import com.whitedns.whiteaesther.data.TorBridge
+import java.io.File
 import org.torproject.jni.TorService
 
 /**
@@ -47,6 +49,8 @@ class TorCarrierService : android.app.Service() {
     private var torService: TorService? = null
     private var torConnection: ServiceConnection? = null
     private var started = false
+    private var transport: PluggableTransport? = null
+    private var bootstrapWatcher: Thread? = null
 
     enum class State { STOPPED, CONNECTING, CONNECTED, FAILED }
 
@@ -70,12 +74,22 @@ class TorCarrierService : android.app.Service() {
                     // and it is not knowable before tor says it is listening.
                     socksPort = torService?.socksPort ?: 0
                     if (socksPort > 0) {
-                        state = State.CONNECTED
+                        // Listening, which is not the same as usable. This
+                        // status arrives when tor's control connection comes up,
+                        // and tor has a consensus to fetch and a circuit to
+                        // build after that. Reporting CONNECTED here is how a
+                        // slow transport ends up looking connected while it
+                        // carries nothing -- meek reached this point in seconds
+                        // and then failed to answer a single request in three
+                        // minutes. The port is published now so the chain can be
+                        // rendered; CONNECTED waits for the circuit.
+                        broadcast()
+                        awaitBootstrap()
                     } else {
                         state = State.FAILED
                         failure = "Tor started without a SOCKS listener"
+                        broadcast()
                     }
-                    broadcast()
                 }
 
                 TorService.STATUS_STARTING -> {
@@ -126,7 +140,11 @@ class TorCarrierService : android.app.Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> start(intent.getStringExtra(EXTRA_COUNTRY))
+            ACTION_START -> start(
+                TorBridge.entries.firstOrNull { it.wireName == intent.getStringExtra(EXTRA_BRIDGE) }
+                    ?: TorBridge.NONE,
+                intent.getStringExtra(EXTRA_COUNTRY),
+            )
             ACTION_STOP -> {
                 stopTor()
                 stopSelf()
@@ -142,7 +160,7 @@ class TorCarrierService : android.app.Service() {
         super.onDestroy()
     }
 
-    private fun start(exitCountry: String?) {
+    private fun start(bridge: TorBridge, exitCountry: String?) {
         if (started) return
         started = true
         state = State.CONNECTING
@@ -150,11 +168,40 @@ class TorCarrierService : android.app.Service() {
         socksPort = 0
         broadcast()
 
+        // The transport first, because the torrc has to name the port it
+        // ended up on. tor cannot start it for us -- see PluggableTransport --
+        // so a bridge mode whose proxy will not start has to fail here rather
+        // than become a tor that quietly connects directly.
+        var listening: String? = null
+        val wanted = TorConfig.transportName(bridge)
+        if (wanted != null) {
+            val binary = transportBinary(bridge)
+            if (binary == null) {
+                fail("This build ships no pluggable transports")
+                return
+            }
+            val proxy = PluggableTransport(binary, File(filesDir, "pt-state"))
+            val methods = runCatching { proxy.start(listOf(wanted)) }.getOrElse { error ->
+                fail("The $wanted transport did not start: ${error.message}")
+                return
+            }
+            listening = methods[wanted]
+            if (listening == null) {
+                runCatching { proxy.stop() }
+                fail("The $wanted transport started without offering $wanted")
+                return
+            }
+            transport = proxy
+            Log.i("tor", "$wanted is listening on $listening")
+        }
+
         runCatching {
             // Written before tor is started, because it is read once at
             // startup. TorService owns torrc-defaults -- that is where the
             // SOCKS port lands -- so this is the file for everything else.
-            TorService.getTorrc(this).writeText(TorConfig.render(exitCountry))
+            TorService.getTorrc(this).writeText(
+                TorConfig.render(bridge, exitCountry, listening),
+            )
         }.onFailure { error ->
             fail("Could not write tor's configuration: ${error.message}")
             return
@@ -170,8 +217,8 @@ class TorCarrierService : android.app.Service() {
                 val port = torService?.socksPort ?: 0
                 if (port > 0 && state != State.CONNECTED) {
                     socksPort = port
-                    state = State.CONNECTED
                     broadcast()
+                    awaitBootstrap()
                 }
             }
 
@@ -192,6 +239,67 @@ class TorCarrierService : android.app.Service() {
         }
     }
 
+    /**
+     * Where the transport executables were extracted, or null if this build
+     * ships none.
+     *
+     * They live in the app's native library directory because that is the only
+     * place Android will extract a file from an APK and leave it executable.
+     * Checked rather than assumed: a build made without native/tor/build.ps1
+     * has tor and no transports, and the bridge modes have to be unavailable
+     * rather than produce a torrc naming files that are not there.
+     */
+    private fun transportBinary(bridge: TorBridge): File? {
+        val dir = File(applicationInfo.nativeLibraryDir)
+        // Snowflake is its own program; obfs4 and meek_lite both come out of
+        // lyrebird. Named by which binary provides it rather than by the
+        // transport, because asking the wrong one for a transport it does not
+        // implement is a CMETHOD-ERROR and a bridge mode that never works.
+        val name = when (bridge) {
+            TorBridge.SNOWFLAKE -> "libsnowflake.so"
+            else -> "liblyrebird.so"
+        }
+        return File(dir, name).takeIf { it.exists() }
+    }
+
+    /**
+     * Waits for tor to finish bootstrapping, then reports CONNECTED.
+     *
+     * `status/bootstrap-phase` is tor's own account of how far it has got, and
+     * `PROGRESS=100` is the only point at which it can carry anything. Polled
+     * rather than subscribed because the control connection here is jtorctl's
+     * synchronous one and a poll a second for a minute costs nothing measurable.
+     *
+     * On its own thread: this is called from a broadcast receiver on the main
+     * looper, and tor can take minutes behind a bridge.
+     */
+    private fun awaitBootstrap() {
+        if (bootstrapWatcher?.isAlive == true) return
+        val watcher = Thread {
+            val deadline = System.currentTimeMillis() + BOOTSTRAP_TIMEOUT_MS
+            while (System.currentTimeMillis() < deadline && started) {
+                val phase = runCatching { torService?.getInfo("status/bootstrap-phase") }
+                    .getOrNull()
+                    .orEmpty()
+                if (phase.contains("PROGRESS=100") || phase.contains("TAG=done")) {
+                    state = State.CONNECTED
+                    Log.i("tor", "bootstrapped")
+                    broadcast()
+                    return@Thread
+                }
+                Thread.sleep(1_000)
+            }
+            if (started && state != State.CONNECTED) {
+                // Not a failure of ours to report as one: the session above has
+                // its own deadline and a better message for it. Left CONNECTING
+                // so that deadline is what decides.
+                Log.w("tor", "still bootstrapping after ${BOOTSTRAP_TIMEOUT_MS / 1000}s")
+            }
+        }
+        bootstrapWatcher = watcher
+        watcher.start()
+    }
+
     private fun stopTor() {
         if (!started) return
         started = false
@@ -199,6 +307,10 @@ class TorCarrierService : android.app.Service() {
         torConnection = null
         torService = null
         runCatching { stopService(Intent(this, TorService::class.java)) }
+        // After tor, not before. A transport killed while tor still holds a
+        // connection through it leaves tor retrying a port that has gone.
+        transport?.let { runCatching { it.stop() } }
+        transport = null
         socksPort = 0
         if (state != State.FAILED) state = State.STOPPED
         broadcast()
@@ -233,10 +345,20 @@ class TorCarrierService : android.app.Service() {
         const val ACTION_START = "com.whitedns.whiteaesther.TOR_START"
         const val ACTION_STOP = "com.whitedns.whiteaesther.TOR_STOP"
         const val EXTRA_COUNTRY = "country"
+        const val EXTRA_BRIDGE = "bridge"
         const val EXTRA_FAILURE = "failure"
 
         const val MSG_REGISTER = 1
         const val MSG_UNREGISTER = 2
         const val MSG_STATE = 3
+
+        /**
+         * How long the watcher keeps asking before it stops.
+         *
+         * Longer than any carrier deadline above it, deliberately: this thread
+         * giving up first would leave the session waiting on a report that is
+         * never coming, and the session has the better message for a timeout.
+         */
+        private const val BOOTSTRAP_TIMEOUT_MS = 420_000L
     }
 }

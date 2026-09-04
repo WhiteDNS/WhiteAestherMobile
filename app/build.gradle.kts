@@ -156,6 +156,12 @@ android {
         // chain at run time and reports it unavailable when it is absent, which
         // is what a build without it should do.
         getByName("main").jniLibs.srcDir(rootProject.file("native/chain/build"))
+        // Tor's pluggable transports, built separately by native/tor/build.ps1.
+        // Executables rather than libraries, named lib*.so because that is the
+        // only thing Android extracts and marks executable. Absent, tor still
+        // runs and only its bridge modes are unavailable, which is what a build
+        // without them should do.
+        getByName("main").jniLibs.srcDir(rootProject.file("native/tor/build"))
     }
 }
 
