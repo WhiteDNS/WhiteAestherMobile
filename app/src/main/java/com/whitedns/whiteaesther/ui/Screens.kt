@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.whitedns.whiteaesther.AddressPair
 import com.whitedns.whiteaesther.EndpointOperation
+import com.whitedns.whiteaesther.BridgeMessage
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.IdentityMessage
 import com.whitedns.whiteaesther.R
@@ -664,9 +665,10 @@ fun RoutesScreen(
     onGoToEndpoint: () -> Unit,
     onGoToChain: () -> Unit = {},
     onGoToRoutingRules: () -> Unit = {},
-    onFetchBridges: () -> Unit = {},
+    onFetchBridges: (String) -> Unit = {},
     bridgesFetching: Boolean = false,
-    bridgesMessage: String? = null,
+    bridgesMessage: BridgeMessage? = null,
+    detectedCountry: String = "",
     psiphonRegions: List<String> = emptyList(),
     endpointModifier: Modifier = Modifier,
     chainModifier: Modifier = Modifier,
@@ -681,6 +683,9 @@ fun RoutesScreen(
     // Read from the composition so a language change redraws the country names
     // with it, which Locale.getDefault() would not.
     val uiLocale = LocalConfiguration.current.locales[0]
+    var bridgeCountry by rememberSaveable(detectedCountry) {
+        mutableStateOf(detectedCountry.uppercase())
+    }
 
     ScreenColumn {
         CrumbBar(stringResource(R.string.routes))
@@ -863,14 +868,43 @@ fun RoutesScreen(
                                 .fillMaxWidth()
                                 .testTag("fetch-bridges-button"),
                             enabled = !bridgesFetching,
-                            onClick = onFetchBridges,
+                            onClick = { onFetchBridges(bridgeCountry) },
                         )
-                        bridgesMessage?.let {
+                        Spacer(Modifier.height(8.dp))
+                        // Shown so it can be corrected. The country comes from
+                        // the network operator, which is right for somebody at
+                        // home and wrong for somebody asking on behalf of a
+                        // place they are not -- and Tor answers per country, so
+                        // asking as the wrong one gets a correct answer to the
+                        // wrong question.
+                        OutlinedTextField(
+                            value = bridgeCountry,
+                            onValueChange = { bridgeCountry = it.take(2).uppercase() },
+                            label = { Text(stringResource(R.string.tor_bridges_country)) },
+                            singleLine = true,
+                            textStyle = AetherTheme.type.Data.copy(color = AetherTheme.colors.text),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("bridge-country-field"),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = AetherTheme.colors.ink1,
+                                unfocusedContainerColor = AetherTheme.colors.ink1,
+                            ),
+                        )
+                        bridgesMessage?.let { message ->
                             Spacer(Modifier.height(8.dp))
                             Text(
-                                it,
+                                message.text,
                                 style = AetherTheme.type.Data,
-                                color = AetherTheme.colors.signalFailed,
+                                // Red is for a fault. Tor having no
+                                // recommendation for a country is Tor saying
+                                // the network needs no help, which is true of
+                                // most of the world.
+                                color = if (message.isError) {
+                                    AetherTheme.colors.signalFailed
+                                } else {
+                                    AetherTheme.colors.text2
+                                },
                             )
                         }
                         Spacer(Modifier.height(12.dp))

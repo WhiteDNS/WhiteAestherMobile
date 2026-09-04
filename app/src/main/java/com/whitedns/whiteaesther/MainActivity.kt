@@ -21,6 +21,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -265,10 +266,11 @@ class MainActivity : ComponentActivity() {
                     onScanEndpoints = viewModel::scanEndpoints,
                     onTestEndpoint = viewModel::testEndpoint,
                     onResetEndpoint = viewModel::resetEndpoint,
-                    onFetchBridges = { viewModel.fetchBridges(settings) },
+                    onFetchBridges = { country -> viewModel.fetchBridges(settings, country) },
                     bridgesFetching = viewModel.bridgesFetching.collectAsStateWithLifecycle().value,
                     bridgesMessage = viewModel.bridgesMessage.collectAsStateWithLifecycle().value,
                     psiphonRegions = viewModel.psiphonRegions.collectAsStateWithLifecycle().value,
+                    detectedCountry = remember { viewModel.detectedCountry() },
                     onCancelEndpointScan = viewModel::cancelEndpointScan,
                     onRefreshChainNodes = { viewModel.refreshChainNodes(settings) },
                     onSelectChainNode = { node -> viewModel.selectChainNode(settings, node) },
