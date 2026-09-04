@@ -47,6 +47,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -639,6 +640,24 @@ private fun homeAttention(settings: AppSettings, status: EngineStatus): Attentio
 // ---------------------------------------------------------------- routes ----
 
 @Composable
+/**
+ * A two-letter code as a country name, in the language of [locale].
+ *
+ * From the platform, not a table of our own: Android already has every name in
+ * every language it supports, and a table here would be one more thing to
+ * translate and to let go stale.
+ *
+ * The locale is passed in rather than read from Locale.getDefault(), which does
+ * not recompose when the language changes -- and this app changes its own
+ * language from a setting, so the names would keep the language the screen was
+ * first drawn in.
+ */
+private fun countryName(code: String, locale: java.util.Locale): String =
+    java.util.Locale.Builder().setRegion(code).build()
+        .getDisplayCountry(locale)
+        .ifBlank { code.uppercase() }
+
+@Composable
 fun RoutesScreen(
     settings: AppSettings,
     onSettingsChange: (AppSettings) -> Unit,
@@ -648,6 +667,7 @@ fun RoutesScreen(
     onFetchBridges: () -> Unit = {},
     bridgesFetching: Boolean = false,
     bridgesMessage: String? = null,
+    psiphonRegions: List<String> = emptyList(),
     endpointModifier: Modifier = Modifier,
     chainModifier: Modifier = Modifier,
     routingRulesModifier: Modifier = Modifier,
@@ -658,6 +678,9 @@ fun RoutesScreen(
     // through DataStore, and refreshed when something else writes them -- which
     // is what the fetch button does.
     var bridgeText by rememberSaveable(settings.torBridges) { mutableStateOf(settings.torBridges) }
+    // Read from the composition so a language change redraws the country names
+    // with it, which Locale.getDefault() would not.
+    val uiLocale = LocalConfiguration.current.locales[0]
 
     ScreenColumn {
         CrumbBar(stringResource(R.string.routes))
@@ -731,7 +754,59 @@ fun RoutesScreen(
             // inert. A screen full of controls that quietly do nothing is worse
             // than a sentence saying so.
             if (!settings.carrier.usesEngine) {
-                Note(stringResource(R.string.carrier_not_engine_note))
+                // Padded to the card's own inset. Note adds only 2dp of its
+                // own, which is right inside a column that already has padding
+                // and wrong here, where it is a direct child of the card and
+                // the text ends up sitting on the border.
+                Note(
+                    stringResource(R.string.carrier_not_engine_note),
+                    Modifier.padding(horizontal = 13.dp),
+                )
+            }
+        }
+
+        // Only under Psiphon, and only once Psiphon has said what it has.
+        // Before the first connection there is nothing to list, and a picker
+        // showing every country in the world would be offering exits that may
+        // not exist.
+        if (settings.carrier == Carrier.PSIPHON) {
+            Spacer(Modifier.height(12.dp))
+            AetherCard {
+                CardHead(
+                    stringResource(R.string.psiphon_region),
+                    stringResource(R.string.psiphon_region_subtitle),
+                )
+                if (psiphonRegions.isEmpty()) {
+                    Note(
+                        stringResource(R.string.psiphon_region_unknown),
+                        Modifier.padding(horizontal = 13.dp),
+                    )
+                } else {
+                    Column(
+                        Modifier.padding(11.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        (listOf("") + psiphonRegions).forEach { region ->
+                            OptionRow(
+                                code = region.ifEmpty { "ANY" }.uppercase(),
+                                title = if (region.isEmpty()) {
+                                    stringResource(R.string.psiphon_region_best)
+                                } else {
+                                    countryName(region, uiLocale)
+                                },
+                                subtitle = if (region.isEmpty()) {
+                                    stringResource(R.string.psiphon_region_best_detail)
+                                } else {
+                                    stringResource(R.string.psiphon_region_detail)
+                                },
+                                selected = settings.psiphonRegion == region,
+                                onClick = {
+                                    onSettingsChange(settings.copy(psiphonRegion = region))
+                                },
+                            )
+                        }
+                    }
+                }
             }
         }
 

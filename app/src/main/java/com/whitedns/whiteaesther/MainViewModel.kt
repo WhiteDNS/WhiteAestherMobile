@@ -11,6 +11,7 @@ import com.whitedns.whiteaesther.core.EndpointScanResult
 import com.whitedns.whiteaesther.core.MoatClient
 import com.whitedns.whiteaesther.core.TorBridges
 import com.whitedns.whiteaesther.core.NativeAetherBridge
+import com.whitedns.whiteaesther.core.PsiphonConfig
 import com.whitedns.whiteaesther.data.AddressReporter
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EndpointMode
@@ -146,6 +147,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val mutableBridgesMessage = MutableStateFlow<String?>(null)
     val bridgesMessage = mutableBridgesMessage.asStateFlow()
 
+    /**
+     * The exit countries Psiphon has said it has.
+     *
+     * Read from what the Psiphon process last wrote, because it is another
+     * process and this is a list of countries rather than something anything
+     * waits on. Empty until the first connection, which is honest: nothing
+     * knows what Psiphon has until Psiphon says.
+     */
+    private val mutablePsiphonRegions = MutableStateFlow(emptyList<String>())
+    val psiphonRegions = mutablePsiphonRegions.asStateFlow()
+
     // Seeded with what the build can do, rather than waiting for a refresh
     // that only happens once connected. Whether the library is present is known
     // from the start, and the screen has to say so before the user configures
@@ -210,6 +222,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         watchConnectionForAddresses()
         sampleTrafficWhileConnected()
+        viewModelScope.launch {
+            // Re-read whenever a session ends, which is when the list can have
+            // changed. Cheap enough that a timer would be the wrong shape.
+            EngineStatusStore.status
+                .map { it.stage }
+                .distinctUntilChanged()
+                .collect {
+                    mutablePsiphonRegions.value =
+                        withContext(Dispatchers.IO) { PsiphonConfig.availableRegions(getApplication()) }
+                }
+        }
     }
 
     /**

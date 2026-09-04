@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import com.whitedns.whiteaesther.ChainState
 import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.data.AppSettings
+import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.ChainSource
 import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.service.EngineStage
@@ -59,8 +60,18 @@ import com.whitedns.whiteaesther.ui.theme.AetherType
  */
 @Composable
 fun AppSettings.chainSummary(): String = when {
-    !chain.enabled -> stringResource(R.string.off_traffic_leaves_from_cloudflare)
+    // Named rather than assumed. "Traffic leaves from Cloudflare" was written
+    // when Aether was the only thing that could carry a session, and it is
+    // simply false under a carrier that exits somewhere else entirely.
+    !chain.enabled -> when (carrier) {
+        Carrier.AETHER -> stringResource(R.string.off_traffic_leaves_from_cloudflare)
+        else -> stringResource(R.string.off_traffic_leaves_from_carrier, stringResource(carrier.label))
+    }
     !chain.hasNodes -> stringResource(R.string.on_but_no_nodes_yet)
+    // Under a carrier the nodes are always dialled through it: there is no
+    // second path for them to take, and startCarrier does not consult the
+    // switch below.
+    !carrier.usesEngine -> stringResource(R.string.on_dialled_through_carrier, stringResource(carrier.label))
     chain.throughTunnel -> stringResource(R.string.on_dialled_through_the_tunnel)
     else -> stringResource(R.string.on_nodes_dialled_directly)
 }
@@ -148,6 +159,24 @@ fun ChainScreen(
         SourcesCard(settings, onSettingsChange)
 
         Spacer(Modifier.height(12.dp))
+        // The switch belongs to the engine. A carrier has one path out and the
+        // nodes take it, so under Psiphon or Tor this control would save
+        // happily and change nothing -- which is the kind of screen this app
+        // has been careful not to have.
+        if (!settings.carrier.usesEngine) {
+            AetherCard {
+                Column(Modifier.padding(15.dp)) {
+                    Text(
+                        stringResource(
+                            R.string.nodes_dialled_through_carrier,
+                            stringResource(settings.carrier.label),
+                        ),
+                        style = AetherTheme.type.Data,
+                        color = AetherTheme.colors.text2,
+                    )
+                }
+            }
+        } else {
         AetherCard {
             ToggleSettingRow(
                 title = stringResource(R.string.dial_nodes_through_the_tunnel),
@@ -163,7 +192,8 @@ fun ChainScreen(
                 modifier = Modifier.testTag("chain-through-tunnel-switch"),
             )
         }
-        if (!chain.throughTunnel) {
+        }
+        if (settings.carrier.usesEngine && !chain.throughTunnel) {
             Note(
                 stringResource(R.string.dialling_directly_skips_the_tunnel_entirely_whit),
             )

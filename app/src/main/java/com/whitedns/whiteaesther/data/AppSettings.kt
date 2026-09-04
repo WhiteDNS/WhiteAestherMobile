@@ -278,6 +278,19 @@ data class AppSettings(
      * would put the app's traffic on three well-known public bridges that are
      * blocked in the places a bridge is required.
      */
+    /**
+     * Which country Psiphon should exit from, or empty for whichever it likes.
+     *
+     * Worth having because of what Psiphon does without it. It remembers the
+     * server that worked and dials it again -- replay, and it is why the second
+     * connect is seconds rather than a minute -- so the exit address stops
+     * changing and looks like an app stuck on one server. Naming a country is
+     * how a user asks for a different one.
+     *
+     * A preference, not a guarantee: tunnel-core treats a region it cannot
+     * reach as a reason to keep trying rather than to substitute.
+     */
+    val psiphonRegion: String = "",
     val torBridge: TorBridge = TorBridge.NONE,
     /**
      * Bridge lines for [TorBridge.CUSTOM], one per line.

@@ -496,4 +496,13 @@
     <string name="tor_bridges_failed">Could not reach Tor\'s bridge service. Connect with Aether or Psiphon first, then try again.</string>
     <string name="tor_bridges_where">Or get them yourself from bridges.torproject.org, the @GetBridgesBot on Telegram, or by emailing bridges@torproject.org.</string>
     <string name="tor_bridges_none_recommended">Tor has no bridge recommendation for %1$s. Direct or the built-in bridges should work here.</string>
+    <string name="psiphon_region">Exit country</string>
+    <string name="psiphon_region_subtitle">Where Psiphon leaves the internet from</string>
+    <string name="psiphon_region_best">Best available</string>
+    <string name="psiphon_region_best_detail">Psiphon chooses. It reuses whichever server worked last, so the address stays the same until you pick a country.</string>
+    <string name="psiphon_region_detail">A preference, not a guarantee. Psiphon keeps trying rather than substituting another country.</string>
+    <string name="psiphon_region_unknown">Psiphon lists its countries after it first connects. Connect once, then come back.</string>
+    <string name="off_traffic_leaves_from_carrier">Off. Traffic leaves from %1$s</string>
+    <string name="on_dialled_through_carrier">On, dialled through %1$s</string>
+    <string name="nodes_dialled_through_carrier">Your nodes are dialled through %1$s. It has one way out and they take it, so there is nothing to choose here.</string>
 </resources>

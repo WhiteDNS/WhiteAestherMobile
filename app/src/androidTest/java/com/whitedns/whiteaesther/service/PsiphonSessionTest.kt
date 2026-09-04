@@ -1,6 +1,7 @@
 package com.whitedns.whiteaesther.service
 
 import androidx.test.platform.app.InstrumentationRegistry
+import com.whitedns.whiteaesther.core.PsiphonConfig
 import com.whitedns.whiteaesther.data.AddressReporter
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.Carrier
@@ -242,6 +243,57 @@ class PsiphonSessionTest {
             "the refusal did not say why: ${EngineStatusStore.status.value.message}",
             EngineStatusStore.status.value.message.contains("proxy", ignoreCase = true),
         )
+    }
+
+    @Test
+    fun choosingACountryMovesTheExitInsteadOfRepeatingIt() {
+        assumeTrue("no psiphon argument, skipping the live carrier test", requested)
+
+        // The complaint this answers: the exit address never changes. That is
+        // tunnel-core's replay -- it remembers the server that worked and dials
+        // it again, which is why a second connect takes seconds. Naming a
+        // country is the way to ask for a different one, and this proves the
+        // setting actually reaches tunnel-core rather than being saved and
+        // ignored.
+        val first = connectAndReadExit(region = "")
+        val regions = PsiphonConfig.availableRegions(context)
+        assertTrue("psiphon never reported its regions", regions.isNotEmpty())
+        Log.i("carrier-diag", "psiphon offers ${regions.size} regions: $regions")
+
+        // Somewhere Psiphon says it has, and not wherever it just put us.
+        val elsewhere = regions.firstOrNull { it != lastRegion }
+        assumeTrue("psiphon offers only one region here", elsewhere != null)
+
+        val second = connectAndReadExit(region = elsewhere!!)
+        Log.i("carrier-diag", "psiphon exit $first (best) then $second ($elsewhere)")
+        assertNotEquals("the exit did not move with the country", first, second)
+    }
+
+    private var lastRegion: String? = null
+
+    private fun connectAndReadExit(region: String): String {
+        clearStatus()
+        val settings = AppSettings(
+            mode = EngineMode.TUN,
+            carrier = Carrier.PSIPHON,
+            psiphonRegion = region,
+        )
+        AetherVpnService.start(
+            context,
+            settings.toNativeJson(context),
+            settings.chainForService().encode(),
+            carrier = Carrier.PSIPHON,
+            psiphonRegion = region,
+        )
+        assertEquals(
+            "psiphon did not connect for region '$region': " +
+                EngineStatusStore.status.value.message,
+            EngineStage.CONNECTED,
+            awaitStage(EngineStage.CONNECTED, timeoutMs = 180_000),
+        )
+        lastRegion = region.takeIf { it.isNotEmpty() }
+        val port = EngineStatusStore.status.value.carrierSocksPort
+        return runBlocking { AddressReporter.carrierAddress(port!!) }.orEmpty()
     }
 
     /** The port the carrier reported, read back out of the log line naming it. */

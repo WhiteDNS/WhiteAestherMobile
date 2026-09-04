@@ -490,4 +490,13 @@
     <string name="tor_bridges_failed">سرویس پل تور در دسترس نبود. اول با اتر یا سایفون وصل شوید، بعد دوباره امتحان کنید.</string>
     <string name="tor_bridges_where">یا خودتان از bridges.torproject.org، ربات ‎@GetBridgesBot در تلگرام، یا ایمیل به bridges@torproject.org بگیرید.</string>
     <string name="tor_bridges_none_recommended">تور برای %1$s پیشنهاد پلی ندارد. اینجا مستقیم یا پل‌های داخلی باید کار کند.</string>
+    <string name="psiphon_region">کشور خروجی</string>
+    <string name="psiphon_region_subtitle">سایفون از کجا وارد اینترنت شود</string>
+    <string name="psiphon_region_best">بهترین گزینهٔ موجود</string>
+    <string name="psiphon_region_best_detail">انتخاب با سایفون. سروری که آخرین بار جواب داده را دوباره می‌زند، پس تا وقتی کشوری انتخاب نکنید آی‌پی ثابت می‌ماند.</string>
+    <string name="psiphon_region_detail">یک ترجیح است نه تضمین. سایفون به‌جای جایگزین‌کردن کشور دیگر، به تلاش ادامه می‌دهد.</string>
+    <string name="psiphon_region_unknown">سایفون فهرست کشورهایش را بعد از اولین اتصال می‌دهد. یک بار وصل شوید و برگردید.</string>
+    <string name="off_traffic_leaves_from_carrier">خاموش. ترافیک از %1$s خارج می‌شود</string>
+    <string name="on_dialled_through_carrier">روشن، از داخل %1$s شماره‌گیری می‌شود</string>
+    <string name="nodes_dialled_through_carrier">نودهای شما از داخل %1$s شماره‌گیری می‌شوند. یک راه خروج دارد و نودها از همان می‌روند، پس اینجا چیزی برای انتخاب نیست.</string>
 </resources>
