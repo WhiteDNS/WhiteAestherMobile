@@ -20,6 +20,7 @@ class SettingsRepository(private val context: Context) {
             transport = enumValueOrDefault(preferences[TRANSPORT], TunnelProtocol.AUTO),
             carrier = enumValueOrDefault(preferences[CARRIER], Carrier.AETHER),
             torBridge = enumValueOrDefault(preferences[TOR_BRIDGE], TorBridge.NONE),
+            torBridges = preferences[TOR_BRIDGES].orEmpty(),
             scanStrategy = enumValueOrDefault(preferences[SCAN], ScanStrategy.BALANCED),
             dualStack = preferences[DUAL_STACK] ?: true,
             validationEnabled = preferences[VALIDATION] ?: true,
@@ -64,6 +65,7 @@ class SettingsRepository(private val context: Context) {
             preferences[TRANSPORT] = settings.transport.name
             preferences[CARRIER] = settings.carrier.name
             preferences[TOR_BRIDGE] = settings.torBridge.name
+            preferences[TOR_BRIDGES] = settings.torBridges
             preferences[SCAN] = settings.scanStrategy.name
             preferences[DUAL_STACK] = settings.dualStack
             preferences[VALIDATION] = settings.validationEnabled
@@ -106,6 +108,7 @@ class SettingsRepository(private val context: Context) {
         val TRANSPORT = stringPreferencesKey("transport")
         val CARRIER = stringPreferencesKey("carrier")
         val TOR_BRIDGE = stringPreferencesKey("tor_bridge")
+        val TOR_BRIDGES = stringPreferencesKey("tor_bridges")
         val SCAN = stringPreferencesKey("scan")
         val DUAL_STACK = booleanPreferencesKey("dual_stack")
         val VALIDATION = booleanPreferencesKey("validation")

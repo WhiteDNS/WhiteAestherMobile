@@ -265,6 +265,9 @@ class MainActivity : ComponentActivity() {
                     onScanEndpoints = viewModel::scanEndpoints,
                     onTestEndpoint = viewModel::testEndpoint,
                     onResetEndpoint = viewModel::resetEndpoint,
+                    onFetchBridges = { viewModel.fetchBridges(settings) },
+                    bridgesFetching = viewModel.bridgesFetching.collectAsStateWithLifecycle().value,
+                    bridgesMessage = viewModel.bridgesMessage.collectAsStateWithLifecycle().value,
                     onCancelEndpointScan = viewModel::cancelEndpointScan,
                     onRefreshChainNodes = { viewModel.refreshChainNodes(settings) },
                     onSelectChainNode = { node -> viewModel.selectChainNode(settings, node) },
@@ -428,6 +431,7 @@ class MainActivity : ComponentActivity() {
             settings.strictKillSwitch,
             settings.carrier,
             settings.torBridge,
+            settings.torBridges,
         )
     }
 }

@@ -104,6 +104,9 @@ fun WhiteAestherApp(
     onTestEndpoint: (AppSettings) -> Unit,
     onResetEndpoint: (AppSettings) -> Unit,
     onCancelEndpointScan: () -> Unit,
+    onFetchBridges: () -> Unit = {},
+    bridgesFetching: Boolean = false,
+    bridgesMessage: String? = null,
     onRefreshChainNodes: () -> Unit = {},
     onSelectChainNode: (String) -> Unit = {},
     onTestChainNodes: () -> Unit = {},
@@ -239,6 +242,9 @@ fun WhiteAestherApp(
                     onGoToRoutingRules = {
                         openDetail(Destination.ROUTING_RULES, rulesFocus)
                     },
+                    onFetchBridges = onFetchBridges,
+                    bridgesFetching = bridgesFetching,
+                    bridgesMessage = bridgesMessage,
                     endpointModifier = Modifier.focusRequester(endpointFocus),
                     chainModifier = Modifier.focusRequester(chainFocus),
                     routingRulesModifier = Modifier.focusRequester(rulesFocus),

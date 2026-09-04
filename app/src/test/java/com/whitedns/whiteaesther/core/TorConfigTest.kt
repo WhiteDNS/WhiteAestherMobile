@@ -98,15 +98,23 @@ class TorConfigTest {
     }
 
     @Test
-    fun everyBridgeModeHasLinesAndDirectHasNone() {
+    fun everyBuiltInModeHasLinesAndTheOthersGetThemElsewhere() {
         assertTrue(TorConfig.bridgeLines(TorBridge.NONE).isEmpty())
-        TorBridge.entries.filter { it != TorBridge.NONE }.forEach { bridge ->
-            assertTrue("$bridge has no bridge line", TorConfig.bridgeLines(bridge).isNotEmpty())
-            assertTrue(
-                "$bridge line does not name its transport",
-                TorConfig.bridgeLines(bridge).all { it.startsWith(bridge.wireName) },
-            )
-        }
+        // CUSTOM has none of its own by definition: its lines are the ones the
+        // user pasted or the app fetched, and an empty list there is the state
+        // the screen exists to get them out of.
+        assertTrue(TorConfig.bridgeLines(TorBridge.CUSTOM).isEmpty())
+
+        TorBridge.entries
+            .filter { it != TorBridge.NONE && it != TorBridge.CUSTOM }
+            .forEach { bridge ->
+                val lines = TorConfig.bridgeLines(bridge)
+                assertTrue("$bridge has no bridge line", lines.isNotEmpty())
+                assertTrue(
+                    "$bridge line does not name its transport",
+                    lines.all { it.startsWith(bridge.wireName) },
+                )
+            }
     }
 
     @Test

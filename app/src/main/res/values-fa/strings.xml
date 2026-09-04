@@ -478,4 +478,16 @@
     <string name="tor_bridge_obfs4_detail">شکل ترافیک را پنهان می‌کند. از پل‌های عمومی استفاده می‌کند که خودشان زودتر از همه بسته می‌شوند.</string>
     <string name="tor_bridge_snowflake_detail">از طریق مرورگر داوطلبی که جواب بدهد. مقاوم است و سرعتش ثابت نیست.</string>
     <string name="tor_bridge_missing">این نسخه ترنسپورتی همراه ندارد، پس فقط حالت مستقیم اجرا می‌شود.</string>
+    <string name="tor_bridge_custom">پل‌هایی که به شما داده شده</string>
+    <string name="tor_bridge_custom_detail">پل‌هایی که یکی‌یکی توزیع می‌شوند نه منتشر. تنها نوعی که جایی که تور واقعاً بسته باشد شانس دارد.</string>
+    <string name="tor_bridges_field">خط‌های پل، هر کدام در یک سطر</string>
+    <string name="tor_bridges_hint">obfs4 1.2.3.4:443 FINGERPRINT cert=... iat-mode=0</string>
+    <string name="tor_bridges_fetch">گرفتن پل برای شبکهٔ من</string>
+    <string name="tor_bridges_fetching">در حال پرسیدن از تور…</string>
+    <string name="tor_bridges_fetched">%1$s پل گرفته شد</string>
+    <string name="tor_bridges_none_yet">هنوز پلی نیست. بگیریدشان، یا آنچه به شما داده شده را بچسبانید.</string>
+    <string name="tor_bridges_have">%1$s پل</string>
+    <string name="tor_bridges_failed">سرویس پل تور در دسترس نبود. اول با اتر یا سایفون وصل شوید، بعد دوباره امتحان کنید.</string>
+    <string name="tor_bridges_where">یا خودتان از bridges.torproject.org، ربات ‎@GetBridgesBot در تلگرام، یا ایمیل به bridges@torproject.org بگیرید.</string>
+    <string name="tor_bridges_none_recommended">تور برای %1$s پیشنهاد پلی ندارد. اینجا مستقیم یا پل‌های داخلی باید کار کند.</string>
 </resources>

@@ -2,6 +2,7 @@ package com.whitedns.whiteaesther.service
 
 import android.util.Log
 import androidx.test.platform.app.InstrumentationRegistry
+import com.whitedns.whiteaesther.core.MoatClient
 import com.whitedns.whiteaesther.data.AddressReporter
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.Carrier
@@ -108,6 +109,57 @@ class TorSessionTest {
             "no log from mihomo reached the app",
             awaitLog("chain", timeoutMs = 20_000),
         )
+    }
+
+    @Test
+    fun bridgesCanBeFetchedFromTorAndThenCarryASession() {
+        assumeTrue("no tor argument, skipping the live carrier test", requested)
+
+        // What the one-click button does, end to end: ask Tor what it
+        // recommends here, take the first recommendation, and run tor behind
+        // it. The fetch is the half that is new; the rest is the same path a
+        // pasted bridge takes, which is the point of them sharing one field.
+        // Asked about a censored country rather than this machine's, which is
+        // the whole point of the feature: Tor answers an uncensored country with
+        // an empty list, correctly, and that would test nothing. In the app the
+        // country comes from the network the phone is actually on.
+        val country = InstrumentationRegistry.getArguments().getString("torCountry") ?: "ir"
+        val recommendations = runBlocking { MoatClient.recommendations(country) }
+            .getOrElse { error ->
+                throw AssertionError("could not reach Tor's bridge service: ${error.message}")
+            }
+        assertTrue("Tor recommended nothing for $country", recommendations.isNotEmpty())
+
+        val chosen = recommendations.first()
+        Log.i("carrier-diag", "tor recommends ${chosen.transport} for $country")
+
+        val settings = AppSettings(
+            mode = EngineMode.TUN,
+            carrier = Carrier.TOR,
+            torBridge = TorBridge.CUSTOM,
+            torBridges = chosen.lines.joinToString("\n"),
+        )
+        AetherVpnService.start(
+            context,
+            settings.toNativeJson(context),
+            settings.chainForService().encode(),
+            carrier = Carrier.TOR,
+            torBridge = TorBridge.CUSTOM,
+            torBridges = settings.torBridges,
+        )
+
+        val stage = awaitStage(EngineStage.CONNECTED, timeoutMs = 420_000)
+        assertEquals(
+            "fetched ${chosen.transport} bridges did not carry: " +
+                EngineStatusStore.status.value.message,
+            EngineStage.CONNECTED,
+            stage,
+        )
+
+        val port = EngineStatusStore.status.value.carrierSocksPort
+        val exit = runBlocking { AddressReporter.carrierAddress(port!!) }
+        assertTrue("nothing came back through tor", !exit.isNullOrBlank())
+        Log.i("carrier-diag", "tor(fetched ${chosen.transport}) exits at $exit")
     }
 
     private fun awaitLog(tag: String, timeoutMs: Long): Boolean {

@@ -148,6 +148,16 @@ enum class TorBridge(val wireName: String, @StringRes val label: Int) {
     NONE("none", R.string.tor_bridge_none),
     OBFS4("obfs4", R.string.tor_bridge_obfs4),
     SNOWFLAKE("snowflake", R.string.tor_bridge_snowflake),
+
+    /**
+     * Bridges the user was given, or the app fetched for them.
+     *
+     * The only mode with a real chance where Tor is properly blocked. The two
+     * above use the bridges Tor publishes for everyone, and a bridge everybody
+     * has is a bridge everybody's censor has -- they are the first addresses to
+     * go and they are already gone in the places this mode exists for.
+     */
+    CUSTOM("custom", R.string.tor_bridge_custom),
     // meek is deliberately absent. lyrebird starts it and tor accepts it, and
     // then it never finishes bootstrapping -- seven minutes on the public
     // bridge, repeatedly, while obfs4 and snowflake took under a minute from
@@ -269,6 +279,14 @@ data class AppSettings(
      * blocked in the places a bridge is required.
      */
     val torBridge: TorBridge = TorBridge.NONE,
+    /**
+     * Bridge lines for [TorBridge.CUSTOM], one per line.
+     *
+     * Kept as text rather than parsed, because it is text the user pasted and
+     * they should get it back exactly as they left it. Everything that needs
+     * structure asks [com.whitedns.whiteaesther.core.TorBridges] for it.
+     */
+    val torBridges: String = "",
     // Automatic, because the answer depends on the network and the user has no
     // way to know it. A fixed default of H3 meant every install on a network
     // that blocks UDP spent minutes failing before anything else was tried.

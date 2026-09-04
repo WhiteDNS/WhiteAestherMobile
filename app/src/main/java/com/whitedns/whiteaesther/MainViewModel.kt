@@ -8,16 +8,21 @@ import androidx.lifecycle.viewModelScope
 import com.whitedns.whiteaesther.core.ChainController
 import com.whitedns.whiteaesther.core.ChainNode
 import com.whitedns.whiteaesther.core.EndpointScanResult
+import com.whitedns.whiteaesther.core.MoatClient
+import com.whitedns.whiteaesther.core.TorBridges
 import com.whitedns.whiteaesther.core.NativeAetherBridge
 import com.whitedns.whiteaesther.data.AddressReporter
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EndpointMode
 import com.whitedns.whiteaesther.data.EngineMode
+import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.data.TunnelProtocol
 import com.whitedns.whiteaesther.data.SettingsRepository
 import com.whitedns.whiteaesther.data.UpdateChecker
 import com.whitedns.whiteaesther.service.AetherVpnService
+import com.whitedns.whiteaesther.service.EngineLog
 import com.whitedns.whiteaesther.service.EngineStage
+import com.whitedns.whiteaesther.service.LogLevel
 import com.whitedns.whiteaesther.service.EngineStatusStore
 import com.whitedns.whiteaesther.service.TrafficMeter
 import kotlinx.coroutines.Dispatchers
@@ -131,6 +136,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val endpointScannerState = mutableEndpointScannerState.asStateFlow()
     private var endpointJob: Job? = null
     private var realAddressJob: Job? = null
+    private var bridgeJob: Job? = null
+
+    /** Whether a bridge fetch is in flight, for the button that started it. */
+    private val mutableBridgesFetching = MutableStateFlow(false)
+    val bridgesFetching = mutableBridgesFetching.asStateFlow()
+
+    /** Why the last bridge fetch failed, or null. */
+    private val mutableBridgesMessage = MutableStateFlow<String?>(null)
+    val bridgesMessage = mutableBridgesMessage.asStateFlow()
 
     // Seeded with what the build can do, rather than waiting for a refresh
     // that only happens once connected. Whether the library is present is known
@@ -539,6 +553,66 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         AetherVpnService.forgetLastGoodTransport(getApplication())
         mutableEndpointScannerState.value = EndpointScannerState()
         scanEndpoints(cleared)
+    }
+
+    /**
+     * Asks Tor which bridges to use here, and saves them.
+     *
+     * Through the running carrier when there is one. That is the part Tor
+     * Browser cannot do and this app can: `bridges.torproject.org` is blocked
+     * in most of the places its answer is wanted, and this app already has two
+     * other ways out of exactly those places. Asked directly only when nothing
+     * is up, which is the case where direct is likely to work anyway.
+     *
+     * The country is the network's, not the exit's. Asked through a tunnel, the
+     * service would otherwise be told about Singapore and answer about
+     * Singapore, which is useless to somebody in Iran.
+     */
+    fun fetchBridges(settings: AppSettings) {
+        if (bridgeJob?.isActive == true) return
+        mutableBridgesMessage.value = null
+        mutableBridgesFetching.value = true
+        bridgeJob = viewModelScope.launch {
+            val context = getApplication<Application>()
+            val through = EngineStatusStore.status.value
+                .takeIf { it.stage == EngineStage.CONNECTED }
+                ?.carrierSocksPort
+            val country = MoatClient.country(context)
+            val result = MoatClient.recommendations(country, through)
+            mutableBridgesFetching.value = false
+
+            val recommendations = result.getOrElse { error ->
+                EngineLog.record(LogLevel.WARN, "bridges", error.message ?: "fetch failed")
+                mutableBridgesMessage.value = say(R.string.tor_bridges_failed)
+                return@launch
+            }
+            // The first one Tor lists, because it lists them in the order it
+            // recommends trying them for that country -- and the app can only
+            // run one transport at a time.
+            // Two different answers that a single failure message would blur.
+            // An empty list is Tor saying this network needs no help -- which is
+            // true of most of the world and is not a fault to report as one.
+            val best = recommendations.firstOrNull { it.lines.isNotEmpty() }
+            if (best == null) {
+                mutableBridgesMessage.value = say(R.string.tor_bridges_none_recommended, country.uppercase())
+                return@launch
+            }
+            EngineLog.record(
+                LogLevel.INFO,
+                "bridges",
+                "tor recommends ${best.transport} for $country: ${best.lines.size} bridges",
+            )
+            save(
+                settings.copy(
+                    torBridge = TorBridge.CUSTOM,
+                    torBridges = best.lines.joinToString("\n"),
+                ),
+            )
+        }
+    }
+
+    fun clearBridgesMessage() {
+        mutableBridgesMessage.value = null
     }
 
     fun scanEndpoints(settings: AppSettings) {

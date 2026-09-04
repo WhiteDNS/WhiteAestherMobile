@@ -74,6 +74,7 @@ error. It is the first thing to read.
 | What you see | What it means |
 | --- | --- |
 | `... · retry 3 of 8 in 12s` | A path failed and it is trying another. Normal on a hostile network. |
+| `Could not reach Tor's bridge service` | Tap **Fetch bridges** while connected through Aether or Psiphon, or paste bridges from @GetBridgesBot. |
 | `... is looking for a way out` | A carrier is establishing. Psiphon tries many protocols at once; Tor fetches a consensus and builds a circuit. A minute is normal, and behind a bridge rather more. |
 | `Stopped after 8 attempts` | Nothing worked here. Try a different profile or network. |
 | `custom endpoint ... failed MASQUE validation` | The address you pinned is not reachable. Switch **Endpoint** back to Automatic. |
