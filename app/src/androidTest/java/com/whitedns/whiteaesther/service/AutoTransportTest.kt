@@ -25,15 +25,19 @@ class AutoTransportTest {
     private val context: Context = InstrumentationRegistry.getInstrumentation().targetContext
     private lateinit var service: AetherVpnService
 
+    private fun resolve(configJson: String, attempt: Int): String {
+        val method = AetherVpnService::class.java
+            .getDeclaredMethod("configForAttempt", String::class.java, Int::class.javaPrimitiveType)
+            .apply { isAccessible = true }
+        return method.invoke(service, configJson, attempt) as String
+    }
+
     private fun configFor(attempt: Int, transport: String, scan: String = "balanced"): JSONObject {
         val json = JSONObject()
             .put("transport", transport)
             .put("scanMode", scan)
             .put("mode", "tun")
-        val method = AetherVpnService::class.java
-            .getDeclaredMethod("configForAttempt", String::class.java, Int::class.javaPrimitiveType)
-            .apply { isAccessible = true }
-        return JSONObject(method.invoke(service, json.toString(), attempt) as String)
+        return JSONObject(resolve(json.toString(), attempt))
     }
 
     private fun preferences() =
@@ -127,5 +131,63 @@ class AutoTransportTest {
         for (attempt in 0..4) {
             assertEquals("wg", configFor(attempt = attempt, transport = "wg").getString("transport"))
         }
+    }
+
+    /**
+     * The two calls a retry actually makes, in the order production makes them.
+     *
+     * scheduleReconnect picks the rung and names it in the notification, then
+     * hands the config it built to runSession -- which resolved it a second
+     * time. For anything but Automatic the resolver alternates h2 and h3, so on
+     * odd attempts the second pass flipped an answer the first had already
+     * settled: the screen said H2 and the engine was given H3.
+     *
+     * Written as idempotence rather than as a fixed sequence, so it keeps
+     * holding when the ladder itself is changed: whatever the first pass
+     * decides, a second pass over its answer must not move it.
+     */
+    @Test
+    fun resolvingAnAlreadyResolvedConfigChangesNothing() {
+        for (base in listOf("auto", "h3", "h2", "wiw")) {
+            for (attempt in 0..8) {
+                val announced = configFor(attempt = attempt, transport = base)
+                val actual = JSONObject(resolve(announced.toString(), attempt))
+
+                assertEquals(
+                    "$base attempt $attempt: announced ${announced.getString("transport")}",
+                    announced.getString("transport"),
+                    actual.getString("transport"),
+                )
+                assertEquals(
+                    "$base attempt $attempt: scan mode moved",
+                    announced.getString("scanMode"),
+                    actual.getString("scanMode"),
+                )
+            }
+        }
+    }
+
+    /**
+     * The report this was found in: Automatic, WIW remembered from a working
+     * session, outer tunnel stale after half an hour. The notification read
+     * "retry 1 of 8 on H2" and the session that started three seconds later
+     * logged transport=h3.
+     */
+    @Test
+    fun theTransportShownOnARetryIsTheOneThatRuns() {
+        preferences().edit().putString("last_good_transport", "wiw").commit()
+
+        // Rung zero is what already worked here, which is what the dropped
+        // session had been running.
+        assertEquals("wiw", configFor(attempt = 0, transport = "auto").getString("transport"))
+
+        // What scheduleReconnect computes, displays, and passes on.
+        val announced = configFor(attempt = 1, transport = "auto")
+        assertEquals("h2", announced.getString("transport"))
+
+        // And what runSession then makes of it. TCP on 443 is the point of this
+        // rung; arriving at H3 here is arriving at the transport the network has
+        // just finished refusing.
+        assertEquals("h2", JSONObject(resolve(announced.toString(), 1)).getString("transport"))
     }
 }
