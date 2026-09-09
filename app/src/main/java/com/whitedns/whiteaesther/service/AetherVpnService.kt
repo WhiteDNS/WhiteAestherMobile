@@ -364,7 +364,6 @@ class AetherVpnService : VpnService() {
         if (sessionGeneration != generation) return
 
         var tun: ParcelFileDescriptor? = null
-        val tunFd: Int
         if (mode == EngineMode.TUN) {
             // Consent and the protector are already in place: both had to
             // happen before the endpoint hunt, above.
@@ -380,10 +379,8 @@ class AetherVpnService : VpnService() {
                 finishIfCurrent(sessionGeneration)
                 return
             }
-            tunFd = tun.detachFd()
         } else {
             clearSocketProtector(sessionGeneration)
-            tunFd = -1
         }
 
         val peer = prepared?.peer
@@ -418,8 +415,13 @@ class AetherVpnService : VpnService() {
         }
 
         if (!useChain) {
+            // Detached at the handoff and not a line earlier. From here the
+            // engine owns the descriptor and closes it when it stops; before
+            // here it is ours, and a path that gives up without closing it
+            // leaves the interface registered with the system after the session
+            // it belonged to has ended.
             val result = withContext(Dispatchers.IO) {
-                NativeAetherBridge.run(engineConfig, peer.orEmpty(), tunFd, listener)
+                NativeAetherBridge.run(engineConfig, peer.orEmpty(), tun?.detachFd() ?: -1, listener)
             }
             tun?.close()
             clearSocketProtector(sessionGeneration)
@@ -439,7 +441,7 @@ class AetherVpnService : VpnService() {
             engineConfig = engineConfig,
             chainSettings = chainSettings,
             peer = peer,
-            tunFd = tunFd,
+            tun = tun,
             listener = listener,
             tunnelUp = tunnelUp,
             mode = mode,
@@ -545,10 +547,14 @@ class AetherVpnService : VpnService() {
             finishIfCurrent(sessionGeneration)
             return
         }
-        val tunFd = tun.detachFd()
-
+        // Deliberately not detached yet. Until mihomo takes the descriptor it
+        // belongs to this function, and each of the four ways out below has to
+        // close it. A carrier that fails to start used to leave its interface
+        // behind, so a handful of failed attempts left the system showing a VPN
+        // over a session that had ended.
         if (sessionGeneration != generation) {
             stopCarrier()
+            runCatching { tun.close() }
             return
         }
 
@@ -573,6 +579,7 @@ class AetherVpnService : VpnService() {
         }
         val client = carrierClient ?: run {
             reportError(mode, sayNow(R.string.err_carrier_failed))
+            runCatching { tun.close() }
             finishIfCurrent(sessionGeneration)
             return
         }
@@ -580,6 +587,7 @@ class AetherVpnService : VpnService() {
             val reason = error.message ?: sayNow(R.string.err_carrier_failed)
             EngineLog.record(LogLevel.ERROR, "carrier", reason)
             stopCarrier()
+            runCatching { tun.close() }
             if (sessionGeneration != generation) return
             scheduleReconnect(configJson, sessionGeneration, mode, reason)
             return
@@ -587,6 +595,7 @@ class AetherVpnService : VpnService() {
 
         if (sessionGeneration != generation) {
             stopCarrier()
+            runCatching { tun.close() }
             return
         }
 
@@ -605,7 +614,7 @@ class AetherVpnService : VpnService() {
                 // QUIC hang, while one that refuses them makes both fall back
                 // within a round trip.
                 udp = carrier.carriesUdp,
-                tunFd = tunFd,
+                tunFd = tun.detachFd(),
             )
         }
         if (failure != null) {
@@ -670,7 +679,7 @@ class AetherVpnService : VpnService() {
         engineConfig: String,
         chainSettings: ChainSettings,
         peer: String?,
-        tunFd: Int,
+        tun: ParcelFileDescriptor?,
         listener: NativeEngineListener,
         tunnelUp: CompletableDeferred<Unit>,
         mode: EngineMode,
@@ -692,6 +701,9 @@ class AetherVpnService : VpnService() {
             runCatching { chain.stop() }
             runCatching { NativeAetherBridge.stop() }
             clearSocketProtector(sessionGeneration)
+            // A no-op once mihomo has taken the descriptor, and the whole point
+            // until then: every way of giving up below runs through here.
+            runCatching { tun?.close() }
             Unit
         }
 
@@ -735,7 +747,7 @@ class AetherVpnService : VpnService() {
             chain.start(
                 settings = chainSettings,
                 socksPort = if (engine != null) socksPort else null,
-                tunFd = tunFd,
+                tunFd = tun?.detachFd() ?: -1,
             )
         }
         if (failure != null) {
