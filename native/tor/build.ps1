@@ -30,6 +30,33 @@ foreach ($transport in $Transports) {
     }
 }
 
+# proxy.golang.org is a single point of failure for a release and it does drop
+# connections mid-zip: one such stream error ended a v1.4.0 build twenty minutes
+# in, with every module but one already fetched. Pull the whole graph up front
+# and retry it, so the per-ABI builds below run against a warm cache and a bad
+# second costs seconds instead of the release.
+function Get-GoModules([string]$dir, [string]$label, [string]$flags) {
+    Push-Location $dir
+    try {
+        if ($flags) { $env:GOFLAGS = $flags }
+        foreach ($attempt in 1..3) {
+            Write-Host "fetching modules for $label ..." -ForegroundColor Cyan
+            go mod download
+            if ($LASTEXITCODE -eq 0) { return }
+            if ($attempt -eq 3) { throw "go mod download failed for $label" }
+            Write-Host "  download failed, retrying ($attempt/3) ..." -ForegroundColor Yellow
+            Start-Sleep -Seconds (5 * $attempt)
+        }
+    } finally {
+        Pop-Location
+        if ($flags) { Remove-Item Env:GOFLAGS -ErrorAction SilentlyContinue }
+    }
+}
+
+foreach ($transport in $Transports) {
+    Get-GoModules (Join-Path $here "third_party/$($transport.Source)") $transport.Name '-mod=mod'
+}
+
 # Resolve the SDK the way Gradle does rather than assuming where it lives.
 $sdk = $env:ANDROID_HOME
 if (-not $sdk) { $sdk = $env:ANDROID_SDK_ROOT }
