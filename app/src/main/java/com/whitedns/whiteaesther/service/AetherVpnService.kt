@@ -278,7 +278,20 @@ class AetherVpnService : VpnService() {
         // Automatic is a service-level policy: the engine only ever receives a
         // real transport. Resolved here so the very first attempt is already on
         // a rung of the ladder rather than on a name the bridge would reject.
-        val resolved = configForAttempt(configJson, reconnectAttempt)
+        //
+        // Only while it is still unresolved. scheduleReconnect has already
+        // chosen the rung for a retry and put its name on screen; resolving its
+        // answer a second time ran the h2/h3 alternation over it and, on odd
+        // attempts, flipped it. The notification said H2 while the engine was
+        // handed H3 -- so on a network that had just lost a UDP flow, four
+        // attempts in a row went back to UDP, and TCP on 443, the rung that
+        // exists to survive exactly that, was not reached until the sixth.
+        val resolved =
+            if (transportOf(configJson) == "auto") {
+                configForAttempt(configJson, reconnectAttempt)
+            } else {
+                configJson
+            }
         val engineConfig = if (useChain) withEngineMode(resolved, EngineMode.PROXY) else resolved
 
         // Record what this attempt is actually configured with. Without it a
