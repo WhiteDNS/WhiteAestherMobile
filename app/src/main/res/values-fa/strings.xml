@@ -468,6 +468,7 @@
     <string name="carrier_whole_device_notice">سایفون فقط کل دستگاه را حمل می‌کند. پوشش را به «کل دستگاه» برگردانید یا اتر را انتخاب کنید.</string>
     <string name="status_starting_carrier">آماده‌سازی حامل…</string>
     <string name="status_carrier_connecting">%1$s دارد دنبال راه خروج می‌گردد. ممکن است یک دقیقه طول بکشد.</string>
+    <string name="carrier_path_join">"، بعد "</string>
     <string name="status_carrier_carries">متصل از طریق %1$s</string>
     <string name="err_carrier_whole_device_only">سایفون در حالت فقط-پراکسی اجرا نمی‌شود</string>
     <string name="err_carrier_needs_chain">این نسخه نمی‌تواند سایفون را مسیریابی کند: کتابخانهٔ زنجیره موجود نیست</string>

@@ -474,6 +474,7 @@
     <string name="carrier_whole_device_notice">Psiphon carries the whole device only. Switch Coverage back to Whole device, or choose Aether.</string>
     <string name="status_starting_carrier">Preparing the carrier…</string>
     <string name="status_carrier_connecting">%1$s is looking for a way out. This can take a minute.</string>
+    <string name="carrier_path_join">", then "</string>
     <string name="status_carrier_carries">Connected through %1$s</string>
     <string name="err_carrier_whole_device_only">Psiphon cannot run in proxy-only mode</string>
     <string name="err_carrier_needs_chain">This build cannot route Psiphon: the chain library is missing</string>

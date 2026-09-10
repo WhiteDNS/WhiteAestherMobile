@@ -616,6 +616,16 @@ class AetherVpnService : VpnService() {
      * user is about to decide which end to change, and "the carrier failed" does
      * not say which end that is.
      */
+    /**
+     * The path, written the way the user chose it.
+     *
+     * Naming only the first carrier would be true and useless: with two hops
+     * the interesting fact is which order is currently carrying the session,
+     * because that is the thing the user is about to change.
+     */
+    private fun pathLabel(): String =
+        hops.joinToString(sayNow(R.string.carrier_path_join)) { sayNow(it.label) }
+
     private fun hopFailure(hop: Carrier, reason: String): String =
         if (hops.size > 1) "${sayNow(hop.label)}: $reason" else reason
 
@@ -757,7 +767,7 @@ class AetherVpnService : VpnService() {
         reportConnected(
             mode,
             null,
-            sayNow(R.string.status_carrier_carries, sayNow(carrier.label)),
+            sayNow(R.string.status_carrier_carries, pathLabel()),
             carrierSocksPort = port,
         )
 
