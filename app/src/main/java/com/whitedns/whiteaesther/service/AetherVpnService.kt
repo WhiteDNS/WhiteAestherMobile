@@ -136,6 +136,14 @@ class AetherVpnService : VpnService() {
     private var collapsedGeneration: Long = -1
 
     /**
+     * How far each hop has got, in the order the path dials them.
+     *
+     * Ordered because the order is the thing being reported: which hop is
+     * still waiting, and which one the session is stuck behind.
+     */
+    private val hopStages = linkedMapOf<Carrier, CarrierStage>()
+
+    /**
      * The carrier this session is using, or null when the engine is.
      *
      * Resolved once per session rather than branched on at each use: what
@@ -662,6 +670,7 @@ class AetherVpnService : VpnService() {
                 }
                 if (collapsedGeneration == sessionGeneration) return@collect
                 collapsedGeneration = sessionGeneration
+                markHop(hop, snapshot.stage)
 
                 val reason = hopFailure(hop, snapshot.failure ?: sayNow(R.string.err_carrier_stopped))
                 EngineLog.record(LogLevel.ERROR, "carrier", reason)
@@ -670,6 +679,19 @@ class AetherVpnService : VpnService() {
                 scheduleReconnect(configJson, sessionGeneration, mode, reason)
             }
         }
+    }
+
+    /**
+     * The path as the screen should show it, or nothing.
+     *
+     * Nothing for a single carrier: a one-line path is a label the user already
+     * read on the card they set it from.
+     */
+    private fun pathStatus(): List<HopStatus> =
+        if (hopStages.size < 2) emptyList() else hopStages.map { HopStatus(it.key, it.value) }
+
+    private fun markHop(hop: Carrier, stage: CarrierStage) {
+        hopStages[hop] = stage
     }
 
     private fun hopFailure(hop: Carrier, reason: String): String =
@@ -746,10 +768,19 @@ class AetherVpnService : VpnService() {
         // port is what mihomo routes the interface into; the ones before exist
         // only so that the next hop has somewhere to dial.
         startedHops.clear()
+        hopStages.clear()
+        hops.forEach { hopStages[it] = CarrierStage.STOPPED }
         var port = 0
         for (hop in hops) {
+            markHop(hop, CarrierStage.CONNECTING)
             EngineStatusStore.update(
-                EngineStatus(EngineStage.CONNECTING, mode, null, sayNow(R.string.status_carrier_connecting, sayNow(hop.label))),
+                EngineStatus(
+                    EngineStage.CONNECTING,
+                    mode,
+                    null,
+                    sayNow(R.string.status_carrier_connecting, sayNow(hop.label)),
+                    path = pathStatus(),
+                ),
             )
             updateNotification(mode, sayNow(R.string.status_carrier_connecting, sayNow(hop.label)))
 
@@ -757,6 +788,7 @@ class AetherVpnService : VpnService() {
             startedHops += hop to client
 
             port = client.start(carrierWaitMs(hop)).getOrElse { error ->
+                markHop(hop, CarrierStage.FAILED)
                 val reason = hopFailure(hop, error.message ?: sayNow(R.string.err_carrier_failed))
                 EngineLog.record(LogLevel.ERROR, "carrier", reason)
                 stopCarrier()
@@ -772,6 +804,7 @@ class AetherVpnService : VpnService() {
                 return
             }
 
+            markHop(hop, CarrierStage.CONNECTED)
             EngineLog.record(LogLevel.INFO, "carrier", "${hop.wireName} is up on 127.0.0.1:$port")
             watchHop(hop, client, configJson, mode, sessionGeneration)
         }
@@ -1020,6 +1053,7 @@ class AetherVpnService : VpnService() {
                 message,
                 connectedAtMillis = System.currentTimeMillis(),
                 carrierSocksPort = carrierSocksPort,
+                path = pathStatus(),
             ),
         )
         updateNotification(mode, message)
@@ -1365,7 +1399,9 @@ class AetherVpnService : VpnService() {
     }
 
     private fun reportError(mode: EngineMode?, message: String) {
-        EngineStatusStore.update(EngineStatus(EngineStage.ERROR, mode, message = message))
+        EngineStatusStore.update(
+            EngineStatus(EngineStage.ERROR, mode, message = message, path = pathStatus()),
+        )
         updateNotification(mode, message)
     }
 
@@ -1397,7 +1433,10 @@ class AetherVpnService : VpnService() {
         val message =
             "$reason · retry $reconnectAttempt of $MAX_RECONNECT_ATTEMPTS on $transport in ${delayMs / 1_000}s"
         EngineStatusStore.update(
-            EngineStatus(EngineStage.CONNECTING, mode, message = message),
+            // Still carrying the path: the wait before a retry is exactly when
+            // someone reads which hop went, and a row that vanished for it
+            // would take the answer away at the moment it is wanted.
+            EngineStatus(EngineStage.CONNECTING, mode, message = message, path = pathStatus()),
         )
         updateNotification(mode, message)
         serviceScope.launch {

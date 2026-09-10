@@ -64,6 +64,9 @@ import com.whitedns.whiteaesther.IdentityMessage
 import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.data.AppLanguage
 import com.whitedns.whiteaesther.data.AppSettings
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
+import com.whitedns.whiteaesther.core.CarrierStage
 import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.core.TorBridges
 import com.whitedns.whiteaesther.data.TorBridge
@@ -78,6 +81,7 @@ import com.whitedns.whiteaesther.data.ThemeMode
 import com.whitedns.whiteaesther.data.TunnelProtocol
 import com.whitedns.whiteaesther.data.UpdateChecker
 import com.whitedns.whiteaesther.service.EngineStage
+import com.whitedns.whiteaesther.service.HopStatus
 import com.whitedns.whiteaesther.service.EngineStatus
 import com.whitedns.whiteaesther.service.LogEntry
 import com.whitedns.whiteaesther.service.LogLevel
@@ -188,6 +192,61 @@ internal fun ScreenColumn(content: @Composable ColumnScopeAlias.() -> Unit) {
 }
 
 // ------------------------------------------------------------------ home ----
+
+/**
+ * The carrier path, hop by hop, and how far each one has got.
+ *
+ * Only worth showing when there are two. With one carrier this would repeat
+ * the card the user set it on; with two it is the one thing worth reading when
+ * a session will not come up, because "it did not connect" does not say which
+ * end to change.
+ *
+ * The arrow follows the layout direction rather than being drawn once and left
+ * to point the wrong way in Persian, where the row itself is laid out from the
+ * right and the first hop is the rightmost.
+ */
+@Composable
+private fun CarrierPathRow(path: List<HopStatus>, modifier: Modifier = Modifier) {
+    val colors = AetherTheme.colors
+    val arrow = if (LocalLayoutDirection.current == LayoutDirection.Rtl) "\u2190" else "\u2192"
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp, Alignment.CenterHorizontally),
+    ) {
+        path.forEachIndexed { index, hop ->
+            if (index > 0) {
+                Text(arrow, style = AetherTheme.type.Label, color = colors.text3)
+            }
+            val tint = when (hop.stage) {
+                CarrierStage.CONNECTED -> colors.signalLive
+                CarrierStage.FAILED -> colors.signalFailed
+                CarrierStage.CONNECTING -> colors.signalWorking
+                CarrierStage.STOPPED -> colors.text3
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    hop.carrier.wireName.take(3).uppercase(),
+                    style = AetherTheme.type.Label,
+                    color = tint,
+                )
+                Text(
+                    when (hop.stage) {
+                        CarrierStage.CONNECTED -> "\u2713"
+                        CarrierStage.FAILED -> "\u2715"
+                        CarrierStage.CONNECTING -> "\u2026"
+                        CarrierStage.STOPPED -> "\u00b7"
+                    },
+                    style = AetherTheme.type.Label,
+                    color = tint,
+                )
+            }
+        }
+    }
+}
 
 @Composable
 fun HomeScreen(
@@ -326,6 +385,10 @@ fun HomeScreen(
                 color = if (status.stage == EngineStage.ERROR) colors.signalFailed else colors.text2,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
+            if (status.path.size > 1) {
+                Spacer(Modifier.height(10.dp))
+                CarrierPathRow(status.path)
+            }
         }
 
         Spacer(Modifier.height(16.dp))
