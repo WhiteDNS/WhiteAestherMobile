@@ -562,6 +562,16 @@ data class AppSettings(
      * behind without an address is what [endpointProtocolMismatch] reads to
      * accuse a pin that no longer exists. They move together or not at all.
      */
+    /**
+     * The carriers this session would run, the one the network sees first.
+     *
+     * One entry is the ordinary case; two is a chain. Written as a list because
+     * everything downstream asks list questions of it -- does any hop use the
+     * engine, which hop carries the traffic out -- and answering those from two
+     * nullable fields is where the two drift apart.
+     */
+    val carrierPath: List<Carrier> get() = listOfNotNull(carrier, secondCarrier)
+
     fun withoutPinnedEndpoint(): AppSettings = copy(
         endpointMode = EndpointMode.AUTOMATIC,
         customEndpoint = "",

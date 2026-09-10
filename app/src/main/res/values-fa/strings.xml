@@ -454,7 +454,14 @@
     <string name="carrier_aether">اتر</string>
     <string name="carrier_psiphon">سایفون</string>
     <string name="carrier">حامل</string>
-    <string name="carrier_subtitle">کدام موتور تونل را حمل می‌کند</string>
+    <string name="carrier_subtitle">کدام موتورها تونل را حمل می‌کنند، و به چه ترتیبی</string>
+    <string name="carrier_first">اول — چیزی که شبکه شما می‌بیند</string>
+    <string name="carrier_then">بعد — چیزی که اینترنت می‌بیند</string>
+    <string name="carrier_second_none">هیچ‌چیز دیگر</string>
+    <string name="carrier_second_none_detail">یک حامل. سریع‌ترین، و چیزی که بیشتر اتصال‌ها می‌خواهند.</string>
+    <string name="carrier_swap">ترتیب را جابه‌جا کن</string>
+    <string name="carrier_chain_h2_note">اتر پشت حامل دیگر از H2 استفاده می‌کند، تنها پروتکلی که یک پراکسی می‌تواند حمل کند. انتخاب پروتکل پایین اینجا اثری ندارد.</string>
+    <string name="carrier_chain_snowflake_note">اسنوفلیک پشت حامل دیگر کار نمی‌کند، پس تور اینجا مستقیم وصل می‌شود. اگر مستقیم بسته است، پل دیگری انتخاب کنید.</string>
     <string name="carrier_aether_detail">MASQUE روی کلودفلر. سریع‌ترین مسیر، و چیزی که بقیهٔ اپ حول آن ساخته شده.</string>
     <string name="carrier_psiphon_detail">شبکهٔ خودِ سایفون. کندتر، و سرورهای شخص دیگری — برای شبکه‌هایی که اتر از آن‌ها بیرون نمی‌رود.</string>
     <string name="carrier_needs_chain_notice">این نسخه نمی‌تواند سایفون را اجرا کند: کتابخانهٔ مسیریابی موردنیازش موجود نیست.</string>

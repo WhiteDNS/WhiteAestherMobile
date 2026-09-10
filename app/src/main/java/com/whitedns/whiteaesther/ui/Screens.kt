@@ -658,6 +658,14 @@ private fun countryName(code: String, locale: java.util.Locale): String =
         .getDisplayCountry(locale)
         .ifBlank { code.uppercase() }
 
+/** What each carrier is, in the one sentence the card has room for. */
+@Composable
+private fun carrierDetail(carrier: Carrier): String = when (carrier) {
+    Carrier.AETHER -> stringResource(R.string.carrier_aether_detail)
+    Carrier.PSIPHON -> stringResource(R.string.carrier_psiphon_detail)
+    Carrier.TOR -> stringResource(R.string.carrier_tor_detail)
+}
+
 @Composable
 fun RoutesScreen(
     settings: AppSettings,
@@ -735,36 +743,105 @@ fun RoutesScreen(
                 stringResource(R.string.carrier),
                 stringResource(R.string.carrier_subtitle),
             )
+            // Two lists rather than one, because the pair is ordered and a pair
+            // written side by side does not say which end is which. The labels
+            // do the work an arrow would: what the network sees, and what the
+            // internet sees.
             Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                SectionLabel(
+                    stringResource(R.string.carrier_first),
+                    Modifier.padding(start = 4.dp, bottom = 4.dp),
+                )
                 Carrier.entries.forEach { carrier ->
                     OptionRow(
                         code = carrier.wireName.take(3).uppercase(),
                         title = stringResource(carrier.label),
-                        subtitle = when (carrier) {
-                            Carrier.AETHER -> stringResource(R.string.carrier_aether_detail)
-                            Carrier.PSIPHON -> stringResource(R.string.carrier_psiphon_detail)
-                            Carrier.TOR -> stringResource(R.string.carrier_tor_detail)
-                        },
+                        subtitle = carrierDetail(carrier),
                         selected = settings.carrier == carrier,
                         // OptionRow tags itself from the title, so this row is
                         // reachable in a test as option-aether / option-psiphon.
-                        onClick = { onSettingsChange(settings.copy(carrier = carrier)) },
+                        onClick = {
+                            // A carrier chained to itself is a hop to nowhere,
+                            // so taking one for the first position gives up the
+                            // second rather than leaving an impossible pair.
+                            onSettingsChange(
+                                settings.copy(
+                                    carrier = carrier,
+                                    secondCarrier = settings.secondCarrier?.takeIf { it != carrier },
+                                ),
+                            )
+                        },
                     )
                 }
             }
+
+            Divider()
+
+            Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                SectionLabel(
+                    stringResource(R.string.carrier_then),
+                    Modifier.padding(start = 4.dp, bottom = 4.dp),
+                )
+                OptionRow(
+                    code = null,
+                    title = stringResource(R.string.carrier_second_none),
+                    subtitle = stringResource(R.string.carrier_second_none_detail),
+                    selected = settings.secondCarrier == null,
+                    onClick = { onSettingsChange(settings.copy(secondCarrier = null)) },
+                )
+                Carrier.entries.filter { it != settings.carrier }.forEach { carrier ->
+                    OptionRow(
+                        code = carrier.wireName.take(3).uppercase(),
+                        title = stringResource(carrier.label),
+                        subtitle = carrierDetail(carrier),
+                        selected = settings.secondCarrier == carrier,
+                        onClick = { onSettingsChange(settings.copy(secondCarrier = carrier)) },
+                    )
+                }
+            }
+
+            // One tap, because trying the other order is the whole point of
+            // offering two. Behind two menus nobody tries it.
+            val second = settings.secondCarrier
+            if (second != null) {
+                OutlineButton(
+                    text = stringResource(R.string.carrier_swap),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 13.dp, vertical = 2.dp),
+                    icon = AetherIcons.Traffic,
+                    onClick = {
+                        onSettingsChange(
+                            settings.copy(carrier = second, secondCarrier = settings.carrier),
+                        )
+                    },
+                )
+            }
+
             // Said here rather than left for the user to discover at connect
             // time. Everything below this card -- the endpoint, the protocol,
             // the discovery depth -- describes a search for a Cloudflare
-            // gateway, and a carrier that never looks for one makes all of it
+            // gateway, and a path that never looks for one makes all of it
             // inert. A screen full of controls that quietly do nothing is worse
             // than a sentence saying so.
-            if (!settings.carrier.usesEngine) {
-                // Padded to the card's own inset. Note adds only 2dp of its
-                // own, which is right inside a column that already has padding
-                // and wrong here, where it is a direct child of the card and
-                // the text ends up sitting on the border.
+            //
+            // Padded to the card's own inset. Note adds only 2dp of its own,
+            // which is right inside a column that already has padding and wrong
+            // here, where it is a direct child of the card and the text would
+            // sit on the border.
+            val note = when {
+                settings.carrierPath.none { it.usesEngine } ->
+                    stringResource(R.string.carrier_not_engine_note)
+                // Aether behind something else cannot use the transports that
+                // are datagrams, so the protocol control below is not what this
+                // session will run.
+                second?.usesEngine == true -> stringResource(R.string.carrier_chain_h2_note)
+                else -> null
+            }
+            if (note != null) Note(note, Modifier.padding(horizontal = 13.dp))
+            if (second == Carrier.TOR && settings.torBridge == TorBridge.SNOWFLAKE) {
                 Note(
-                    stringResource(R.string.carrier_not_engine_note),
+                    stringResource(R.string.carrier_chain_snowflake_note),
                     Modifier.padding(horizontal = 13.dp),
                 )
             }
@@ -774,7 +851,11 @@ fun RoutesScreen(
         // Before the first connection there is nothing to list, and a picker
         // showing every country in the world would be offering exits that may
         // not exist.
-        if (settings.carrier == Carrier.PSIPHON) {
+        // Whichever position Psiphon is in. A control that appears only
+        // when a carrier is first is one that vanishes when the user swaps
+        // the order, and the exit country still decides where the session
+        // leaves from when Psiphon is the last hop.
+        if (Carrier.PSIPHON in settings.carrierPath) {
             Spacer(Modifier.height(12.dp))
             AetherCard {
                 CardHead(
@@ -819,7 +900,7 @@ fun RoutesScreen(
         // Psiphon picks its own protocols and gives no say in it, and offering
         // a control that belongs to one carrier under all of them is how a
         // screen stops meaning anything.
-        if (settings.carrier == Carrier.TOR) {
+        if (Carrier.TOR in settings.carrierPath) {
             Spacer(Modifier.height(12.dp))
             AetherCard {
                 CardHead(

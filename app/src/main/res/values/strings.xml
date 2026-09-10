@@ -460,7 +460,14 @@
     <string name="carrier_aether">Aether</string>
     <string name="carrier_psiphon">Psiphon</string>
     <string name="carrier">Carrier</string>
-    <string name="carrier_subtitle">Which engine carries the tunnel</string>
+    <string name="carrier_subtitle">Which engines carry the tunnel, and in what order</string>
+    <string name="carrier_first">First — what your network sees</string>
+    <string name="carrier_then">Then — what the internet sees</string>
+    <string name="carrier_second_none">Nothing further</string>
+    <string name="carrier_second_none_detail">One carrier. The fastest, and what most connections want.</string>
+    <string name="carrier_swap">Swap the order</string>
+    <string name="carrier_chain_h2_note">Behind another carrier Aether uses H2, the only transport a proxy can carry. The protocol below does not apply here.</string>
+    <string name="carrier_chain_snowflake_note">Snowflake cannot run behind another carrier, so Tor connects directly here. Choose a different bridge if direct is blocked.</string>
     <string name="carrier_aether_detail">MASQUE over Cloudflare. The fastest path, and the one everything else here is built around.</string>
     <string name="carrier_psiphon_detail">Psiphon’s own network. Slower, and someone else’s servers — for networks Aether cannot get out of.</string>
     <string name="carrier_needs_chain_notice">This build cannot run Psiphon: the routing library it needs is missing.</string>
