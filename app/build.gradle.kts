@@ -6,7 +6,19 @@ import org.gradle.process.ExecOperations
 import java.io.ByteArrayOutputStream
 import javax.inject.Inject
 
-val androidAbis = listOf("armeabi-v7a", "arm64-v8a", "x86_64")
+/**
+ * Which architectures this build carries.
+ *
+ * All three unless asked otherwise. `-PWHITEAESTHER_ABIS=x86_64` narrows it,
+ * which exists for one reason: the native side is a Rust core plus two Go
+ * engines, and building all three architectures of that takes minutes that a
+ * change being tried on one emulator does not need to spend. Release builds
+ * pass nothing and get everything, so this cannot quietly ship a partial APK.
+ */
+val androidAbis = providers.gradleProperty("WHITEAESTHER_ABIS")
+    .map { asked -> asked.split(",").map(String::trim).filter(String::isNotEmpty) }
+    .orElse(listOf("armeabi-v7a", "arm64-v8a", "x86_64"))
+    .get()
 val appVersionCode = providers.gradleProperty("WHITEAESTHER_VERSION_CODE").orElse("1").map { it.toInt() }
 
 /**
