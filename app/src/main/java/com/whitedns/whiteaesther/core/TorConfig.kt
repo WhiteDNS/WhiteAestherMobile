@@ -71,6 +71,7 @@ object TorConfig {
         exitCountry: String?,
         transport: String?,
         customBridges: String = "",
+        upstreamPort: Int = 0,
     ): String = buildString {
         // Nothing is served, dialled or published by this client.
         appendLine("SocksPolicy accept 127.0.0.1/8")
@@ -83,6 +84,14 @@ object TorConfig {
         // never accepts a connection from off the device.
         appendLine("DNSPort 0")
         appendLine("TransPort 0")
+
+        if (upstreamPort > 0) {
+            // Everything tor dials -- relays and the transport alike -- goes
+            // through the carrier in front of it. This is also why snowflake
+            // is not offered in that position: its WebRTC leg is datagrams,
+            // and a SOCKS5 CONNECT carries none.
+            appendLine("Socks5Proxy 127.0.0.1:$upstreamPort")
+        }
 
         val name = transportName(bridge, customBridges)
         val bridges = bridgeLines(bridge, customBridges)

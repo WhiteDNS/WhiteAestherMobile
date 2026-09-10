@@ -433,6 +433,7 @@ class MainActivity : ComponentActivity() {
             settings.killSwitch,
             settings.strictKillSwitch,
             settings.carrier,
+            settings.secondCarrier,
             settings.torBridge,
             settings.torBridges,
             settings.psiphonRegion,

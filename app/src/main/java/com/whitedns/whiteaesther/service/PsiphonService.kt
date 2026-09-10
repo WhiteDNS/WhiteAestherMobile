@@ -68,7 +68,10 @@ class PsiphonService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> start(intent.getStringExtra(EXTRA_REGION).orEmpty())
+            ACTION_START -> start(
+                intent.getStringExtra(EXTRA_REGION).orEmpty(),
+                intent.getIntExtra(EXTRA_UPSTREAM, 0),
+            )
             ACTION_STOP -> {
                 stopTunnel()
                 stopSelf()
@@ -86,7 +89,7 @@ class PsiphonService : Service() {
         super.onDestroy()
     }
 
-    private fun start(egressRegion: String) {
+    private fun start(egressRegion: String, upstreamPort: Int) {
         if (tunnel != null) return
         state = State.CONNECTING
         failure = null
@@ -106,7 +109,7 @@ class PsiphonService : Service() {
         val host = object : PsiphonTunnel.HostService {
             override fun getContext(): Context = this@PsiphonService
             override fun getPsiphonConfig(): String =
-                PsiphonConfig.render(this@PsiphonService, egressRegion)
+                PsiphonConfig.render(this@PsiphonService, egressRegion, upstreamPort)
 
             override fun onAvailableEgressRegions(regions: MutableList<String>?) {
                 // Recorded rather than reported. It changes rarely and nothing
@@ -215,6 +218,7 @@ class PsiphonService : Service() {
         const val ACTION_START = "com.whitedns.whiteaesther.PSIPHON_START"
         const val ACTION_STOP = "com.whitedns.whiteaesther.PSIPHON_STOP"
         const val EXTRA_REGION = "region"
+        const val EXTRA_UPSTREAM = "upstream"
         const val EXTRA_FAILURE = "failure"
 
         const val MSG_REGISTER = 1

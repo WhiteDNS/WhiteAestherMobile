@@ -78,7 +78,7 @@ object PsiphonConfig {
      *   unreachable region as a reason to fail rather than to substitute, which
      *   is why the screen presents it as a preference and defaults to empty.
      */
-    fun render(context: Context, egressRegion: String = ""): String {
+    fun render(context: Context, egressRegion: String = "", upstreamPort: Int = 0): String {
         val json = JSONObject()
         json.put("PropagationChannelId", PROPAGATION_CHANNEL_ID)
         json.put("SponsorId", SPONSOR_ID)
@@ -90,6 +90,13 @@ object PsiphonConfig {
         json.put("ClientVersion", BuildConfig.VERSION_CODE.toString())
         json.put("DataRootDirectory", dataDirectory(context).absolutePath)
         json.put("EgressRegion", egressRegion)
+        if (upstreamPort > 0) {
+            // Everything tunnel-core dials goes through the carrier in front
+            // of it. Nothing else needs configuring for that: given an
+            // upstream, Psiphon narrows itself to the protocols that can
+            // cross one rather than failing on the ones that cannot.
+            json.put("UpstreamProxyUrl", "socks5://127.0.0.1:$upstreamPort")
+        }
         json.put("EstablishTunnelTimeoutSeconds", ESTABLISH_TIMEOUT_SECONDS)
 
         // Zero means "pick a free one and tell me", and the port that comes back

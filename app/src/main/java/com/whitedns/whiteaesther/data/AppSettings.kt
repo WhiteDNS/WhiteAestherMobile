@@ -270,6 +270,20 @@ data class AppSettings(
      */
     val carrier: Carrier = Carrier.AETHER,
     /**
+     * A second carrier for the first one to dial through, if any.
+     *
+     * The pair is ordered and the order is the whole point: [carrier] is
+     * what the network sees, this is what the internet sees, and which way
+     * round works is a property of the network rather than something that
+     * can be decided here. So both directions are offered and the user is
+     * expected to try them.
+     *
+     * Null is a single carrier, and a single Aether carrier is the path
+     * this app has always taken -- engine on the interface, no chain, no
+     * second process. Nothing about that changes when this is null.
+     */
+    val secondCarrier: Carrier? = null,
+    /**
      * How Tor reaches its first hop, when Tor is the carrier.
      *
      * Direct by default, which is both the fastest and the one that fails on

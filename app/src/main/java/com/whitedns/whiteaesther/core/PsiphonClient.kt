@@ -28,6 +28,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 class PsiphonClient(
     private val context: Context,
     private val egressRegion: String,
+    /** A loopback SOCKS5 port to dial out through, or 0 to dial the network. */
+    private val upstreamPort: Int = 0,
 ) : CarrierClient {
     private val mutableState = MutableStateFlow(CarrierSnapshot())
     override val state = mutableState
@@ -77,7 +79,8 @@ class PsiphonClient(
                 // guarantee: tunnel-core keeps trying rather than substituting,
                 // so a country with no capacity is a slow connect rather than a
                 // different exit than the user asked for.
-                .putExtra(PsiphonService.EXTRA_REGION, egressRegion),
+                .putExtra(PsiphonService.EXTRA_REGION, egressRegion)
+                .putExtra(PsiphonService.EXTRA_UPSTREAM, upstreamPort),
         )
 
         val settled = withTimeoutOrNull(timeoutMs) {
