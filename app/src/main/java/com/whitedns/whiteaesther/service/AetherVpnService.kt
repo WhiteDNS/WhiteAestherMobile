@@ -40,9 +40,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -124,6 +123,17 @@ class AetherVpnService : VpnService() {
      * a listener that has gone.
      */
     private val startedHops = mutableListOf<Pair<Carrier, CarrierClient>>()
+
+    /**
+     * The session whose collapse has already been dealt with.
+     *
+     * Hops fail together: the second one goes because the first did, moments
+     * apart. Without this each watcher schedules its own reconnect, so one
+     * failure spends two of the attempt budget and the user is told about
+     * whichever hop happened to notice last rather than the one that went
+     * first.
+     */
+    private var collapsedGeneration: Long = -1
 
     /**
      * The carrier this session is using, or null when the engine is.
@@ -276,6 +286,7 @@ class AetherVpnService : VpnService() {
         serviceScope.launch {
             commandMutex.withLock {
                 generation += 1
+                collapsedGeneration = -1
                 reconnectAttempt = 0
                 baseConfigJson = configJson
                 chainJson = chainSettings
@@ -626,6 +637,41 @@ class AetherVpnService : VpnService() {
     private fun pathLabel(): String =
         hops.joinToString(sayNow(R.string.carrier_path_join)) { sayNow(it.label) }
 
+    /**
+     * Watches one hop for the rest of the session.
+     *
+     * Started as soon as the hop is up, not once the whole path is assembled.
+     * Bringing up the hop in front of it can take minutes -- an endpoint scan, a
+     * tor bootstrap -- and a carrier that dies during that wait used to go
+     * unnoticed: the session went on dialling a listener that had gone, and the
+     * only symptom was a retry counter climbing against a proxy that was no
+     * longer there.
+     */
+    private fun watchHop(
+        hop: Carrier,
+        client: CarrierClient,
+        configJson: String,
+        mode: EngineMode,
+        sessionGeneration: Long,
+    ) {
+        serviceScope.launch {
+            client.state.collect { snapshot ->
+                if (sessionGeneration != generation) return@collect
+                if (snapshot.stage != CarrierStage.FAILED && snapshot.stage != CarrierStage.STOPPED) {
+                    return@collect
+                }
+                if (collapsedGeneration == sessionGeneration) return@collect
+                collapsedGeneration = sessionGeneration
+
+                val reason = hopFailure(hop, snapshot.failure ?: sayNow(R.string.err_carrier_stopped))
+                EngineLog.record(LogLevel.ERROR, "carrier", reason)
+                runCatching { chain.stop() }
+                stopCarrier()
+                scheduleReconnect(configJson, sessionGeneration, mode, reason)
+            }
+        }
+    }
+
     private fun hopFailure(hop: Carrier, reason: String): String =
         if (hops.size > 1) "${sayNow(hop.label)}: $reason" else reason
 
@@ -727,6 +773,7 @@ class AetherVpnService : VpnService() {
             }
 
             EngineLog.record(LogLevel.INFO, "carrier", "${hop.wireName} is up on 127.0.0.1:$port")
+            watchHop(hop, client, configJson, mode, sessionGeneration)
         }
         EngineStatusStore.update(
             EngineStatus(EngineStage.CONNECTING, mode, null, sayNow(R.string.status_starting_chain)),
@@ -776,20 +823,10 @@ class AetherVpnService : VpnService() {
         // tunnel giving up -- and mihomo would keep the interface up dialling a
         // listener that has gone, which the phone experiences as connected and
         // carrying nothing.
-        startedHops.toList()
-            .map { (hop, client) -> client.state.map { hop to it } }
-            .merge()
-            .collect { (hop, snapshot) ->
-                if (sessionGeneration != generation) return@collect
-                if (snapshot.stage == CarrierStage.FAILED || snapshot.stage == CarrierStage.STOPPED) {
-                    val reason = hopFailure(hop, snapshot.failure ?: sayNow(R.string.err_carrier_stopped))
-                    EngineLog.record(LogLevel.ERROR, "carrier", reason)
-                    runCatching { chain.stop() }
-                    stopCarrier()
-                    scheduleReconnect(configJson, sessionGeneration, mode, reason)
-                    return@collect
-                }
-            }
+        // Every hop has been watched since it came up, so there is nothing left
+        // to collect here. Parking keeps this coroutine alive for as long as the
+        // session it represents, which is what replaceSession cancels.
+        awaitCancellation()
     }
 
     /**
