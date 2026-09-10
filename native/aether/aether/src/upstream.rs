@@ -45,9 +45,40 @@ pub struct Upstream {
     pub password: Option<String>,
 }
 
-pub fn configured() -> Option<&'static Upstream> {
-    static UPSTREAM: std::sync::OnceLock<Option<Upstream>> = std::sync::OnceLock::new();
-    UPSTREAM.get_or_init(Upstream::from_env).as_ref()
+/// The upstream proxy to dial through, as it is configured right now.
+///
+/// Read on every call rather than fixed at the first one. A proxy on the same
+/// device -- which is what the Android app points this at when it chains one
+/// carrier through another -- binds a fresh port every time it starts, so a
+/// value cached for the life of the process goes on dialling the port of a
+/// carrier that has since been replaced. That arrives as a refused connection
+/// from a proxy which is in fact running perfectly well, and no amount of
+/// retrying can fix it. Caching also meant that a process which started without
+/// a proxy could never acquire one.
+///
+/// Parsing a short string per connection costs less than being wrong about it.
+pub fn configured() -> Option<Upstream> {
+    Upstream::from_env()
+}
+
+/// Whether this setting has changed since it was last reported.
+///
+/// Reading the environment per connection would otherwise repeat the same line
+/// for every dial. Only a change is worth saying out loud.
+fn is_new(raw: &str) -> bool {
+    static LAST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    match LAST.lock() {
+        Ok(mut last) => {
+            if last.as_deref() == Some(raw) {
+                false
+            } else {
+                *last = Some(raw.to_owned());
+                true
+            }
+        }
+        // A poisoned lock is no reason to lose the line.
+        Err(_) => true,
+    }
 }
 
 impl Upstream {
@@ -60,16 +91,20 @@ impl Upstream {
 
         match Self::parse(trimmed) {
             Ok(upstream) => {
-                log::info!(
-                    "[+] dialling out through the {} proxy at {}:{}",
-                    upstream.kind.label(),
-                    upstream.host,
-                    upstream.port
-                );
+                if is_new(trimmed) {
+                    log::info!(
+                        "[+] dialling out through the {} proxy at {}:{}",
+                        upstream.kind.label(),
+                        upstream.host,
+                        upstream.port
+                    );
+                }
                 Some(upstream)
             }
             Err(error) => {
-                log::error!("[-] the upstream proxy setting was ignored: {error}");
+                if is_new(trimmed) {
+                    log::error!("[-] the upstream proxy setting was ignored: {error}");
+                }
                 None
             }
         }
