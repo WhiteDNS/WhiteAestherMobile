@@ -35,6 +35,36 @@ object PsiphonConfig {
     private const val PROPAGATION_CHANNEL_ID = "FFFFFFFFFFFFFFFF"
     private const val SPONSOR_ID = "1111111111111111"
 
+    /**
+     * Psiphon's public keys for the server entries and server lists it signs.
+     *
+     * Public halves, so nothing here is a secret or a credential: they let
+     * tunnel-core check that a server it was handed came from Psiphon, and do
+     * nothing else. Without the first, every server tunnel-core discovered after
+     * connecting was thrown away -- the first report that carried Psiphon's
+     * notices said so in as many words, "DSLStoreServerEntry ... VerifySignature
+     * ... missing public key" -- which left this app on the list it shipped with
+     * while Psiphon's own app kept learning new ones.
+     *
+     * Psiphon issues these to integrators rather than publishing them. These are
+     * byte-identical to the ones in Instagram's own Psiphon configuration and in
+     * several independent open-source clients.
+     */
+    private const val SERVER_ENTRY_SIGNATURE_KEY = "sHuUVTWaRyh5pZwy4UguSgkwmBe0EHtJJkoF5WrxmvA="
+    private const val REMOTE_SERVER_LIST_SIGNATURE_KEY =
+        "MIICIDANBgkqhkiG9w0BAQEFAAOCAg0AMIICCAKCAgEAt7Ls+/39r+T6zNW7GiVpJfzq/xvL9SBH5rIFnk0RXYEYavax3WS6HOD35eTAqn8AniOwiH+DOkvgSKF2caqk/y1dfq47Pdymtwzp9ikpB1C5OfAysXzBiwVJlCdajBKvBZDerV1cMvRzCKvKwRmvDmHgphQQ7WfXIGbRbmmk6opMBh3roE42KcotLFtqp0RRwLtcBRNtCdsrVsjiI1Lqz/lH+T61sGjSjQ3CHMuZYSQJZo/KrvzgQXpkaCTdbObxHqb6/+i1qaVOfEsvjoiyzTxJADvSytVtcTjijhPEV6XskJVHE1Zgl+7rATr/pDQkw6DPCNBS1+Y6fy7GstZALQXwEDN/qhQI9kWkHijT8ns+i1vGg00Mk/6J75arLhqcodWsdeG/M/moWgqQAnlZAGVtJI1OgeF5fsPpXu4kctOfuZlGjVZXQNW34aOzm8r8S0eVZitPlbhcPiR4gT/aSMz/wd8lZlzZYsje/Jr8u/YtlwjjreZrGRmG8KMOzukV3lLmMppXFMvl4bxv6YFEmIuTsOhbLTwFgh7KYNjodLj/LsqRVfwz31PgWQFTEPICV7GCvgVlPRxnofqKSjgTWI4mxDhBpVcATvaoBl1L/6WLbFvBsoAUBItWwctO2xalKxF5szhGm8lccoc5MZr8kfE0uxMgsxz4er68iCID+rsCAQM="
+
+    /**
+     * Where Psiphon publishes its current server list.
+     *
+     * Fetched before any tunnel exists, so a first connection on a network that
+     * has blocked every server this build shipped with still has somewhere to
+     * start. Maintained by Psiphon: the file was two days old when this was
+     * written, and it is what the placeholder-channel clients above use too.
+     */
+    private const val REMOTE_SERVER_LIST_URL =
+        "https://s3.amazonaws.com//psiphon/web/mjr4-p23r-puwl/server_list_compressed"
+
     /** Where the embedded bootstrap list is packaged. */
     const val SERVER_ENTRIES_ASSET = "psiphon_server_entries.txt"
 
@@ -121,6 +151,9 @@ object PsiphonConfig {
         // else's column, and reporting "1" tells them nothing at all.
         json.put("ClientVersion", BuildConfig.VERSION_CODE.toString())
         json.put("DataRootDirectory", dataDirectory(context).absolutePath)
+        json.put("ServerEntrySignaturePublicKey", SERVER_ENTRY_SIGNATURE_KEY)
+        json.put("RemoteServerListSignaturePublicKey", REMOTE_SERVER_LIST_SIGNATURE_KEY)
+        json.put("RemoteServerListUrl", REMOTE_SERVER_LIST_URL)
         json.put("EgressRegion", egressRegion)
         json.put("EstablishTunnelTimeoutSeconds", ESTABLISH_TIMEOUT_SECONDS)
         json.put("ConnectionWorkerPoolSize", CONNECTION_WORKERS)
