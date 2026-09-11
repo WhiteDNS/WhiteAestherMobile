@@ -1030,7 +1030,10 @@ mod tests {
 
             let mut request = [0u8; 4];
             client.read_exact(&mut request).await.unwrap();
-            assert_eq!(request[3], ATYP_V4, "a literal address should arrive as IPv4");
+            assert_eq!(
+                request[3], ATYP_V4,
+                "a literal address should arrive as IPv4"
+            );
             let mut target = [0u8; 6];
             client.read_exact(&mut target).await.unwrap();
             client
