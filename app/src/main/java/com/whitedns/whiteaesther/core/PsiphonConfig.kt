@@ -1,6 +1,7 @@
 package com.whitedns.whiteaesther.core
 
 import android.content.Context
+import android.telephony.TelephonyManager
 import com.whitedns.whiteaesther.BuildConfig
 import org.json.JSONObject
 import java.io.File
@@ -34,6 +35,36 @@ object PsiphonConfig {
     private const val PROPAGATION_CHANNEL_ID = "FFFFFFFFFFFFFFFF"
     private const val SPONSOR_ID = "1111111111111111"
 
+    /**
+     * Psiphon's public keys for the server entries and server lists it signs.
+     *
+     * Public halves, so nothing here is a secret or a credential: they let
+     * tunnel-core check that a server it was handed came from Psiphon, and do
+     * nothing else. Without the first, every server tunnel-core discovered after
+     * connecting was thrown away -- the first report that carried Psiphon's
+     * notices said so in as many words, "DSLStoreServerEntry ... VerifySignature
+     * ... missing public key" -- which left this app on the list it shipped with
+     * while Psiphon's own app kept learning new ones.
+     *
+     * Psiphon issues these to integrators rather than publishing them. These are
+     * byte-identical to the ones in Instagram's own Psiphon configuration and in
+     * several independent open-source clients.
+     */
+    private const val SERVER_ENTRY_SIGNATURE_KEY = "sHuUVTWaRyh5pZwy4UguSgkwmBe0EHtJJkoF5WrxmvA="
+    private const val REMOTE_SERVER_LIST_SIGNATURE_KEY =
+        "MIICIDANBgkqhkiG9w0BAQEFAAOCAg0AMIICCAKCAgEAt7Ls+/39r+T6zNW7GiVpJfzq/xvL9SBH5rIFnk0RXYEYavax3WS6HOD35eTAqn8AniOwiH+DOkvgSKF2caqk/y1dfq47Pdymtwzp9ikpB1C5OfAysXzBiwVJlCdajBKvBZDerV1cMvRzCKvKwRmvDmHgphQQ7WfXIGbRbmmk6opMBh3roE42KcotLFtqp0RRwLtcBRNtCdsrVsjiI1Lqz/lH+T61sGjSjQ3CHMuZYSQJZo/KrvzgQXpkaCTdbObxHqb6/+i1qaVOfEsvjoiyzTxJADvSytVtcTjijhPEV6XskJVHE1Zgl+7rATr/pDQkw6DPCNBS1+Y6fy7GstZALQXwEDN/qhQI9kWkHijT8ns+i1vGg00Mk/6J75arLhqcodWsdeG/M/moWgqQAnlZAGVtJI1OgeF5fsPpXu4kctOfuZlGjVZXQNW34aOzm8r8S0eVZitPlbhcPiR4gT/aSMz/wd8lZlzZYsje/Jr8u/YtlwjjreZrGRmG8KMOzukV3lLmMppXFMvl4bxv6YFEmIuTsOhbLTwFgh7KYNjodLj/LsqRVfwz31PgWQFTEPICV7GCvgVlPRxnofqKSjgTWI4mxDhBpVcATvaoBl1L/6WLbFvBsoAUBItWwctO2xalKxF5szhGm8lccoc5MZr8kfE0uxMgsxz4er68iCID+rsCAQM="
+
+    /**
+     * Where Psiphon publishes its current server list.
+     *
+     * Fetched before any tunnel exists, so a first connection on a network that
+     * has blocked every server this build shipped with still has somewhere to
+     * start. Maintained by Psiphon: the file was two days old when this was
+     * written, and it is what the placeholder-channel clients above use too.
+     */
+    private const val REMOTE_SERVER_LIST_URL =
+        "https://s3.amazonaws.com//psiphon/web/mjr4-p23r-puwl/server_list_compressed"
+
     /** Where the embedded bootstrap list is packaged. */
     const val SERVER_ENTRIES_ASSET = "psiphon_server_entries.txt"
 
@@ -65,8 +96,39 @@ object PsiphonConfig {
      * carrier that never reports failure, and the service above it can neither
      * retry nor tell the user that this network is not working -- the screen
      * would say "connecting" until the phone was rebooted.
+     *
+     * But not two minutes either, which is what it was. Psiphon's own app keeps
+     * going for as long as it takes, and users reported networks where it got
+     * through and this app, stopping at 120 seconds and starting again from
+     * nothing, never did. A retry here restarts tunnel-core, and everything it
+     * was halfway through dialling is thrown away with it.
      */
-    private const val ESTABLISH_TIMEOUT_SECONDS = 120
+    private const val ESTABLISH_TIMEOUT_SECONDS = 300
+
+    /**
+     * How many servers tunnel-core dials at once.
+     *
+     * Its default is ten. On a network that drops most attempts the ones that
+     * would have worked are somewhere down the candidate list, and more of them
+     * in flight at a time is how that list gets reached inside the window above.
+     */
+    private const val CONNECTION_WORKERS = 12
+
+    /**
+     * The country of the network the phone is on, or null.
+     *
+     * The operator's answer only. MoatClient falls back to the phone's locale,
+     * which is fine for picking a bridge list and wrong here: a phone set to
+     * English on wifi would claim to be in the United States and fetch tactics
+     * for a network that filters nothing. No answer leaves DeviceRegion out,
+     * which is what every build before this one did.
+     */
+    private fun networkRegion(context: Context): String? {
+        val telephony = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+        return telephony?.networkCountryIso
+            ?.takeIf { it.length == 2 && it.all(Char::isLetter) }
+            ?.uppercase(java.util.Locale.US)
+    }
 
     /** Everything tunnel-core writes, under one directory we can delete. */
     fun dataDirectory(context: Context): File =
@@ -89,8 +151,18 @@ object PsiphonConfig {
         // else's column, and reporting "1" tells them nothing at all.
         json.put("ClientVersion", BuildConfig.VERSION_CODE.toString())
         json.put("DataRootDirectory", dataDirectory(context).absolutePath)
+        json.put("ServerEntrySignaturePublicKey", SERVER_ENTRY_SIGNATURE_KEY)
+        json.put("RemoteServerListSignaturePublicKey", REMOTE_SERVER_LIST_SIGNATURE_KEY)
+        json.put("RemoteServerListUrl", REMOTE_SERVER_LIST_URL)
         json.put("EgressRegion", egressRegion)
         json.put("EstablishTunnelTimeoutSeconds", ESTABLISH_TIMEOUT_SECONDS)
+        json.put("ConnectionWorkerPoolSize", CONNECTION_WORKERS)
+        // Where the phone is, so the tactics for that network -- which protocols
+        // to lead with, how to pad them, which servers to try first -- arrive
+        // before the first connection rather than after it. Without it tunnel-core
+        // learns the region from a server handshake, which on the networks that
+        // need those tactics most is the handshake that never completes.
+        networkRegion(context)?.let { json.put("DeviceRegion", it) }
 
         // Zero means "pick a free one and tell me", and the port that comes back
         // is what the chain is configured against. A fixed port would be one
