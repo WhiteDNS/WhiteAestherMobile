@@ -1,5 +1,7 @@
 package com.whitedns.whiteaesther.service
 
+import android.util.Log
+import com.whitedns.whiteaesther.BuildConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -49,6 +51,21 @@ object EngineLog {
         if (message.isBlank()) return
         val entry = LogEntry(System.currentTimeMillis(), level, tag, message)
         mutableEntries.update { (it + entry).takeLast(CAPACITY) }
+        // Debug builds also write to logcat, where adb is how a session is
+        // watched on a test device. A release build keeps its log in memory
+        // only, as above. runCatching because under JVM unit tests Log is a
+        // stub that throws.
+        if (BuildConfig.DEBUG) {
+            runCatching {
+                val priority = when (level) {
+                    LogLevel.ERROR -> Log.ERROR
+                    LogLevel.WARN -> Log.WARN
+                    LogLevel.DEBUG -> Log.DEBUG
+                    LogLevel.INFO -> Log.INFO
+                }
+                Log.println(priority, "WA/$tag", message)
+            }
+        }
     }
 
     fun clear() {

@@ -23,8 +23,16 @@ import com.whitedns.whiteaesther.core.CarrierClient
 import com.whitedns.whiteaesther.core.CarrierStage
 import com.whitedns.whiteaesther.core.PsiphonClient
 import com.whitedns.whiteaesther.core.TorClient
+import com.whitedns.whiteaesther.core.TorBridges
 import com.whitedns.whiteaesther.core.TorConfig
+import com.whitedns.whiteaesther.data.AutoOptions
+import com.whitedns.whiteaesther.data.AutoPlanner
+import com.whitedns.whiteaesther.data.AutoRoute
+import com.whitedns.whiteaesther.data.AutoStep
 import com.whitedns.whiteaesther.data.Carrier
+import com.whitedns.whiteaesther.data.Lane
+import com.whitedns.whiteaesther.data.RouteMemory
+import com.whitedns.whiteaesther.data.ScanStrategy
 import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.data.ChainSettings
 import com.whitedns.whiteaesther.data.EngineMode
@@ -41,12 +49,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.File
 import java.net.InetAddress
 
 class AetherVpnService : VpnService() {
@@ -144,6 +154,65 @@ class AetherVpnService : VpnService() {
     private val hopStages = linkedMapOf<Carrier, CarrierStage>()
 
     /**
+     * The user asked the app to find the way out itself.
+     *
+     * While set, [carrier] and [secondCarrier] stop being the user's choice and
+     * become whatever the current step of the plan is running.
+     */
+    private var automatic = false
+
+    /** This pass's plan; empty between passes, which is what starts a new one. */
+    private var autoSteps: List<AutoStep> = emptyList()
+    private var autoStepIndex = 0
+
+    /** Which rung of the engine's transport ladder this step is on. */
+    private var autoEngineAttempt = 0
+
+    /** When the engine step's budget runs out. Zero once the leash has pulled it. */
+    private var autoStepDeadline = 0L
+
+    /** Bumped whenever a step starts or a route wins, so an older leash stands down. */
+    @Volatile private var autoToken = 0L
+
+    /** Set from the engine's callback thread the moment its route opens. */
+    @Volatile private var autoEngineUp = false
+
+    /** A route carried traffic this pass. What a later failure means depends on it. */
+    @Volatile private var autoConnected = false
+
+    /** The route the session is running, named on screen once it connects. */
+    @Volatile private var autoRunningRoute: AutoRoute? = null
+
+    private var autoPasses = 0
+    private var autoNetworkKey = RouteMemory.ANY_NETWORK
+    private var autoMode: EngineMode? = null
+
+    /**
+     * How far each carrier has got this pass, in the order the pass tries them.
+     *
+     * Replaced rather than mutated: the engine's callback thread reads it when
+     * it reports, and a map changing under that read is a crash on connect.
+     */
+    @Volatile private var autoStages: Map<Carrier, CarrierStage> = emptyMap()
+
+    /** Routes being tried right now, for the one line that says so. */
+    private val autoTrying = mutableListOf<AutoRoute>()
+
+    /** An engine session the leash had to leave behind, until it has gone. */
+    private var staleEngine: Job? = null
+
+    /**
+     * Whether the current session can be cancelled rather than waited for.
+     *
+     * True only where cancelling is safe and waiting is not: a connected
+     * carrier session parks until it is cancelled, and a race waits out head
+     * starts measured in tens of seconds. The engine path is neither -- it
+     * sits in a native call that only stopping the engine ends, and cancelling
+     * it would skip the cleanup that runs when that call returns.
+     */
+    private var sessionCancellable = false
+
+    /**
      * The carrier this session is using, or null when the engine is.
      *
      * Resolved once per session rather than branched on at each use: what
@@ -180,7 +249,7 @@ class AetherVpnService : VpnService() {
             ACTION_LIFT_BLOCK -> {
                 dropBlackhole()
                 blockAfterStop = false
-                EngineStatusStore.update(EngineStatus())
+                publish(EngineStatus())
                 ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
                 stopSelf(startId)
                 return START_NOT_STICKY
@@ -204,6 +273,7 @@ class AetherVpnService : VpnService() {
                     ?: TorBridge.NONE
                 torBridges = intent.getStringExtra(EXTRA_TOR_BRIDGES).orEmpty()
                 psiphonRegion = intent.getStringExtra(EXTRA_PSIPHON_REGION).orEmpty()
+                automatic = intent.getBooleanExtra(EXTRA_AUTOMATIC, false)
                 // Held for the life of the session: giveUp runs long after
                 // this, and is not a place that can read DataStore.
                 blockOnFailure = intent.getBooleanExtra(EXTRA_KILL_SWITCH, false)
@@ -218,6 +288,7 @@ class AetherVpnService : VpnService() {
                         putString(LAST_TOR_BRIDGE, torBridge.wireName)
                         putString(LAST_TOR_BRIDGES, torBridges)
                         putString(LAST_PSIPHON_REGION, psiphonRegion)
+                        putBoolean(LAST_AUTOMATIC, automatic)
                     }
                     restartPolicy = START_STICKY
                 } else {
@@ -230,6 +301,7 @@ class AetherVpnService : VpnService() {
                         remove(LAST_TOR_BRIDGE)
                         remove(LAST_TOR_BRIDGES)
                         remove(LAST_PSIPHON_REGION)
+                        remove(LAST_AUTOMATIC)
                     }
                 }
                 startForegroundNow(sayNow(R.string.status_preparing_connection), sayNow(R.string.status_validating_engine))
@@ -252,6 +324,7 @@ class AetherVpnService : VpnService() {
                         ?: TorBridge.NONE
                     torBridges = preferences.getString(LAST_TOR_BRIDGES, null).orEmpty()
                     psiphonRegion = preferences.getString(LAST_PSIPHON_REGION, null).orEmpty()
+                    automatic = preferences.getBoolean(LAST_AUTOMATIC, false)
                     restartPolicy = START_STICKY
                     startForegroundNow(sayNow(R.string.status_restoring), sayNow(R.string.status_reconnecting_tun))
                     replaceSession(
@@ -296,12 +369,22 @@ class AetherVpnService : VpnService() {
                 generation += 1
                 collapsedGeneration = -1
                 reconnectAttempt = 0
+                // A new connect is a new search, planned for whichever network
+                // the phone is on now.
+                autoSteps = emptyList()
+                autoPasses = 0
+                autoConnected = false
                 baseConfigJson = configJson
                 chainJson = chainSettings
                 splitJson = splitSettings
                 NativeAetherBridge.stop()
                 runCatching { chain.stop() }
                 runCatching { stopCarrier() }
+                // Cancelled where that is safe, not only waited for. A connected
+                // carrier session parks until it is cancelled, so joining it alone
+                // never returned -- with this lock held, so the new session never
+                // started and neither did any command after it.
+                if (sessionCancellable) sessionJob?.cancel()
                 sessionJob?.join()
                 val sessionGeneration = generation
                 sessionJob = serviceScope.launch {
@@ -311,9 +394,10 @@ class AetherVpnService : VpnService() {
         }
     }
 
-    private suspend fun runSession(configJson: String, sessionGeneration: Long) {
+    private suspend fun runSession(requestedConfig: String, sessionGeneration: Long) {
+        sessionCancellable = false
         val mode = runCatching {
-            when (JSONObject(configJson).getString("mode")) {
+            when (JSONObject(requestedConfig).getString("mode")) {
                 "proxy" -> EngineMode.PROXY
                 else -> EngineMode.TUN
             }
@@ -321,6 +405,26 @@ class AetherVpnService : VpnService() {
 
         val chainSettings = ChainSettings.decode(chainJson)
         val splitTunnel = SplitTunnel.decode(splitJson)
+
+        // Automatic decides what carries the session before anything else
+        // looks. A race runs here and returns; the engine step goes on down the
+        // path below exactly as a session carried by Aether alone always has,
+        // on the transport the step chose.
+        val configJson = if (automatic) {
+            when (val step = autoStepFor(mode, sessionGeneration) ?: return) {
+                is AutoStep.Race -> {
+                    runAutoRace(step, requestedConfig, mode, chainSettings, splitTunnel, sessionGeneration)
+                    return
+                }
+                is AutoStep.Engine -> {
+                    carrier = Carrier.AETHER
+                    secondCarrier = null
+                    autoEngineConfig(requestedConfig, step)
+                }
+            }
+        } else {
+            requestedConfig
+        }
 
         // A chain goes down the carrier path even when Aether is one of its
         // links. Aether on its own does not: the engine takes the interface
@@ -365,7 +469,7 @@ class AetherVpnService : VpnService() {
         if (useChain) {
             EngineLog.record(LogLevel.INFO, "chain", "exit chain on, engine dropped to SOCKS")
         }
-        EngineStatusStore.update(
+        publish(
             EngineStatus(EngineStage.PREPARING, mode, message = preparingMessage(engineConfig)),
         )
 
@@ -412,6 +516,13 @@ class AetherVpnService : VpnService() {
                 // Stop, and say what will actually help.
                 if (isConclusive(reason)) {
                     EngineLog.record(LogLevel.ERROR, "identity", reason)
+                    // Conclusive for the engine, not for the session: the routes
+                    // Automatic still has do not ask Cloudflare for anything.
+                    if (automatic) {
+                        autoStepDeadline = 0L
+                        scheduleReconnect(configJson, sessionGeneration, mode, reason)
+                        return
+                    }
                     reportError(mode, reason)
                     finishIfCurrent(sessionGeneration)
                     return
@@ -447,12 +558,12 @@ class AetherVpnService : VpnService() {
 
         val peer = prepared?.peer
         if (engineInPath) {
-            EngineStatusStore.update(
+            publish(
                 EngineStatus(EngineStage.CONNECTING, mode, peer, sayNow(R.string.status_validating_route)),
             )
             updateNotification(mode, sayNow(R.string.status_connecting_to, peer.orEmpty()))
         } else {
-            EngineStatusStore.update(
+            publish(
                 EngineStatus(EngineStage.CONNECTING, mode, null, sayNow(R.string.status_starting_chain)),
             )
             updateNotification(mode, sayNow(R.string.status_starting_chain))
@@ -462,6 +573,9 @@ class AetherVpnService : VpnService() {
         // than the destination, so the two paths report different things.
         val tunnelUp = CompletableDeferred<Unit>()
         val listener = NativeEngineListener {
+            // First, and straight from the engine's thread: the leash reads this
+            // to know the engine got there, whatever happens after it.
+            autoEngineUp = true
             reconnectAttempt = 0
             EngineLog.record(
                 LogLevel.INFO,
@@ -634,7 +748,16 @@ class AetherVpnService : VpnService() {
      * leaving by the address the chain was built to hide.
      */
     private fun carrierEngineConfig(configJson: String, upstream: Int): String {
-        val proxyMode = withEngineMode(configJson, EngineMode.PROXY)
+        // Automatic is not a transport the engine accepts -- it refuses the name
+        // outright -- so a first hop on it is resolved here, the way the engine
+        // path resolves it. Unresolved, every chain that starts with Aether
+        // failed its first attempt and only connected on the retry.
+        val resolved = if (transportOf(configJson) == "auto") {
+            configForAttempt(configJson, reconnectAttempt)
+        } else {
+            configJson
+        }
+        val proxyMode = withEngineMode(resolved, EngineMode.PROXY)
         if (upstream <= 0) return proxyMode
         return runCatching {
             JSONObject(proxyMode)
@@ -767,7 +890,7 @@ class AetherVpnService : VpnService() {
             return
         }
 
-        EngineStatusStore.update(
+        publish(
             EngineStatus(EngineStage.PREPARING, mode, message = sayNow(R.string.status_starting_carrier)),
         )
         updateNotification(mode, sayNow(R.string.status_starting_carrier))
@@ -810,7 +933,7 @@ class AetherVpnService : VpnService() {
         var port = 0
         for (hop in hops) {
             markHop(hop, CarrierStage.CONNECTING)
-            EngineStatusStore.update(
+            publish(
                 EngineStatus(
                     EngineStage.CONNECTING,
                     mode,
@@ -845,7 +968,7 @@ class AetherVpnService : VpnService() {
             EngineLog.record(LogLevel.INFO, "carrier", "${hop.wireName} is up on 127.0.0.1:$port")
             watchHop(hop, client, configJson, mode, sessionGeneration)
         }
-        EngineStatusStore.update(
+        publish(
             EngineStatus(EngineStage.CONNECTING, mode, null, sayNow(R.string.status_starting_chain)),
         )
 
@@ -866,6 +989,10 @@ class AetherVpnService : VpnService() {
         }
         if (failure != null) {
             EngineLog.record(LogLevel.ERROR, "chain", failure)
+            // Claimed before the hops are stopped: each of them is watched, and
+            // a watcher seeing its hop stop would report this same failure a
+            // second time and spend a second attempt on it.
+            collapsedGeneration = sessionGeneration
             runCatching { chain.stop() }
             stopCarrier()
             if (sessionGeneration != generation) return
@@ -896,7 +1023,529 @@ class AetherVpnService : VpnService() {
         // Every hop has been watched since it came up, so there is nothing left
         // to collect here. Parking keeps this coroutine alive for as long as the
         // session it represents, which is what replaceSession cancels.
+        sessionCancellable = true
         awaitCancellation()
+    }
+
+    // ------------------------------------------------------------ automatic ----
+
+    /**
+     * The step this session should run, starting a new pass when there is none.
+     *
+     * A pass begins with the network. An automatic connect on a phone with no
+     * network at all would spend every route it has confirming that, and then
+     * say nothing worked -- when the one thing to do was turn the Wi-Fi on. So
+     * it waits for one, and says that it is waiting.
+     */
+    private suspend fun autoStepFor(mode: EngineMode, sessionGeneration: Long): AutoStep? {
+        autoMode = mode
+        if (autoSteps.isEmpty()) {
+            if (!awaitNetwork(mode, sessionGeneration)) return null
+            autoNetworkKey = NetworkIdentity.current(this).key ?: RouteMemory.ANY_NETWORK
+            val remembered = RouteMemory.recall(
+                preferences.getString(AUTO_ROUTES, null),
+                autoNetworkKey,
+                System.currentTimeMillis(),
+            )
+            val options = autoOptions(mode)
+            autoSteps = AutoPlanner.plan(remembered, options)
+            autoStages = AutoPlanner.offeredRoutes(options)
+                .map { it.carrier }
+                .distinct()
+                .associateWith { CarrierStage.STOPPED }
+            autoConnected = false
+            autoRunningRoute = null
+            EngineLog.record(
+                LogLevel.INFO,
+                "auto",
+                "network $autoNetworkKey: " +
+                    (remembered?.let { "${it.wireName} worked here before" } ?: "nothing remembered"),
+            )
+            enterStep(0, sessionGeneration)
+        }
+        val step = autoSteps.getOrNull(autoStepIndex) ?: return null
+        if (step is AutoStep.Engine) {
+            // One engine at a time. A session the leash had to leave behind may
+            // still be inside a call that has not yet heard the stop.
+            staleEngine?.let { stale ->
+                withTimeoutOrNull(STALE_ENGINE_WAIT_MS) { stale.join() }
+                staleEngine = null
+            }
+            if (sessionGeneration != generation) return null
+            autoRunningRoute = AutoRoute.AETHER
+        }
+        return step
+    }
+
+    private fun enterStep(index: Int, sessionGeneration: Long) {
+        autoStepIndex = index
+        autoEngineAttempt = 0
+        autoEngineUp = false
+        autoToken += 1
+        val step = autoSteps.getOrNull(index) ?: return
+        EngineLog.record(LogLevel.INFO, "auto", "step ${index + 1} of ${autoSteps.size}: ${describe(step)}")
+        if (step is AutoStep.Engine) {
+            setAutoStage(Carrier.AETHER, CarrierStage.CONNECTING)
+            leash(step, sessionGeneration)
+        }
+    }
+
+    private fun describe(step: AutoStep): String = when (step) {
+        is AutoStep.Engine ->
+            "aether for ${step.budgetMs / 1_000}s" + if (step.deep) ", searching thoroughly" else ""
+        is AutoStep.Race -> step.lanes.joinToString(" | ") { lane ->
+            lane.routes.joinToString(", ") { it.wireName } +
+                if (lane.startAfterMs > 0) " from ${lane.startAfterMs / 1_000}s" else ""
+        }
+    }
+
+    /**
+     * Holds the engine to its step's budget.
+     *
+     * The engine's own retries were built for someone who chose it: eight of
+     * them, backing off to a minute apart. Automatic has other routes to try,
+     * and a network that blocks MASQUE is exactly where those eight would be
+     * spent. So the engine gets this long, and then the step moves on.
+     *
+     * Gently first. Stopping the engine makes its session fail through the
+     * ordinary path, which moves on by itself. Only if that has not happened a
+     * little later is the session abandoned under a new generation: a scan
+     * blocked in a socket read does not always hear the stop, and the next step
+     * does not need to wait for it to.
+     */
+    private fun leash(step: AutoStep.Engine, sessionGeneration: Long) {
+        val token = autoToken
+        autoStepDeadline = System.currentTimeMillis() + step.budgetMs
+        serviceScope.launch {
+            delay(step.budgetMs)
+            if (!leashHolds(token, sessionGeneration)) return@launch
+            EngineLog.record(
+                LogLevel.WARN,
+                "auto",
+                "aether did not connect within ${step.budgetMs / 1_000}s; moving on",
+            )
+            autoStepDeadline = 0L
+            runCatching { NativeAetherBridge.cancelScan() }
+            runCatching { NativeAetherBridge.stop() }
+            delay(LEASH_GRACE_MS)
+            if (!leashHolds(token, sessionGeneration)) return@launch
+            EngineLog.record(LogLevel.WARN, "auto", "the engine has not stopped; leaving it behind")
+            staleEngine = sessionJob
+            generation += 1
+            collapsedGeneration = -1
+            finishStep(generation, autoMode ?: EngineMode.TUN, sayNow(R.string.err_auto_engine_timeout))
+        }
+    }
+
+    private fun leashHolds(token: Long, sessionGeneration: Long): Boolean =
+        token == autoToken && sessionGeneration == generation && !autoEngineUp && !autoConnected
+
+    /**
+     * Where Automatic goes after something did not work.
+     *
+     * Three cases, wanting three different things. A route that worked and then
+     * stopped starts the search again from the top -- which begins with that
+     * same route, since the memory has just put it first. An engine step with
+     * time left tries its next transport. Anything else has had its turn.
+     */
+    private fun advanceAuto(sessionGeneration: Long, mode: EngineMode, reason: String) {
+        autoMode = mode
+        if (autoConnected) {
+            EngineLog.record(LogLevel.WARN, "auto", "the connection dropped ($reason); looking again")
+            autoSteps = emptyList()
+            autoPasses = 0
+            autoConnected = false
+            autoRunningRoute = null
+            val lost = sayNow(R.string.status_auto_lost)
+            publish(EngineStatus(EngineStage.CONNECTING, mode, message = lost))
+            updateNotification(mode, lost)
+            relaunch(sessionGeneration, AUTO_RETRY_GAP_MS)
+            return
+        }
+        val step = autoSteps.getOrNull(autoStepIndex)
+        EngineLog.record(LogLevel.WARN, "auto", "${step?.let(::describe) ?: "no step"}: $reason")
+        if (step is AutoStep.Engine &&
+            System.currentTimeMillis() + ENGINE_ATTEMPT_FLOOR_MS < autoStepDeadline
+        ) {
+            autoEngineAttempt += 1
+            autoEngineUp = false
+            relaunch(sessionGeneration, AUTO_RETRY_GAP_MS)
+            return
+        }
+        finishStep(sessionGeneration, mode, reason)
+    }
+
+    /** The current step is over without a way out: the next one, or the end of the pass. */
+    private fun finishStep(sessionGeneration: Long, mode: EngineMode, reason: String) {
+        if (autoSteps.getOrNull(autoStepIndex) is AutoStep.Engine) {
+            setAutoStage(Carrier.AETHER, CarrierStage.FAILED)
+        }
+        enterStep(autoStepIndex + 1, sessionGeneration)
+        if (autoStepIndex < autoSteps.size) {
+            relaunch(sessionGeneration, AUTO_STEP_GAP_MS)
+            return
+        }
+        autoPasses += 1
+        EngineLog.record(LogLevel.WARN, "auto", "pass $autoPasses of $MAX_AUTO_PASSES found no way out")
+        if (autoPasses >= MAX_AUTO_PASSES) {
+            // Lockdown is the one cause worth naming here: it fails every
+            // carrier at once and nothing in their own logs says so.
+            val told = listOfNotNull(sayNow(R.string.err_auto_nothing_worked), lockdownHint())
+                .joinToString(" — ")
+            giveUp(mode, reason, told = told)
+            return
+        }
+        autoSteps = emptyList()
+        autoRunningRoute = null
+        val again = sayNow(R.string.status_auto_again)
+        publish(EngineStatus(EngineStage.CONNECTING, mode, message = again))
+        updateNotification(mode, again)
+        relaunch(sessionGeneration, AUTO_PASS_GAP_MS)
+    }
+
+    private fun relaunch(sessionGeneration: Long, delayMs: Long) {
+        serviceScope.launch {
+            delay(delayMs)
+            val config = baseConfigJson ?: return@launch
+            if (sessionGeneration == generation) {
+                replaceParkedSession { runSession(config, sessionGeneration) }
+            }
+        }
+    }
+
+    /**
+     * Starts [session] as the current session, first cancelling the previous
+     * one if it is parked.
+     *
+     * A carrier session that lost its carrier stays parked after its watcher
+     * has already scheduled the next attempt, and nothing else would ever
+     * cancel it: one stranded coroutine per reconnect, for the life of the
+     * service.
+     */
+    private fun replaceParkedSession(session: suspend () -> Unit) {
+        if (sessionCancellable) sessionJob?.cancel()
+        sessionJob = serviceScope.launch { session() }
+    }
+
+    /**
+     * Waits for the phone to have a network, and says so while it waits.
+     *
+     * @return false when the session should not go on: replaced, stopped, or
+     *   given up on after waiting long enough that someone has walked away.
+     */
+    private suspend fun awaitNetwork(mode: EngineMode, sessionGeneration: Long): Boolean {
+        if (NetworkIdentity.current(this).online) return true
+        EngineLog.record(LogLevel.WARN, "auto", "this phone has no network; waiting for one")
+        val waiting = sayNow(R.string.status_auto_waiting_network)
+        publish(EngineStatus(EngineStage.CONNECTING, mode, message = waiting))
+        updateNotification(mode, waiting)
+        val deadline = System.currentTimeMillis() + NETWORK_WAIT_MS
+        while (System.currentTimeMillis() < deadline) {
+            delay(NETWORK_POLL_MS)
+            if (sessionGeneration != generation) return false
+            if (NetworkIdentity.current(this).online) {
+                EngineLog.record(LogLevel.INFO, "auto", "a network is up")
+                return true
+            }
+        }
+        giveUp(mode, "no network", told = sayNow(R.string.err_auto_no_network))
+        return false
+    }
+
+    private fun autoOptions(mode: EngineMode): AutoOptions {
+        val libraries = File(applicationInfo.nativeLibraryDir)
+        return AutoOptions(
+            wholeDevice = mode == EngineMode.TUN,
+            chainAvailable = chain.isAvailable,
+            transportsAvailable = listOf("snowflake", "obfs4").all {
+                File(libraries, TorBridges.binaryFor(it)).exists()
+            },
+            hasCustomBridges = TorBridges.parse(torBridges).isNotEmpty(),
+            engineCanSearchDeeper = transportOf(baseConfigJson ?: "{}") in DEEPER_TRANSPORTS,
+        )
+    }
+
+    /**
+     * The engine's configuration for this rung of an engine step.
+     *
+     * The same ladder a user on Automatic transport has always climbed, one
+     * rung per attempt. The deep step climbs it again searching thoroughly,
+     * which is slow, and is why it comes last.
+     */
+    private fun autoEngineConfig(base: String, step: AutoStep.Engine): String {
+        val rung = configForAttempt(base, autoEngineAttempt)
+        if (!step.deep) return rung
+        return runCatching {
+            JSONObject(rung).put("scanMode", ScanStrategy.THOROUGH.wireName).toString()
+        }.getOrDefault(rung)
+    }
+
+    private class AutoWinner(val route: AutoRoute, val client: CarrierClient, val port: Int)
+
+    /**
+     * Races one step's carriers, and routes the interface into the first to
+     * carry traffic.
+     *
+     * The interface goes up first and stays unread while the race runs, as on
+     * every carrier path: the phone's traffic waits in it rather than leaving
+     * by the network the user is trying to get around. mihomo is handed it only
+     * once a winner has carried a real request.
+     *
+     * Everything here is safe to cancel, which is what a new connect or a stop
+     * does to it: the interface is closed unless mihomo has taken it, and every
+     * carrier the race started is stopped.
+     */
+    private suspend fun runAutoRace(
+        step: AutoStep.Race,
+        configJson: String,
+        mode: EngineMode,
+        chainSettings: ChainSettings,
+        splitTunnel: SplitTunnel,
+        sessionGeneration: Long,
+    ) {
+        sessionCancellable = true
+        if (lockdownHint() != null) {
+            EngineLog.record(LogLevel.WARN, "auto", "always-on VPN lockdown is on; Psiphon and Tor may have no network")
+        }
+        if (prepare(this) != null) {
+            reportError(mode, sayNow(R.string.err_permission_required))
+            finishIfCurrent(sessionGeneration)
+            return
+        }
+        val tun = establishTun("", "", forChain = true, transport = "auto", splitTunnel = splitTunnel)
+        if (tun == null) {
+            reportError(mode, sayNow(R.string.err_no_interface))
+            finishIfCurrent(sessionGeneration)
+            return
+        }
+        var handedOff = false
+        try {
+            publishAutoProgress()
+            val winner = raceLanes(step.lanes, sessionGeneration)
+            if (sessionGeneration != generation) {
+                winner?.let { runCatching { it.client.stop() } }
+                return
+            }
+            if (winner == null) {
+                scheduleReconnect(configJson, sessionGeneration, mode, sayNow(R.string.err_auto_race_failed))
+                return
+            }
+
+            carrier = winner.route.carrier
+            secondCarrier = null
+            autoRunningRoute = winner.route
+            startedHops.clear()
+            startedHops += carrier to winner.client
+            hopStages.clear()
+            hopStages[carrier] = CarrierStage.CONNECTED
+            EngineLog.record(
+                LogLevel.INFO,
+                "auto",
+                "${winner.route.wireName} carries traffic; routing the interface into 127.0.0.1:${winner.port}",
+            )
+            watchHop(carrier, winner.client, configJson, mode, sessionGeneration)
+            publish(EngineStatus(EngineStage.CONNECTING, mode, null, sayNow(R.string.status_starting_chain)))
+
+            val fd = tun.detachFd()
+            handedOff = true
+            val failure = withContext(Dispatchers.IO) {
+                chain.startCarrier(
+                    settings = chainSettings,
+                    socksPort = winner.port,
+                    udp = carrier.carriesUdp,
+                    tunFd = fd,
+                )
+            }
+            if (failure != null) {
+                EngineLog.record(LogLevel.ERROR, "chain", failure)
+                // Claimed first, so the winner's watcher does not report this
+                // failure a second time when its carrier is stopped below.
+                collapsedGeneration = sessionGeneration
+                runCatching { chain.stop() }
+                stopCarrier()
+                if (sessionGeneration != generation) return
+                scheduleReconnect(configJson, sessionGeneration, mode, failure)
+                return
+            }
+
+            serviceScope.launch {
+                while (sessionGeneration == generation) {
+                    delay(EVENT_DRAIN_MS)
+                    withContext(Dispatchers.IO) { chain.collectEvents() }
+                }
+            }
+            reportConnected(
+                mode,
+                null,
+                sayNow(R.string.status_carrier_carries, sayNow(carrier.label)),
+                carrierSocksPort = winner.port,
+            )
+            awaitCancellation()
+        } finally {
+            if (!handedOff) runCatching { tun.close() }
+        }
+    }
+
+    /**
+     * Runs the lanes, and returns the first route to carry traffic -- or null
+     * once every lane has run out.
+     *
+     * A lane waits out its head start, or for every lane already running to run
+     * out, whichever is first: a second lane sitting out a head start behind a
+     * lane that has already failed would only be waiting for a clock.
+     */
+    private suspend fun raceLanes(lanes: List<Lane>, sessionGeneration: Long): AutoWinner? = coroutineScope {
+        val winner = CompletableDeferred<AutoWinner?>()
+        val begun = List(lanes.size) { CompletableDeferred<Unit>() }
+        val finished = BooleanArray(lanes.size)
+
+        fun handOn() {
+            if (lanes.indices.any { begun[it].isCompleted && !finished[it] }) return
+            val next = lanes.indices.firstOrNull { !begun[it].isCompleted }
+            if (next != null) begun[next].complete(Unit) else winner.complete(null)
+        }
+
+        val jobs = lanes.mapIndexed { index, lane ->
+            launch {
+                withTimeoutOrNull(lane.startAfterMs) { begun[index].await() }
+                begun[index].complete(Unit)
+                for (route in lane.routes) {
+                    if (winner.isCompleted || sessionGeneration != generation) break
+                    val found = tryRoute(route, sessionGeneration) ?: continue
+                    // Two routes can come good in the same moment. The second
+                    // is stopped rather than left running beside the first.
+                    if (!winner.complete(found)) runCatching { found.client.stop() }
+                    return@launch
+                }
+                finished[index] = true
+                handOn()
+            }
+        }
+        if (lanes.isEmpty()) winner.complete(null)
+        val result = winner.await()
+        jobs.forEach { it.cancel() }
+        result
+    }
+
+    /**
+     * Starts one route and keeps it only if a real request gets through it.
+     *
+     * Whatever happens -- failure, a route that connects and carries nothing,
+     * or this lane being cancelled because another won -- a route that is not
+     * kept is stopped here, so nothing the race started outlives it.
+     */
+    private suspend fun tryRoute(route: AutoRoute, sessionGeneration: Long): AutoWinner? {
+        val client = autoClient(route)
+        setAutoStage(route.carrier, CarrierStage.CONNECTING)
+        autoTrying += route
+        publishAutoProgress()
+        var kept = false
+        try {
+            val port = client.start(AutoPlanner.budgetMs(route)).getOrElse { error ->
+                EngineLog.record(LogLevel.WARN, "auto", "${route.wireName}: ${error.message}")
+                return null
+            }
+            if (sessionGeneration != generation) return null
+            EngineLog.record(LogLevel.INFO, "auto", "${route.wireName} is up; checking that traffic gets through")
+            if (!CarrierProbe.works(port)) {
+                EngineLog.record(
+                    LogLevel.WARN,
+                    "auto",
+                    "${route.wireName} came up, but nothing reached the internet through it",
+                )
+                return null
+            }
+            kept = true
+            return AutoWinner(route, client, port)
+        } finally {
+            autoTrying -= route
+            if (!kept) {
+                runCatching { client.stop() }
+                setAutoStage(route.carrier, CarrierStage.FAILED)
+            }
+            if (sessionGeneration == generation) publishAutoProgress()
+        }
+    }
+
+    private fun autoClient(route: AutoRoute): CarrierClient = when (route.carrier) {
+        // Any exit country. One the user picked by hand is a restriction on
+        // where Psiphon may go, and Automatic is for not having to choose.
+        Carrier.PSIPHON -> PsiphonClient(this, "", 0).also { psiphonClient = it }
+        Carrier.TOR -> TorClient(this, route.torBridge ?: TorBridge.NONE, torBridges, 0)
+            .also { torClient = it }
+        // The engine is never raced: it runs on the interface, in a step of
+        // its own. AutoPlannerTest holds the plan to that.
+        Carrier.AETHER -> error("the engine is not raced")
+    }
+
+    /** Remembers [route] for this network, which is what makes the next connect here quick. */
+    private fun autoWon(route: AutoRoute) {
+        if (!automatic) return
+        autoConnected = true
+        autoToken += 1
+        autoPasses = 0
+        setAutoStage(route.carrier, CarrierStage.CONNECTED)
+        val now = System.currentTimeMillis()
+        val stored = preferences.getString(AUTO_ROUTES, null)
+        if (RouteMemory.recall(stored, autoNetworkKey, now) != route) {
+            EngineLog.record(LogLevel.INFO, "auto", "remembering ${route.wireName} for network $autoNetworkKey")
+        }
+        preferences.edit { putString(AUTO_ROUTES, RouteMemory.remember(stored, autoNetworkKey, route, now)) }
+    }
+
+    private fun publishAutoProgress() {
+        val mode = autoMode ?: return
+        val trying = autoTrying.map(::routeLabel)
+        val message = when (trying.size) {
+            0 -> sayNow(R.string.status_auto_searching)
+            1 -> sayNow(R.string.status_auto_trying, trying[0])
+            else -> sayNow(R.string.status_auto_trying_two, trying[0], trying[1])
+        }
+        publish(EngineStatus(EngineStage.CONNECTING, mode, message = message))
+        updateNotification(mode, message)
+    }
+
+    /** A route by name, with Tor's bridge beside it: "Tor (Snowflake)". */
+    private fun routeLabel(route: AutoRoute): String {
+        val name = sayNow(route.carrier.label)
+        val bridge = route.torBridge ?: return name
+        return sayNow(R.string.auto_route_with_bridge, name, sayNow(bridge.label))
+    }
+
+    private fun setAutoStage(carrier: Carrier, stage: CarrierStage) {
+        autoStages = autoStages + (carrier to stage)
+    }
+
+    private fun autoAttempts(): List<HopStatus> =
+        autoStages.map { (carrier, stage) -> HopStatus(carrier, stage) }
+
+    /**
+     * Every status this service reports, with Automatic's progress on it.
+     *
+     * In one place rather than at each call: the engine path reports its
+     * progress from a dozen places that know nothing about Automatic, and a row
+     * of routes that vanished whenever one of them spoke would be a row nobody
+     * could follow. For the same reason the engine step's line reads "Trying
+     * Aether" rather than the engine's own vocabulary -- identities, gateways,
+     * endpoints -- which the diagnostics log keeps for whoever needs it.
+     */
+    private fun publish(status: EngineStatus) {
+        if (!automatic || status.path.isNotEmpty() || status.stage !in AUTO_PROGRESS_STAGES) {
+            EngineStatusStore.update(status)
+            return
+        }
+        val engineStep = autoSteps.getOrNull(autoStepIndex) is AutoStep.Engine &&
+            status.stage != EngineStage.ERROR && !autoConnected
+        EngineStatusStore.update(
+            status.copy(
+                message = if (engineStep) {
+                    sayNow(R.string.status_auto_trying, sayNow(Carrier.AETHER.label))
+                } else {
+                    status.message
+                },
+                attempts = autoAttempts(),
+            ),
+        )
     }
 
     /**
@@ -979,7 +1628,7 @@ class AetherVpnService : VpnService() {
             return
         }
 
-        EngineStatusStore.update(
+        publish(
             EngineStatus(EngineStage.CONNECTING, mode, peer, sayNow(R.string.status_starting_chain)),
         )
         updateNotification(mode, sayNow(R.string.status_starting_chain))
@@ -1077,23 +1726,36 @@ class AetherVpnService : VpnService() {
         message: String,
         carrierSocksPort: Int? = null,
     ) {
+        // Automatic names what it chose. The user never picked it, so
+        // "connected" alone would leave them no way to know which route is
+        // carrying them -- or to say so when asking for help. Proxy mode keeps
+        // its own line, because that line is the port to point a client at.
+        val route = autoRunningRoute.takeIf { automatic }
+        val said = if (route != null && mode == EngineMode.TUN) {
+            sayNow(R.string.status_auto_connected, routeLabel(route))
+        } else {
+            message
+        }
+        // Posted, because this can arrive on the engine's own thread and the
+        // plan belongs to the main one.
+        if (route != null) serviceScope.launch { autoWon(route) }
         // A working tunnel is the answer to whatever the blocking was for.
         dropBlackhole()
         // The session's byte counting starts here, not when a screen opens, so
         // the totals cover the whole session however late somebody looks.
         TrafficMeter.start()
-        EngineStatusStore.update(
+        publish(
             EngineStatus(
                 EngineStage.CONNECTED,
                 mode,
                 peer,
-                message,
+                said,
                 connectedAtMillis = System.currentTimeMillis(),
                 carrierSocksPort = carrierSocksPort,
                 path = pathStatus(),
             ),
         )
-        updateNotification(mode, message)
+        updateNotification(mode, said)
     }
 
     /**
@@ -1376,7 +2038,7 @@ class AetherVpnService : VpnService() {
         }
         val said = message ?: sayNow(R.string.status_stopped)
         startForegroundNow(sayNow(R.string.status_stopping_app), said)
-        EngineStatusStore.update(
+        publish(
             EngineStatus(EngineStage.STOPPING, EngineStatusStore.status.value.mode, message = said),
         )
         // Invalidate and signal immediately, outside commandMutex. A session
@@ -1393,6 +2055,9 @@ class AetherVpnService : VpnService() {
             // read. Give the session a moment to unwind, then tear down
             // regardless -- the user asked it to stop, and the process is going
             // away. Anything still running dies with it.
+            // A parked or racing session is cancelled rather than waited on: it
+            // would sit out the whole grace period and then be abandoned anyway.
+            if (sessionCancellable) sessionJob?.cancel()
             withTimeoutOrNull(STOP_GRACE_MS) {
                 listOfNotNull(sessionJob).joinAll()
             }
@@ -1400,6 +2065,10 @@ class AetherVpnService : VpnService() {
             // Also a JNI call into the Go engine, and this one runs while the
             // user is watching a "Stopping" spinner.
             withContext(Dispatchers.IO) { runCatching { chain.stop() } }
+            // And the carriers. With strict blocking on the service outlives
+            // this, and a Psiphon or a tor that nothing points at any more would
+            // go on running, and paying for its tunnel, for as long as it did.
+            runCatching { stopCarrier() }
             clearSocketProtector(generation)
             // Rates go to zero, totals stay: what a session cost is asked
             // after it ended, not while it is running.
@@ -1409,13 +2078,13 @@ class AetherVpnService : VpnService() {
             // plainly in the notification, or a user who forgot they turned it
             // on has a phone with no internet and no reason given.
             if (blockAfterStop && raiseBlackhole("disconnected with strict blocking on")) {
-                EngineStatusStore.update(
+                publish(
                     EngineStatus(EngineStage.IDLE, message = sayNow(R.string.traffic_is_blocked)),
                 )
                 startForegroundNow(sayNow(R.string.traffic_is_blocked), sayNow(R.string.notify_strict_blocking))
                 return@launch
             }
-            EngineStatusStore.update(EngineStatus())
+            publish(EngineStatus())
             ServiceCompat.stopForeground(this@AetherVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
@@ -1436,7 +2105,7 @@ class AetherVpnService : VpnService() {
     }
 
     private fun reportError(mode: EngineMode?, message: String) {
-        EngineStatusStore.update(
+        publish(
             EngineStatus(EngineStage.ERROR, mode, message = message, path = pathStatus()),
         )
         updateNotification(mode, message)
@@ -1457,6 +2126,12 @@ class AetherVpnService : VpnService() {
         reason: String,
     ) {
         if (sessionGeneration != generation) return
+        // Automatic has its own idea of what comes next: a different route,
+        // not the same one again after a longer wait.
+        if (automatic) {
+            advanceAuto(sessionGeneration, mode, reason)
+            return
+        }
         reconnectAttempt += 1
 
         if (reconnectAttempt > MAX_RECONNECT_ATTEMPTS) {
@@ -1469,7 +2144,7 @@ class AetherVpnService : VpnService() {
         val transport = transportOf(nextConfig).uppercase()
         val message =
             "$reason · retry $reconnectAttempt of $MAX_RECONNECT_ATTEMPTS on $transport in ${delayMs / 1_000}s"
-        EngineStatusStore.update(
+        publish(
             // Still carrying the path: the wait before a retry is exactly when
             // someone reads which hop went, and a row that vanished for it
             // would take the answer away at the moment it is wanted.
@@ -1479,9 +2154,7 @@ class AetherVpnService : VpnService() {
         serviceScope.launch {
             delay(delayMs)
             if (sessionGeneration == generation) {
-                sessionJob = serviceScope.launch {
-                    runSession(nextConfig, sessionGeneration)
-                }
+                replaceParkedSession { runSession(nextConfig, sessionGeneration) }
             }
         }
     }
@@ -1608,7 +2281,12 @@ class AetherVpnService : VpnService() {
      * that would be the job waiting on itself. Bumping the generation is what
      * makes the in-flight session inert.
      */
-    private fun giveUp(mode: EngineMode, reason: String) {
+    /**
+     * @param told what to say in place of the retry count, for a caller whose
+     *   attempts were not retries at all -- Automatic, which tried different
+     *   things and has a plainer sentence for having run out of them.
+     */
+    private fun giveUp(mode: EngineMode, reason: String, told: String? = null) {
         generation += 1
         preferences.edit { remove(LAST_TUN_CONFIG) }
         // The moment the feature exists for: every retry is spent, the tunnel
@@ -1617,15 +2295,17 @@ class AetherVpnService : VpnService() {
         val blocking = blockOnFailure && raiseBlackhole(reason)
         reportError(
             mode,
-            if (blocking) {
-                "$reason. Stopped after $MAX_RECONNECT_ATTEMPTS attempts, and traffic is blocked."
-            } else {
-                "$reason. Stopped after $MAX_RECONNECT_ATTEMPTS attempts."
+            when {
+                told != null && blocking -> "$told ${sayNow(R.string.traffic_is_blocked)}"
+                told != null -> told
+                blocking -> "$reason. Stopped after $MAX_RECONNECT_ATTEMPTS attempts, and traffic is blocked."
+                else -> "$reason. Stopped after $MAX_RECONNECT_ATTEMPTS attempts."
             },
         )
         serviceScope.launch {
             runCatching { chain.stop() }
             runCatching { NativeAetherBridge.stop() }
+            runCatching { stopCarrier() }
             clearSocketProtector(generation)
             sessionJob = null
             if (blocking) {
@@ -1736,6 +2416,40 @@ class AetherVpnService : VpnService() {
         private const val EXTRA_PSIPHON_REGION = "psiphonRegion"
         private const val LAST_PSIPHON_REGION = "last_psiphon_region"
         private const val LAST_TOR_BRIDGE = "last_tor_bridge"
+        private const val EXTRA_AUTOMATIC = "automatic"
+        private const val LAST_AUTOMATIC = "last_automatic"
+
+        /** Which route last carried traffic, per network. See [RouteMemory]. */
+        private const val AUTO_ROUTES = "auto_routes"
+
+        /** How long Automatic waits for the phone to have any network at all. */
+        private const val NETWORK_WAIT_MS = 600_000L
+        private const val NETWORK_POLL_MS = 3_000L
+
+        /**
+         * Whole passes before Automatic says nothing got out. Two, because a
+         * network can come good in the minutes one pass takes -- a third would
+         * mostly be spent on a network that is simply down.
+         */
+        private const val MAX_AUTO_PASSES = 2
+        private const val AUTO_RETRY_GAP_MS = 2_000L
+        private const val AUTO_STEP_GAP_MS = 1_000L
+        private const val AUTO_PASS_GAP_MS = 10_000L
+
+        /** An engine attempt with less than this left of its step is not worth starting. */
+        private const val ENGINE_ATTEMPT_FLOOR_MS = 20_000L
+
+        /** How long the leash waits for a stopped engine to notice, before leaving it. */
+        private const val LEASH_GRACE_MS = 10_000L
+
+        /** How long an engine step waits for one the leash left behind to finish. */
+        private const val STALE_ENGINE_WAIT_MS = 15_000L
+
+        /** Transports whose search has a thorough setting worth a step of its own. */
+        private val DEEPER_TRANSPORTS = setOf("auto", "h2", "h3")
+
+        private val AUTO_PROGRESS_STAGES =
+            setOf(EngineStage.PREPARING, EngineStage.CONNECTING, EngineStage.ERROR)
         // Psiphon establishes over a network that is actively hostile to it,
         // and its own timeout is two minutes. Ours has to be the longer of
         // the two or we would tear down a tunnel that was about to arrive.
@@ -1783,6 +2497,7 @@ class AetherVpnService : VpnService() {
             torBridge: TorBridge = TorBridge.NONE,
             torBridges: String = "",
             psiphonRegion: String = "",
+            automatic: Boolean = false,
         ) {
             ContextCompat.startForegroundService(
                 context,
@@ -1801,7 +2516,8 @@ class AetherVpnService : VpnService() {
                     .putExtra(EXTRA_SECOND_CARRIER, secondCarrier?.wireName)
                     .putExtra(EXTRA_TOR_BRIDGE, torBridge.wireName)
                     .putExtra(EXTRA_TOR_BRIDGES, torBridges)
-                    .putExtra(EXTRA_PSIPHON_REGION, psiphonRegion),
+                    .putExtra(EXTRA_PSIPHON_REGION, psiphonRegion)
+                    .putExtra(EXTRA_AUTOMATIC, automatic),
             )
         }
 

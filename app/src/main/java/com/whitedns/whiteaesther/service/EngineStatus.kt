@@ -57,6 +57,13 @@ data class EngineStatus(
      * screen has to say which hop is still waiting and which one went.
      */
     val path: List<HopStatus> = emptyList(),
+    /**
+     * What Automatic has tried so far this pass, in the order it tries them.
+     *
+     * Not a [path]: these are alternatives, not hops, and drawing them with
+     * arrows between them would say one dials through the next.
+     */
+    val attempts: List<HopStatus> = emptyList(),
 )
 
 object EngineStatusStore {
