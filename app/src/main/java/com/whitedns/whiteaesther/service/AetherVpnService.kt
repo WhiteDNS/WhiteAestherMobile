@@ -183,6 +183,9 @@ class AetherVpnService : VpnService() {
     @Volatile private var autoRunningRoute: AutoRoute? = null
 
     private var autoPasses = 0
+
+    /** When this search began, for the clock on the home screen. Zero when not searching. */
+    @Volatile private var autoSearchStartedAt = 0L
     private var autoNetworkKey = RouteMemory.ANY_NETWORK
     private var autoMode: EngineMode? = null
 
@@ -373,6 +376,7 @@ class AetherVpnService : VpnService() {
                 autoSteps = emptyList()
                 autoPasses = 0
                 autoConnected = false
+                autoSearchStartedAt = 0L
                 baseConfigJson = configJson
                 chainJson = chainSettings
                 splitJson = splitSettings
@@ -1039,6 +1043,9 @@ class AetherVpnService : VpnService() {
     private suspend fun autoStepFor(mode: EngineMode, sessionGeneration: Long): AutoStep? {
         autoMode = mode
         if (autoSteps.isEmpty()) {
+            // Once per search, not per pass: the clock is for the person
+            // waiting, and to them a second pass is still the same wait.
+            if (autoSearchStartedAt == 0L) autoSearchStartedAt = System.currentTimeMillis()
             if (!awaitNetwork(mode, sessionGeneration)) return null
             autoNetworkKey = NetworkIdentity.current(this).key ?: RouteMemory.ANY_NETWORK
             val remembered = RouteMemory.recall(
@@ -1155,6 +1162,7 @@ class AetherVpnService : VpnService() {
             autoPasses = 0
             autoConnected = false
             autoRunningRoute = null
+            autoSearchStartedAt = System.currentTimeMillis()
             val lost = sayNow(R.string.status_auto_lost)
             publish(EngineStatus(EngineStage.CONNECTING, mode, message = lost))
             updateNotification(mode, lost)
@@ -1483,6 +1491,7 @@ class AetherVpnService : VpnService() {
         autoConnected = true
         autoToken += 1
         autoPasses = 0
+        autoSearchStartedAt = 0L
         setAutoStage(route.carrier, CarrierStage.CONNECTED)
         val now = System.currentTimeMillis()
         val stored = preferences.getString(AUTO_ROUTES, null)
@@ -1543,6 +1552,7 @@ class AetherVpnService : VpnService() {
                     status.message
                 },
                 attempts = autoAttempts(),
+                searchStartedAtMillis = autoSearchStartedAt.takeIf { it > 0L },
             ),
         )
     }

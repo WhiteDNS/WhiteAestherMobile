@@ -64,6 +64,12 @@ data class EngineStatus(
      * arrows between them would say one dials through the next.
      */
     val attempts: List<HopStatus> = emptyList(),
+    /**
+     * When Automatic started looking, so the screen can say how long it has
+     * been. A search on a hard network takes minutes, and a spinner with no
+     * sense of time is what people give up on.
+     */
+    val searchStartedAtMillis: Long? = null,
 )
 
 object EngineStatusStore {

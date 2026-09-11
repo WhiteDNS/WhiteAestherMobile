@@ -92,8 +92,13 @@ object AutoPlanner {
      * would have found a way out.
      */
 
-    /** Aether with nothing known about it: its quick probes, and time for one full search. */
-    const val ENGINE_QUICK_MS = 90_000L
+    /**
+     * Aether with nothing known about it: one quick probe. The engine's own
+     * quick search stops at 45 s (`scan mode=turbo ... budget=45s` in its log),
+     * and on a phone with no history nothing says a longer one would find more
+     * -- while Psiphon, which may be the thing that gets out, is kept waiting.
+     */
+    const val ENGINE_QUICK_MS = 60_000L
 
     /**
      * Where Aether has connected before -- on this network, or anywhere on this

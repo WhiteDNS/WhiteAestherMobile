@@ -484,6 +484,8 @@
     <string name="err_auto_no_network">This phone has no internet. Turn on Wi-Fi or mobile data, then connect again.</string>
     <string name="err_auto_race_failed">Psiphon and Tor could not get out</string>
     <string name="err_auto_engine_timeout">Aether could not get out in time</string>
+    <string name="auto_searching_for">Searching · %1$s</string>
+    <string name="auto_patience">The first time on a difficult network can take a few minutes. Please do not disconnect; the app is finding the way by itself.</string>
     <string name="carrier_chain_h2_note">Behind another carrier Aether uses H2, the only transport a proxy can carry. The protocol below does not apply here.</string>
     <string name="carrier_chain_snowflake_note">Snowflake cannot run behind another carrier, so Tor connects directly here. Choose a different bridge if direct is blocked.</string>
     <string name="carrier_aether_detail">MASQUE over Cloudflare. The fastest path, and the one everything else here is built around.</string>
