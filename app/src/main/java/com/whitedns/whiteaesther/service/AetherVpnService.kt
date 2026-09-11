@@ -49,7 +49,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
@@ -203,6 +202,10 @@ class AetherVpnService : VpnService() {
 
     /** The clients of those routes, so a race that has its winner can stop the rest at once. */
     private val autoInFlight = mutableMapOf<AutoRoute, CarrierClient>()
+
+    /** Which race is running, and the last one settled; a late runner checks the two. */
+    private var autoRaceId = 0L
+    private var autoRaceSettled = -1L
 
     /** An engine session the leash had to leave behind, until it has gone. */
     private var staleEngine: Job? = null
@@ -1419,10 +1422,23 @@ class AetherVpnService : VpnService() {
      * out, whichever is first: a second lane sitting out a head start behind a
      * lane that has already failed would only be waiting for a clock.
      */
-    private suspend fun raceLanes(lanes: List<Lane>, sessionGeneration: Long): AutoWinner? = coroutineScope {
+    private suspend fun raceLanes(lanes: List<Lane>, sessionGeneration: Long): AutoWinner? {
+        val race = ++autoRaceId
         val winner = CompletableDeferred<AutoWinner?>()
         val begun = List(lanes.size) { CompletableDeferred<Unit>() }
         val finished = BooleanArray(lanes.size)
+        // Not this coroutine's children. The engine's search inside prepare()
+        // is a blocking call that neither a cancellation nor cancelScan()
+        // reaches -- cancelScan() stops the endpoint scanner's scan, not
+        // prepare's -- and when the lanes were children, the race waited for
+        // them: on the emulator a Psiphon that had carried traffic in ten
+        // seconds sat for forty more while a losing Aether finished its quick
+        // search. The lanes are cancelled and left to finish in their own
+        // time; settling the race is what keeps a late one from touching
+        // anything.
+        val lanesScope = CoroutineScope(
+            serviceScope.coroutineContext + SupervisorJob(serviceScope.coroutineContext[Job]),
+        )
 
         fun handOn() {
             if (lanes.indices.any { begun[it].isCompleted && !finished[it] }) return
@@ -1431,12 +1447,12 @@ class AetherVpnService : VpnService() {
         }
 
         val jobs = lanes.mapIndexed { index, lane ->
-            launch {
+            lanesScope.launch {
                 withTimeoutOrNull(lane.startAfterMs) { begun[index].await() }
                 begun[index].complete(Unit)
                 for (route in lane.routes) {
                     if (winner.isCompleted || sessionGeneration != generation) break
-                    val found = tryRoute(route, sessionGeneration) ?: continue
+                    val found = tryRoute(route, sessionGeneration, race) ?: continue
                     // Two routes can come good in the same moment. The second
                     // is stopped rather than left running beside the first.
                     if (!winner.complete(found)) runCatching { found.client.stop() }
@@ -1447,15 +1463,30 @@ class AetherVpnService : VpnService() {
             }
         }
         if (lanes.isEmpty()) winner.complete(null)
-        val result = winner.await()
-        // Stopped before they are cancelled, not by it. The engine's search is
-        // a blocking call a cancellation does not reach, and this scope waits
-        // for its children -- so a losing Aether in the middle of a two-minute
-        // search would hold the winner back until the search gave up.
-        autoInFlight.filterKeys { it != result?.route }.values.toList()
-            .forEach { runCatching { it.stop() } }
-        jobs.forEach { it.cancel() }
-        result
+
+        var result: AutoWinner? = null
+        try {
+            result = winner.await()
+            return result
+        } finally {
+            // Settled: won, run out, or the session stopped. Whatever is still
+            // running has lost, and is stopped here rather than by its own lane.
+            autoRaceSettled = race
+            autoTrying.clear()
+            val losers = autoInFlight.filterKeys { it != result?.route }
+            losers.forEach { (route, client) ->
+                // A losing engine may go on searching for up to two minutes
+                // after this, unreachable; the next engine session waits for it.
+                if (route.racesEngine) {
+                    lanes.indexOfFirst { lane -> route in lane.routes }
+                        .takeIf { it >= 0 }
+                        ?.let { staleEngine = jobs[it] }
+                }
+                runCatching { client.stop() }
+            }
+            autoInFlight.clear()
+            lanesScope.cancel()
+        }
     }
 
     /**
@@ -1465,7 +1496,7 @@ class AetherVpnService : VpnService() {
      * or this lane being cancelled because another won -- a route that is not
      * kept is stopped here, so nothing the race started outlives it.
      */
-    private suspend fun tryRoute(route: AutoRoute, sessionGeneration: Long): AutoWinner? {
+    private suspend fun tryRoute(route: AutoRoute, sessionGeneration: Long, race: Long): AutoWinner? {
         if (route.racesEngine) {
             // One engine at a time, as for an engine step: the step before
             // this race may have left one behind.
@@ -1499,13 +1530,20 @@ class AetherVpnService : VpnService() {
             kept = true
             return AutoWinner(route, client, port)
         } finally {
-            autoTrying -= route
-            autoInFlight.remove(route)
-            if (!kept) {
-                runCatching { client.stop() }
-                setAutoStage(route.carrier, CarrierStage.FAILED)
+            // Once the race has settled, a runner finishing late -- a losing
+            // engine whose search nothing could interrupt -- has already been
+            // stopped and cleared away. Touching the screen, the stages or the
+            // client from here would undo what came after.
+            val settled = autoRaceSettled == race
+            if (autoInFlight[route] === client) autoInFlight.remove(route)
+            if (!settled) {
+                autoTrying -= route
+                if (!kept) {
+                    runCatching { client.stop() }
+                    setAutoStage(route.carrier, CarrierStage.FAILED)
+                    if (sessionGeneration == generation) publishAutoProgress()
+                }
             }
-            if (sessionGeneration == generation) publishAutoProgress()
         }
     }
 
@@ -2506,8 +2544,13 @@ class AetherVpnService : VpnService() {
         /** How long the leash waits for a stopped engine to notice, before leaving it. */
         private const val LEASH_GRACE_MS = 10_000L
 
-        /** How long an engine step waits for one the leash left behind to finish. */
-        private const val STALE_ENGINE_WAIT_MS = 15_000L
+        /**
+         * How long the engine waits for one left behind -- by the leash, or a
+         * race it lost -- to finish. As long as a full search can run, since
+         * nothing can interrupt one, and two engine sessions at once is not a
+         * state the engine was built for.
+         */
+        private const val STALE_ENGINE_WAIT_MS = 130_000L
 
         /** Transports whose search has a thorough setting worth a step of its own. */
         private val DEEPER_TRANSPORTS = setOf("auto", "h2", "h3")

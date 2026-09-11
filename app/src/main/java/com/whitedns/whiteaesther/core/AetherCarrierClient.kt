@@ -92,11 +92,9 @@ class AetherCarrierClient(
     }
 
     override fun stop() {
-        // The search first. It is a blocking call inside prepare() that stop()
-        // does not reach, and whoever is stopping this -- a race that has its
-        // winner, a user tapping disconnect -- should not wait out a search
-        // that can run for minutes.
-        runCatching { NativeAetherBridge.cancelScan() }
+        // Stops a running engine. A search still inside prepare() is not
+        // reached by this or by cancelScan(), which belongs to the endpoint
+        // scanner; whoever stops this does not wait for it -- see raceLanes.
         runCatching { NativeAetherBridge.stop() }
         engine?.cancel()
         engine = null
