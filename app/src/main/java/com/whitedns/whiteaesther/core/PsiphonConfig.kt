@@ -49,8 +49,14 @@ object PsiphonConfig {
      * Psiphon issues these to integrators rather than publishing them. These are
      * byte-identical to the ones in Instagram's own Psiphon configuration and in
      * several independent open-source clients.
+     *
+     * The server-entry key lives in native/psiphon/server_entry_signature_key.txt
+     * and reaches this class through BuildConfig. That file is also what
+     * native/psiphon/setup.ps1 checks the shipped list against, with
+     * tunnel-core's own code, before packaging it: 430 of 430 entries of the
+     * pinned list verify, and a random key verifies none.
      */
-    private const val SERVER_ENTRY_SIGNATURE_KEY = "sHuUVTWaRyh5pZwy4UguSgkwmBe0EHtJJkoF5WrxmvA="
+    private const val SERVER_ENTRY_SIGNATURE_KEY = BuildConfig.PSIPHON_SERVER_ENTRY_SIGNATURE_KEY
     private const val REMOTE_SERVER_LIST_SIGNATURE_KEY =
         "MIICIDANBgkqhkiG9w0BAQEFAAOCAg0AMIICCAKCAgEAt7Ls+/39r+T6zNW7GiVpJfzq/xvL9SBH5rIFnk0RXYEYavax3WS6HOD35eTAqn8AniOwiH+DOkvgSKF2caqk/y1dfq47Pdymtwzp9ikpB1C5OfAysXzBiwVJlCdajBKvBZDerV1cMvRzCKvKwRmvDmHgphQQ7WfXIGbRbmmk6opMBh3roE42KcotLFtqp0RRwLtcBRNtCdsrVsjiI1Lqz/lH+T61sGjSjQ3CHMuZYSQJZo/KrvzgQXpkaCTdbObxHqb6/+i1qaVOfEsvjoiyzTxJADvSytVtcTjijhPEV6XskJVHE1Zgl+7rATr/pDQkw6DPCNBS1+Y6fy7GstZALQXwEDN/qhQI9kWkHijT8ns+i1vGg00Mk/6J75arLhqcodWsdeG/M/moWgqQAnlZAGVtJI1OgeF5fsPpXu4kctOfuZlGjVZXQNW34aOzm8r8S0eVZitPlbhcPiR4gT/aSMz/wd8lZlzZYsje/Jr8u/YtlwjjreZrGRmG8KMOzukV3lLmMppXFMvl4bxv6YFEmIuTsOhbLTwFgh7KYNjodLj/LsqRVfwz31PgWQFTEPICV7GCvgVlPRxnofqKSjgTWI4mxDhBpVcATvaoBl1L/6WLbFvBsoAUBItWwctO2xalKxF5szhGm8lccoc5MZr8kfE0uxMgsxz4er68iCID+rsCAQM="
 

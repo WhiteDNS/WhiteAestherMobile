@@ -50,6 +50,18 @@ android {
         versionCode = appVersionCode.get()
         versionName = appVersionName.get()
 
+        // Psiphon's server-entry signature key, from the one file the server
+        // list check in native/psiphon/setup.ps1 also reads -- so the key the
+        // app verifies entries with and the key the shipped list was checked
+        // against cannot drift apart.
+        val psiphonEntryKey = providers.fileContents(
+            rootProject.layout.projectDirectory.file("native/psiphon/server_entry_signature_key.txt"),
+        ).asText.get().trim()
+        require(Regex("^[A-Za-z0-9+/]{43}=$").matches(psiphonEntryKey)) {
+            "native/psiphon/server_entry_signature_key.txt does not hold a 44-character base64 key"
+        }
+        buildConfigField("String", "PSIPHON_SERVER_ENTRY_SIGNATURE_KEY", "\"$psiphonEntryKey\"")
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
