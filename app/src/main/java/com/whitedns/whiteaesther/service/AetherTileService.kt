@@ -85,6 +85,7 @@ class AetherTileService : TileService() {
                 settings.torBridge,
                 settings.torBridges,
                 settings.psiphonRegion,
+                settings.automaticCarrier,
             )
         }
     }

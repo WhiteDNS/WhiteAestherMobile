@@ -14,13 +14,21 @@ private val Context.settingsDataStore by preferencesDataStore(name = "whiteaesth
 
 class SettingsRepository(private val context: Context) {
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { preferences ->
+        val carrier = enumValueOrDefault(preferences[CARRIER], Carrier.AETHER)
+        val secondCarrier = preferences[SECOND_CARRIER]
+            ?.let { name -> Carrier.entries.firstOrNull { it.name == name } }
+        val transport = enumValueOrDefault(preferences[TRANSPORT], TunnelProtocol.AUTO)
+        val endpointMode = enumValueOrDefault(preferences[ENDPOINT_MODE], EndpointMode.AUTOMATIC)
         AppSettings(
             mode = enumValueOrDefault(preferences[MODE], EngineMode.TUN),
             proxyPort = preferences[PROXY_PORT]?.coerceIn(1_024, 65_535) ?: 1819,
-            transport = enumValueOrDefault(preferences[TRANSPORT], TunnelProtocol.AUTO),
-            carrier = enumValueOrDefault(preferences[CARRIER], Carrier.AETHER),
-            secondCarrier = preferences[SECOND_CARRIER]
-                ?.let { name -> Carrier.entries.firstOrNull { it.name == name } },
+            transport = transport,
+            carrier = carrier,
+            secondCarrier = secondCarrier,
+            // Absent for everyone who saved settings before Automatic existed,
+            // and what that absence means depends on what they had chosen.
+            automaticCarrier = preferences[CARRIER_AUTOMATIC]
+                ?: AppSettings.automaticByDefault(carrier, secondCarrier, transport, endpointMode),
             psiphonRegion = preferences[PSIPHON_REGION].orEmpty(),
             torBridge = enumValueOrDefault(preferences[TOR_BRIDGE], TorBridge.NONE),
             torBridges = preferences[TOR_BRIDGES].orEmpty(),
@@ -28,7 +36,7 @@ class SettingsRepository(private val context: Context) {
             dualStack = preferences[DUAL_STACK] ?: true,
             validationEnabled = preferences[VALIDATION] ?: true,
             noizeProfile = preferences[NOIZE] ?: "firewall",
-            endpointMode = enumValueOrDefault(preferences[ENDPOINT_MODE], EndpointMode.AUTOMATIC),
+            endpointMode = endpointMode,
             customEndpoint = preferences[CUSTOM_ENDPOINT].orEmpty(),
             customEndpointProtocol = preferences[CUSTOM_ENDPOINT_PROTOCOL]
                 ?.let { name -> TunnelProtocol.entries.firstOrNull { it.name == name } },
@@ -76,6 +84,7 @@ class SettingsRepository(private val context: Context) {
             } else {
                 preferences[SECOND_CARRIER] = second.name
             }
+            preferences[CARRIER_AUTOMATIC] = settings.automaticCarrier
             preferences[PSIPHON_REGION] = settings.psiphonRegion
             preferences[TOR_BRIDGE] = settings.torBridge.name
             preferences[TOR_BRIDGES] = settings.torBridges
@@ -121,6 +130,7 @@ class SettingsRepository(private val context: Context) {
         val TRANSPORT = stringPreferencesKey("transport")
         val CARRIER = stringPreferencesKey("carrier")
         val SECOND_CARRIER = stringPreferencesKey("second_carrier")
+        val CARRIER_AUTOMATIC = booleanPreferencesKey("carrier_automatic")
         val PSIPHON_REGION = stringPreferencesKey("psiphon_region")
         val TOR_BRIDGE = stringPreferencesKey("tor_bridge")
         val TOR_BRIDGES = stringPreferencesKey("tor_bridges")

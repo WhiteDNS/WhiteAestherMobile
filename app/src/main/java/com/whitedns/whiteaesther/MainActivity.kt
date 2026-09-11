@@ -437,6 +437,7 @@ class MainActivity : ComponentActivity() {
             settings.torBridge,
             settings.torBridges,
             settings.psiphonRegion,
+            settings.automaticCarrier,
         )
     }
 }
