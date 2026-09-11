@@ -30,4 +30,7 @@ archive/
 # ours, which is the same reason native/chain/third_party is not committed.
 app/src/main/assets/psiphon_server_entries.txt
 native/tor/third_party/
+# psiphon-tunnel-core, cloned by native/psiphon/setup.ps1 to check the server
+# list's signatures, and the marker recording that the check passed.
+native/psiphon/third_party/
 native/tor/build/

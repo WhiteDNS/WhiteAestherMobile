@@ -52,6 +52,13 @@ jobs:
       # committed. Gradle packages whatever is staged, so without this the
       # preview APK installs with the Psiphon carrier present and unable to
       # start -- the shape of failure that only shows up on a device.
+      # Go for the server list's signature check: setup.ps1 runs tunnel-core's
+      # own verifier over every entry before the list is packaged.
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+          cache: false
+
       - name: Fetch the Psiphon server list
         shell: pwsh
         run: ./native/psiphon/setup.ps1
