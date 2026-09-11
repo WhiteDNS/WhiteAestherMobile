@@ -32,7 +32,6 @@ import com.whitedns.whiteaesther.data.AutoStep
 import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.Lane
 import com.whitedns.whiteaesther.data.RouteMemory
-import com.whitedns.whiteaesther.data.ScanStrategy
 import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.data.ChainSettings
 import com.whitedns.whiteaesther.data.EngineMode
@@ -1092,7 +1091,7 @@ class AetherVpnService : VpnService() {
 
     private fun describe(step: AutoStep): String = when (step) {
         is AutoStep.Engine ->
-            "aether for ${step.budgetMs / 1_000}s" + if (step.deep) ", searching thoroughly" else ""
+            "aether for ${step.budgetMs / 1_000}s" + if (step.deep) ", full search" else ""
         is AutoStep.Race -> step.lanes.joinToString(" | ") { lane ->
             lane.routes.joinToString(", ") { it.wireName } +
                 if (lane.startAfterMs > 0) " from ${lane.startAfterMs / 1_000}s" else ""
@@ -1262,6 +1261,9 @@ class AetherVpnService : VpnService() {
             },
             hasCustomBridges = TorBridges.parse(torBridges).isNotEmpty(),
             engineCanSearchDeeper = transportOf(baseConfigJson ?: "{}") in DEEPER_TRANSPORTS,
+            // Written whenever the engine connects, so anyone upgrading from a
+            // version where Aether worked for them has it.
+            engineWorkedBefore = preferences.getString(LAST_GOOD_TRANSPORT, null) != null,
         )
     }
 
@@ -1269,16 +1271,13 @@ class AetherVpnService : VpnService() {
      * The engine's configuration for this rung of an engine step.
      *
      * The same ladder a user on Automatic transport has always climbed, one
-     * rung per attempt. The deep step climbs it again searching thoroughly,
-     * which is slow, and is why it comes last.
+     * rung per attempt. The last step starts where that ladder does its full
+     * searches, rather than switching to the thorough scan: thorough is slower
+     * than any budget worth giving it, so it was a search cut off before it
+     * could finish.
      */
-    private fun autoEngineConfig(base: String, step: AutoStep.Engine): String {
-        val rung = configForAttempt(base, autoEngineAttempt)
-        if (!step.deep) return rung
-        return runCatching {
-            JSONObject(rung).put("scanMode", ScanStrategy.THOROUGH.wireName).toString()
-        }.getOrDefault(rung)
-    }
+    private fun autoEngineConfig(base: String, step: AutoStep.Engine): String =
+        configForAttempt(base, autoEngineAttempt + if (step.deep) FULL_SEARCH_RUNG else 0)
 
     private class AutoWinner(val route: AutoRoute, val client: CarrierClient, val port: Int)
 
@@ -2447,6 +2446,9 @@ class AetherVpnService : VpnService() {
 
         /** Transports whose search has a thorough setting worth a step of its own. */
         private val DEEPER_TRANSPORTS = setOf("auto", "h2", "h3")
+
+        /** Where autoConfig's ladder stops probing quickly and searches in full. */
+        private const val FULL_SEARCH_RUNG = 3
 
         private val AUTO_PROGRESS_STAGES =
             setOf(EngineStage.PREPARING, EngineStage.CONNECTING, EngineStage.ERROR)

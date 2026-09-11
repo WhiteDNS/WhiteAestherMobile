@@ -44,6 +44,27 @@ class AutoPlannerTest {
     }
 
     @Test
+    fun anEngineThatHasConnectedOnThisPhoneKeepsItsPatienceOnANewNetwork() {
+        val options = everything.copy(engineWorkedBefore = true)
+
+        val first = AutoPlanner.plan(null, options)[0] as AutoStep.Engine
+        assertEquals(AutoPlanner.ENGINE_REMEMBERED_MS, first.budgetMs)
+        // What this network is remembered for still comes first.
+        assertTrue(AutoPlanner.plan(AutoRoute.PSIPHON, options)[0] is AutoStep.Race)
+    }
+
+    @Test
+    fun aetherIsNotCutOffBeforeItsSearchCanFinish() {
+        // Aether's search takes minutes on the filtered networks that need it
+        // most. 1.6.0 allowed it sixty seconds, and people who had always
+        // connected stopped connecting.
+        assertTrue(AutoPlanner.ENGINE_QUICK_MS >= 90_000L)
+        assertTrue(AutoPlanner.ENGINE_REMEMBERED_MS >= 180_000L)
+        assertTrue(AutoPlanner.ENGINE_LATE_MS >= AutoPlanner.ENGINE_REMEMBERED_MS)
+        assertTrue(AutoPlanner.ENGINE_DEEP_MS >= AutoPlanner.ENGINE_REMEMBERED_MS)
+    }
+
+    @Test
     fun whereACarrierWorkedBeforeTheRaceComesFirst() {
         val plan = AutoPlanner.plan(AutoRoute.PSIPHON, everything)
 
@@ -151,8 +172,8 @@ class AutoPlannerTest {
     private fun everyPlan(check: (List<AutoStep>) -> Unit) {
         val flags = listOf(true, false)
         for (wholeDevice in flags) for (chain in flags) for (transports in flags)
-            for (bridges in flags) for (deeper in flags) {
-                val options = AutoOptions(wholeDevice, chain, transports, bridges, deeper)
+            for (bridges in flags) for (deeper in flags) for (worked in flags) {
+                val options = AutoOptions(wholeDevice, chain, transports, bridges, deeper, worked)
                 (AutoRoute.entries + listOf(null)).forEach { remembered ->
                     check(AutoPlanner.plan(remembered, options))
                 }

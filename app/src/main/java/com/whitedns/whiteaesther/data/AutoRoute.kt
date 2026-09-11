@@ -62,6 +62,8 @@ data class AutoOptions(
     val hasCustomBridges: Boolean,
     /** The engine's transport has a longer search worth spending time on. */
     val engineCanSearchDeeper: Boolean,
+    /** The engine has connected on this phone before, on some network. */
+    val engineWorkedBefore: Boolean = false,
 )
 
 /**
@@ -81,17 +83,29 @@ data class AutoOptions(
  * connect where that carrier on its own would not -- trying one only adds time.
  */
 object AutoPlanner {
-    /** Long enough for the quick probe of both framings on a network that carries MASQUE. */
-    const val ENGINE_QUICK_MS = 60_000L
+    /*
+     * The engine's budgets are the one place this plan can do worse than no
+     * plan at all. Aether on its own has always waited as long as its search
+     * took, and on the filtered networks that need it most that search takes
+     * minutes. 1.6.0 gave it sixty seconds, and people who had connected every
+     * day stopped connecting: Automatic walked away from Aether just before it
+     * would have found a way out.
+     */
 
-    /** Where Aether worked before: its remembered transport, with room for a full search. */
-    const val ENGINE_REMEMBERED_MS = 90_000L
+    /** Aether with nothing known about it: its quick probes, and time for one full search. */
+    const val ENGINE_QUICK_MS = 90_000L
+
+    /**
+     * Where Aether has connected before -- on this network, or anywhere on this
+     * phone when the network is new: near enough the patience it always had.
+     */
+    const val ENGINE_REMEMBERED_MS = 240_000L
 
     /** Aether after the carriers have failed, when it has the whole ladder to climb. */
-    const val ENGINE_LATE_MS = 150_000L
+    const val ENGINE_LATE_MS = 240_000L
 
-    /** The last thing left: one thorough search. */
-    const val ENGINE_DEEP_MS = 180_000L
+    /** The last thing left: Aether's full search on both framings. */
+    const val ENGINE_DEEP_MS = 300_000L
 
     /** How long the first lane runs alone before the second joins it. */
     const val SECOND_LANE_AFTER_MS = 45_000L
@@ -102,8 +116,11 @@ object AutoPlanner {
         // it -- bridges since deleted, say -- is a memory of nothing.
         val known = remembered?.takeIf { it in offered }
         val deep = AutoStep.Engine(ENGINE_DEEP_MS, deep = true).takeIf { options.engineCanSearchDeeper }
+        // What this network is remembered for outranks the phone's history: a
+        // carrier that worked here says Aether did not.
+        val aetherLikely = known == AutoRoute.AETHER || (known == null && options.engineWorkedBefore)
         val engine = AutoStep.Engine(
-            if (known == AutoRoute.AETHER) ENGINE_REMEMBERED_MS else ENGINE_QUICK_MS,
+            if (aetherLikely) ENGINE_REMEMBERED_MS else ENGINE_QUICK_MS,
             deep = false,
         )
         if (!options.wholeDevice || !options.chainAvailable) return listOfNotNull(engine, deep)
