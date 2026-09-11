@@ -52,16 +52,34 @@ jobs:
       # committed. Gradle packages whatever is staged, so without this the
       # preview APK installs with the Psiphon carrier present and unable to
       # start -- the shape of failure that only shows up on a device.
-      # Go for the server list's signature check: setup.ps1 runs tunnel-core's
-      # own verifier over every entry before the list is packaged.
+      # Go for the exit chain engine, the pluggable transports and the server
+      # list's signature check -- the same toolchain release.yml uses.
       - uses: actions/setup-go@v7
         with:
           go-version: "1.25"
           cache: false
 
+      # The preview is the build people install to try a change, so it carries
+      # every engine a release does. It used to build none of the Go ones, and
+      # Gradle packages whatever it finds staged without complaint: every
+      # preview ran Aether alone and failed anything that goes through the
+      # chain -- Psiphon, Tor and any two-carrier path -- with "the chain
+      # library is missing", which reads like a broken app, not a test build.
+      - name: Build the exit chain engine
+        shell: pwsh
+        run: |
+          ./native/chain/setup.ps1
+          ./native/chain/build.ps1
+
       - name: Fetch the Psiphon server list
         shell: pwsh
         run: ./native/psiphon/setup.ps1
+
+      - name: Build the pluggable transports
+        shell: pwsh
+        run: |
+          ./native/tor/setup.ps1
+          ./native/tor/build.ps1
 
       - name: Test, lint and package Android
         run: >-
@@ -87,6 +105,12 @@ jobs:
             # the build.
             jar tf "$apk" | grep -F "lib/${abi}/libgojni.so"
             jar tf "$apk" | grep -qF "assets/psiphon_server_entries.txt"
+            # The chain engine, without which nothing but Aether alone can
+            # connect, and Tor with both of its transports.
+            jar tf "$apk" | grep -F "lib/${abi}/libwhiteaestherchain.so"
+            jar tf "$apk" | grep -F "lib/${abi}/libtor.so"
+            jar tf "$apk" | grep -F "lib/${abi}/liblyrebird.so"
+            jar tf "$apk" | grep -F "lib/${abi}/libsnowflake.so"
             test "$(jar tf "$apk" | grep -c '^lib/.*/libwhiteaesther_core\.so$')" -eq 1
             ! jar tf "$apk" | grep -E 'lib(quiche|boringtun.*)\.so'
             "${ANDROID_HOME}/build-tools/${ANDROID_BUILD_TOOLS}/aapt2" \
@@ -98,7 +122,11 @@ jobs:
           for abi in armeabi-v7a arm64-v8a x86_64; do
             jar tf "$universal" | grep -F "lib/${abi}/libwhiteaesther_core.so"
           done
-          test "$(jar tf "$universal" | grep -c '^lib/.*/libwhiteaesther_core\.so$')" -eq 3
+          # Every engine, once per ABI: the universal APK is the one people
+          # take when they are not sure which phone they have.
+          for lib in libwhiteaesther_core libwhiteaestherchain libgojni libtor liblyrebird libsnowflake; do
+            test "$(jar tf "$universal" | grep -c "^lib/.*/${lib}\.so$")" -eq 3
+          done
           ! jar tf "$universal" | grep -E 'lib(quiche|boringtun.*)\.so'
 
       - name: Upload preview APK and reports
