@@ -77,7 +77,10 @@ Shipped inside the APK as `libgojni.so`, which is the library that aar contains.
 Psiphon's public bootstrap list of server entries, fetched at build time by
 `native/psiphon/setup.ps1` at the pinned revision named in that script rather
 than committed here. It is data Psiphon publishes for clients to start from, not
-code, and tunnel-core verifies every entry itself.
+code. Every entry carries Psiphon's signature. tunnel-core checks it only when
+given the public key, which is `native/psiphon/server_entry_signature_key.txt`,
+and `setup.ps1` checks the whole list with tunnel-core's own code against that
+key before packaging it -- refusing any list whose entries do not all verify.
 
 **The identifiers.** `PropagationChannelId` and `SponsorId` in
 `core/PsiphonConfig.kt` are the placeholder values documented in tunnel-core's
