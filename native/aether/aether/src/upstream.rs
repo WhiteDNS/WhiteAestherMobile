@@ -728,6 +728,15 @@ async fn relay_address(bound: SocketAddr, host: &str, port: u16) -> Result<Socke
 
 #[cfg(test)]
 mod tests {
+    /// Held by every test that writes AETHER_UPSTREAM.
+    ///
+    /// The tests run on parallel threads and configured() reads the variable on
+    /// every call, so without it one test's assertion can read another's value.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     use super::*;
 
     #[test]
@@ -885,6 +894,7 @@ mod tests {
     #[tokio::test]
     async fn a_datagram_makes_the_round_trip_through_a_socks5_relay() {
         let (proxy_address, server) = fake_socks_udp_server().await;
+        let _env = env_lock();
         std::env::set_var("AETHER_UPSTREAM", format!("socks5://{proxy_address}"));
 
         let proxy = Upstream::parse(&format!("socks5://{proxy_address}")).unwrap();
@@ -914,6 +924,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_local_peer_is_reached_without_the_proxy() {
+        let _env = env_lock();
         std::env::set_var("AETHER_UPSTREAM", "socks5://127.0.0.1:9");
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
 
@@ -979,5 +990,77 @@ mod tests {
         );
         assert_eq!(http_status(b"NOTHTTP 200 OK\r\n\r\n"), None);
         assert_eq!(http_status(b""), None);
+    }
+
+    /// A chained carrier binds a fresh port every time it starts. An upstream
+    /// cached at the first call went on dialling the port of a carrier that had
+    /// since been replaced, and presented as a proxy refusing connections.
+    #[test]
+    fn the_upstream_is_read_again_on_every_call() {
+        let _env = env_lock();
+
+        std::env::set_var("AETHER_UPSTREAM", "socks5://127.0.0.1:36717");
+        assert_eq!(configured().map(|u| u.port), Some(36717));
+
+        std::env::set_var("AETHER_UPSTREAM", "socks5://127.0.0.1:39147");
+        assert_eq!(configured().map(|u| u.port), Some(39147));
+
+        std::env::remove_var("AETHER_UPSTREAM");
+        assert!(configured().is_none());
+    }
+
+    /// Registration goes out through reqwest, which only speaks SOCKS5 when
+    /// built with its "socks" feature. Without it Proxy::all still accepts the
+    /// URL and every request fails instantly without ever reaching the proxy --
+    /// so the proof has to be the proxy seeing the request, not reqwest
+    /// returning an error.
+    #[tokio::test]
+    async fn requests_made_through_reqwest_reach_a_socks5_upstream() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut client, _) = listener.accept().await.unwrap();
+
+            let mut head = [0u8; 2];
+            client.read_exact(&mut head).await.unwrap();
+            let mut methods = vec![0u8; head[1] as usize];
+            client.read_exact(&mut methods).await.unwrap();
+            client.write_all(&[VER, AUTH_NONE]).await.unwrap();
+
+            let mut request = [0u8; 4];
+            client.read_exact(&mut request).await.unwrap();
+            assert_eq!(request[3], ATYP_V4, "a literal address should arrive as IPv4");
+            let mut target = [0u8; 6];
+            client.read_exact(&mut target).await.unwrap();
+            client
+                .write_all(&[VER, REP_OK, 0x00, ATYP_V4, 0, 0, 0, 0, 0, 0])
+                .await
+                .unwrap();
+
+            let ip = Ipv4Addr::new(target[0], target[1], target[2], target[3]);
+            let port = u16::from_be_bytes([target[4], target[5]]);
+            (request[1], SocketAddr::new(IpAddr::V4(ip), port))
+        });
+
+        let proxy = Upstream::parse(&format!("socks5://{address}"))
+            .unwrap()
+            .as_reqwest_proxy()
+            .unwrap();
+        let client = reqwest::Client::builder()
+            .proxy(proxy)
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap();
+        // The answer does not matter; the proxy closes after replying. What
+        // matters is that the request got as far as the proxy at all.
+        let _ = client.get("http://192.0.2.1/").send().await;
+
+        let (command, target) = tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .expect("reqwest never reached the SOCKS5 upstream")
+            .unwrap();
+        assert_eq!(command, CMD_CONNECT);
+        assert_eq!(target, "192.0.2.1:80".parse::<SocketAddr>().unwrap());
     }
 }
