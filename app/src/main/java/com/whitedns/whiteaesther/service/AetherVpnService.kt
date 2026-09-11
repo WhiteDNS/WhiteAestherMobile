@@ -31,8 +31,8 @@ import com.whitedns.whiteaesther.data.AutoRoute
 import com.whitedns.whiteaesther.data.AutoStep
 import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.Lane
+import com.whitedns.whiteaesther.data.NetworkKey
 import com.whitedns.whiteaesther.data.RouteMemory
-import com.whitedns.whiteaesther.data.ScanStrategy
 import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.data.ChainSettings
 import com.whitedns.whiteaesther.data.EngineMode
@@ -49,7 +49,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
@@ -184,6 +183,9 @@ class AetherVpnService : VpnService() {
     @Volatile private var autoRunningRoute: AutoRoute? = null
 
     private var autoPasses = 0
+
+    /** When this search began, for the clock on the home screen. Zero when not searching. */
+    @Volatile private var autoSearchStartedAt = 0L
     private var autoNetworkKey = RouteMemory.ANY_NETWORK
     private var autoMode: EngineMode? = null
 
@@ -197,6 +199,13 @@ class AetherVpnService : VpnService() {
 
     /** Routes being tried right now, for the one line that says so. */
     private val autoTrying = mutableListOf<AutoRoute>()
+
+    /** The clients of those routes, so a race that has its winner can stop the rest at once. */
+    private val autoInFlight = mutableMapOf<AutoRoute, CarrierClient>()
+
+    /** Which race is running, and the last one settled; a late runner checks the two. */
+    private var autoRaceId = 0L
+    private var autoRaceSettled = -1L
 
     /** An engine session the leash had to leave behind, until it has gone. */
     private var staleEngine: Job? = null
@@ -374,6 +383,7 @@ class AetherVpnService : VpnService() {
                 autoSteps = emptyList()
                 autoPasses = 0
                 autoConnected = false
+                autoSearchStartedAt = 0L
                 baseConfigJson = configJson
                 chainJson = chainSettings
                 splitJson = splitSettings
@@ -944,6 +954,7 @@ class AetherVpnService : VpnService() {
             )
             updateNotification(mode, sayNow(R.string.status_carrier_connecting, sayNow(hop.label)))
 
+            val upstream = port
             val client = buildCarrier(hop, configJson, port)
             startedHops += hop to client
 
@@ -966,6 +977,13 @@ class AetherVpnService : VpnService() {
 
             markHop(hop, CarrierStage.CONNECTED)
             EngineLog.record(LogLevel.INFO, "carrier", "${hop.wireName} is up on 127.0.0.1:$port")
+            // A first hop dials the network itself, so the framing it came up
+            // on is a fact about this network -- the one the engine path
+            // records too, and what the next attempt starts with. Behind
+            // another hop the framing is forced, and says nothing.
+            if (hop == Carrier.AETHER && upstream == 0) {
+                rememberWorkingTransport(carrierEngineConfig(configJson, upstream))
+            }
             watchHop(hop, client, configJson, mode, sessionGeneration)
         }
         publish(
@@ -1040,6 +1058,9 @@ class AetherVpnService : VpnService() {
     private suspend fun autoStepFor(mode: EngineMode, sessionGeneration: Long): AutoStep? {
         autoMode = mode
         if (autoSteps.isEmpty()) {
+            // Once per search, not per pass: the clock is for the person
+            // waiting, and to them a second pass is still the same wait.
+            if (autoSearchStartedAt == 0L) autoSearchStartedAt = System.currentTimeMillis()
             if (!awaitNetwork(mode, sessionGeneration)) return null
             autoNetworkKey = NetworkIdentity.current(this).key ?: RouteMemory.ANY_NETWORK
             val remembered = RouteMemory.recall(
@@ -1092,7 +1113,7 @@ class AetherVpnService : VpnService() {
 
     private fun describe(step: AutoStep): String = when (step) {
         is AutoStep.Engine ->
-            "aether for ${step.budgetMs / 1_000}s" + if (step.deep) ", searching thoroughly" else ""
+            "aether for ${step.budgetMs / 1_000}s" + if (step.deep) ", full search" else ""
         is AutoStep.Race -> step.lanes.joinToString(" | ") { lane ->
             lane.routes.joinToString(", ") { it.wireName } +
                 if (lane.startAfterMs > 0) " from ${lane.startAfterMs / 1_000}s" else ""
@@ -1156,6 +1177,7 @@ class AetherVpnService : VpnService() {
             autoPasses = 0
             autoConnected = false
             autoRunningRoute = null
+            autoSearchStartedAt = System.currentTimeMillis()
             val lost = sayNow(R.string.status_auto_lost)
             publish(EngineStatus(EngineStage.CONNECTING, mode, message = lost))
             updateNotification(mode, lost)
@@ -1262,6 +1284,12 @@ class AetherVpnService : VpnService() {
             },
             hasCustomBridges = TorBridges.parse(torBridges).isNotEmpty(),
             engineCanSearchDeeper = transportOf(baseConfigJson ?: "{}") in DEEPER_TRANSPORTS,
+            // Written whenever the engine connects, so anyone upgrading from a
+            // version where Aether worked for them has it.
+            engineWorkedBefore = preferences.getString(LAST_GOOD_TRANSPORT, null) != null,
+            provenFraming = preferences.getString(LAST_GOOD_TRANSPORT, null)
+                ?.takeIf { it == "h2" || it == "h3" },
+            onMobileData = NetworkKey.isCellular(autoNetworkKey),
         )
     }
 
@@ -1269,16 +1297,13 @@ class AetherVpnService : VpnService() {
      * The engine's configuration for this rung of an engine step.
      *
      * The same ladder a user on Automatic transport has always climbed, one
-     * rung per attempt. The deep step climbs it again searching thoroughly,
-     * which is slow, and is why it comes last.
+     * rung per attempt. The last step starts where that ladder does its full
+     * searches, rather than switching to the thorough scan: thorough is slower
+     * than any budget worth giving it, so it was a search cut off before it
+     * could finish.
      */
-    private fun autoEngineConfig(base: String, step: AutoStep.Engine): String {
-        val rung = configForAttempt(base, autoEngineAttempt)
-        if (!step.deep) return rung
-        return runCatching {
-            JSONObject(rung).put("scanMode", ScanStrategy.THOROUGH.wireName).toString()
-        }.getOrDefault(rung)
-    }
+    private fun autoEngineConfig(base: String, step: AutoStep.Engine): String =
+        configForAttempt(base, autoEngineAttempt + if (step.deep) FULL_SEARCH_RUNG else 0)
 
     private class AutoWinner(val route: AutoRoute, val client: CarrierClient, val port: Int)
 
@@ -1334,6 +1359,9 @@ class AetherVpnService : VpnService() {
             carrier = winner.route.carrier
             secondCarrier = null
             autoRunningRoute = winner.route
+            // The framing that got Aether out, so the direct engine starts on
+            // it next time -- the memory sends that connect to the direct path.
+            if (winner.route.racesEngine) rememberWorkingTransport(raceEngineConfig(winner.route))
             startedHops.clear()
             startedHops += carrier to winner.client
             hopStages.clear()
@@ -1394,10 +1422,23 @@ class AetherVpnService : VpnService() {
      * out, whichever is first: a second lane sitting out a head start behind a
      * lane that has already failed would only be waiting for a clock.
      */
-    private suspend fun raceLanes(lanes: List<Lane>, sessionGeneration: Long): AutoWinner? = coroutineScope {
+    private suspend fun raceLanes(lanes: List<Lane>, sessionGeneration: Long): AutoWinner? {
+        val race = ++autoRaceId
         val winner = CompletableDeferred<AutoWinner?>()
         val begun = List(lanes.size) { CompletableDeferred<Unit>() }
         val finished = BooleanArray(lanes.size)
+        // Not this coroutine's children. The engine's search inside prepare()
+        // is a blocking call that neither a cancellation nor cancelScan()
+        // reaches -- cancelScan() stops the endpoint scanner's scan, not
+        // prepare's -- and when the lanes were children, the race waited for
+        // them: on the emulator a Psiphon that had carried traffic in ten
+        // seconds sat for forty more while a losing Aether finished its quick
+        // search. The lanes are cancelled and left to finish in their own
+        // time; settling the race is what keeps a late one from touching
+        // anything.
+        val lanesScope = CoroutineScope(
+            serviceScope.coroutineContext + SupervisorJob(serviceScope.coroutineContext[Job]),
+        )
 
         fun handOn() {
             if (lanes.indices.any { begun[it].isCompleted && !finished[it] }) return
@@ -1406,12 +1447,12 @@ class AetherVpnService : VpnService() {
         }
 
         val jobs = lanes.mapIndexed { index, lane ->
-            launch {
+            lanesScope.launch {
                 withTimeoutOrNull(lane.startAfterMs) { begun[index].await() }
                 begun[index].complete(Unit)
                 for (route in lane.routes) {
                     if (winner.isCompleted || sessionGeneration != generation) break
-                    val found = tryRoute(route, sessionGeneration) ?: continue
+                    val found = tryRoute(route, sessionGeneration, race) ?: continue
                     // Two routes can come good in the same moment. The second
                     // is stopped rather than left running beside the first.
                     if (!winner.complete(found)) runCatching { found.client.stop() }
@@ -1422,9 +1463,30 @@ class AetherVpnService : VpnService() {
             }
         }
         if (lanes.isEmpty()) winner.complete(null)
-        val result = winner.await()
-        jobs.forEach { it.cancel() }
-        result
+
+        var result: AutoWinner? = null
+        try {
+            result = winner.await()
+            return result
+        } finally {
+            // Settled: won, run out, or the session stopped. Whatever is still
+            // running has lost, and is stopped here rather than by its own lane.
+            autoRaceSettled = race
+            autoTrying.clear()
+            val losers = autoInFlight.filterKeys { it != result?.route }
+            losers.forEach { (route, client) ->
+                // A losing engine may go on searching for up to two minutes
+                // after this, unreachable; the next engine session waits for it.
+                if (route.racesEngine) {
+                    lanes.indexOfFirst { lane -> route in lane.routes }
+                        .takeIf { it >= 0 }
+                        ?.let { staleEngine = jobs[it] }
+                }
+                runCatching { client.stop() }
+            }
+            autoInFlight.clear()
+            lanesScope.cancel()
+        }
     }
 
     /**
@@ -1434,8 +1496,18 @@ class AetherVpnService : VpnService() {
      * or this lane being cancelled because another won -- a route that is not
      * kept is stopped here, so nothing the race started outlives it.
      */
-    private suspend fun tryRoute(route: AutoRoute, sessionGeneration: Long): AutoWinner? {
+    private suspend fun tryRoute(route: AutoRoute, sessionGeneration: Long, race: Long): AutoWinner? {
+        if (route.racesEngine) {
+            // One engine at a time, as for an engine step: the step before
+            // this race may have left one behind.
+            staleEngine?.let { stale ->
+                withTimeoutOrNull(STALE_ENGINE_WAIT_MS) { stale.join() }
+                staleEngine = null
+            }
+            if (sessionGeneration != generation) return null
+        }
         val client = autoClient(route)
+        autoInFlight[route] = client
         setAutoStage(route.carrier, CarrierStage.CONNECTING)
         autoTrying += route
         publishAutoProgress()
@@ -1458,12 +1530,20 @@ class AetherVpnService : VpnService() {
             kept = true
             return AutoWinner(route, client, port)
         } finally {
-            autoTrying -= route
-            if (!kept) {
-                runCatching { client.stop() }
-                setAutoStage(route.carrier, CarrierStage.FAILED)
+            // Once the race has settled, a runner finishing late -- a losing
+            // engine whose search nothing could interrupt -- has already been
+            // stopped and cleared away. Touching the screen, the stages or the
+            // client from here would undo what came after.
+            val settled = autoRaceSettled == race
+            if (autoInFlight[route] === client) autoInFlight.remove(route)
+            if (!settled) {
+                autoTrying -= route
+                if (!kept) {
+                    runCatching { client.stop() }
+                    setAutoStage(route.carrier, CarrierStage.FAILED)
+                    if (sessionGeneration == generation) publishAutoProgress()
+                }
             }
-            if (sessionGeneration == generation) publishAutoProgress()
         }
     }
 
@@ -1473,9 +1553,28 @@ class AetherVpnService : VpnService() {
         Carrier.PSIPHON -> PsiphonClient(this, "", 0).also { psiphonClient = it }
         Carrier.TOR -> TorClient(this, route.torBridge ?: TorBridge.NONE, torBridges, 0)
             .also { torClient = it }
-        // The engine is never raced: it runs on the interface, in a step of
-        // its own. AutoPlannerTest holds the plan to that.
-        Carrier.AETHER -> error("the engine is not raced")
+        // The engine as a carrier: proxy mode, its listener behind the race's
+        // interface like the others. The direct route never gets here -- it
+        // runs on the interface in a step of its own, and AutoPlannerTest
+        // holds the plan to that.
+        Carrier.AETHER -> {
+            check(route.racesEngine) { "the direct engine is not raced" }
+            AetherCarrierClient(serviceScope, carrierEngineConfig(raceEngineConfig(route), 0))
+                .also { aetherCarrier = it }
+        }
+    }
+
+    /** The user's own configuration, on the framing and at the depth [route] asks for. */
+    private fun raceEngineConfig(route: AutoRoute): String {
+        val base = baseConfigJson ?: "{}"
+        val transport = route.engineTransport ?: return base
+        return runCatching {
+            val json = JSONObject(base)
+            // Full is the user's own depth -- balanced unless they chose
+            // otherwise; quick is the engine's quickest.
+            val depth = if (route.fullSearch) json.optString("scanMode", "balanced") else "turbo"
+            json.put("transport", transport).put("scanMode", depth).toString()
+        }.getOrDefault(base)
     }
 
     /** Remembers [route] for this network, which is what makes the next connect here quick. */
@@ -1484,6 +1583,7 @@ class AetherVpnService : VpnService() {
         autoConnected = true
         autoToken += 1
         autoPasses = 0
+        autoSearchStartedAt = 0L
         setAutoStage(route.carrier, CarrierStage.CONNECTED)
         val now = System.currentTimeMillis()
         val stored = preferences.getString(AUTO_ROUTES, null)
@@ -1499,7 +1599,8 @@ class AetherVpnService : VpnService() {
         val message = when (trying.size) {
             0 -> sayNow(R.string.status_auto_searching)
             1 -> sayNow(R.string.status_auto_trying, trying[0])
-            else -> sayNow(R.string.status_auto_trying_two, trying[0], trying[1])
+            2 -> sayNow(R.string.status_auto_trying_two, trying[0], trying[1])
+            else -> sayNow(R.string.status_auto_trying_three, trying[0], trying[1], trying[2])
         }
         publish(EngineStatus(EngineStage.CONNECTING, mode, message = message))
         updateNotification(mode, message)
@@ -1544,6 +1645,7 @@ class AetherVpnService : VpnService() {
                     status.message
                 },
                 attempts = autoAttempts(),
+                searchStartedAtMillis = autoSearchStartedAt.takeIf { it > 0L },
             ),
         )
     }
@@ -2442,11 +2544,19 @@ class AetherVpnService : VpnService() {
         /** How long the leash waits for a stopped engine to notice, before leaving it. */
         private const val LEASH_GRACE_MS = 10_000L
 
-        /** How long an engine step waits for one the leash left behind to finish. */
-        private const val STALE_ENGINE_WAIT_MS = 15_000L
+        /**
+         * How long the engine waits for one left behind -- by the leash, or a
+         * race it lost -- to finish. As long as a full search can run, since
+         * nothing can interrupt one, and two engine sessions at once is not a
+         * state the engine was built for.
+         */
+        private const val STALE_ENGINE_WAIT_MS = 130_000L
 
         /** Transports whose search has a thorough setting worth a step of its own. */
         private val DEEPER_TRANSPORTS = setOf("auto", "h2", "h3")
+
+        /** Where autoConfig's ladder stops probing quickly and searches in full. */
+        private const val FULL_SEARCH_RUNG = 3
 
         private val AUTO_PROGRESS_STAGES =
             setOf(EngineStage.PREPARING, EngineStage.CONNECTING, EngineStage.ERROR)

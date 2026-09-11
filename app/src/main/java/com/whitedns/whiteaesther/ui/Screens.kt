@@ -291,6 +291,21 @@ fun HomeScreen(
         }
     }
 
+    // How long Automatic has been looking, from the service's clock for the
+    // same reason as above.
+    var searching by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(status.searchStartedAtMillis) {
+        val since = status.searchStartedAtMillis
+        if (since == null) {
+            searching = 0
+            return@LaunchedEffect
+        }
+        while (true) {
+            searching = ((System.currentTimeMillis() - since) / 1000).coerceAtLeast(0)
+            delay(1000)
+        }
+    }
+
     ScreenColumn {
         Row(
             Modifier
@@ -399,6 +414,30 @@ fun HomeScreen(
                 // has connected, the line above names the route that won.
                 Spacer(Modifier.height(10.dp))
                 CarrierPathRow(status.attempts, ordered = false)
+            }
+            val searchingNow = status.searchStartedAtMillis != null &&
+                (status.stage == EngineStage.PREPARING || status.stage == EngineStage.CONNECTING)
+            if (searchingNow) {
+                // A clock and one sentence. The first search on a hard network
+                // takes minutes, and the first log from Iran shows someone
+                // stopping at two -- with Psiphon still working on it.
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    stringResource(
+                        R.string.auto_searching_for,
+                        // Latin digits, as for the connected clock below.
+                        String.format(java.util.Locale.ROOT, "%d:%02d", searching / 60, searching % 60),
+                    ),
+                    style = AetherTheme.type.Label,
+                    color = colors.text2,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    stringResource(R.string.auto_patience),
+                    style = AetherTheme.type.Small,
+                    color = colors.text3,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
             }
         }
 

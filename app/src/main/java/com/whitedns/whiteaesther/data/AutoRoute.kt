@@ -8,16 +8,52 @@ import java.security.MessageDigest
  *
  * Finer than [Carrier], because for Tor the carrier is not the whole answer: the
  * same network can block Tor outright and let snowflake through, so each bridge
- * mode is a route of its own -- tried, failed and remembered separately.
+ * mode is a route of its own -- tried, failed and remembered separately. The
+ * same goes for Aether's two framings: the network one user sent a log from
+ * reached Cloudflare over QUIC and not over TCP, and another, on mobile data,
+ * the other way round.
  */
-enum class AutoRoute(val wireName: String, val carrier: Carrier, val torBridge: TorBridge? = null) {
+enum class AutoRoute(
+    val wireName: String,
+    val carrier: Carrier,
+    val torBridge: TorBridge? = null,
+    /** For the engine racing as a carrier: which framing, or null for the user's own. */
+    val engineTransport: String? = null,
+    /** For the engine racing as a carrier: the user's search depth rather than the quick one. */
+    val fullSearch: Boolean = false,
+) {
+    /**
+     * The engine on the interface, as a session carried by Aether alone has
+     * always run. Never raced -- see [AutoStep.Engine] -- and what every Aether
+     * route is remembered as, so the next connect on that network takes the
+     * direct path.
+     */
     AETHER("aether", Carrier.AETHER),
+
+    // The engine as one runner in a race: a listener on loopback behind the
+    // race's interface, like the carriers beside it. One framing and one depth
+    // each, so a network that answers only one of them is found in the time
+    // it takes to search that one.
+    AETHER_H3_QUICK("aether-h3-quick", Carrier.AETHER, engineTransport = "h3"),
+    AETHER_H2_QUICK("aether-h2-quick", Carrier.AETHER, engineTransport = "h2"),
+    AETHER_H3_FULL("aether-h3-full", Carrier.AETHER, engineTransport = "h3", fullSearch = true),
+    AETHER_H2_FULL("aether-h2-full", Carrier.AETHER, engineTransport = "h2", fullSearch = true),
+
+    /** The engine racing on a transport the user fixed -- WireGuard, say -- searched as they set it. */
+    AETHER_AS_SET("aether-as-set", Carrier.AETHER, fullSearch = true),
+
     PSIPHON("psiphon", Carrier.PSIPHON),
     TOR_CUSTOM("tor-custom", Carrier.TOR, TorBridge.CUSTOM),
     TOR_SNOWFLAKE("tor-snowflake", Carrier.TOR, TorBridge.SNOWFLAKE),
     TOR_OBFS4("tor-obfs4", Carrier.TOR, TorBridge.OBFS4),
     TOR_DIRECT("tor-direct", Carrier.TOR, TorBridge.NONE),
     ;
+
+    /** True for the engine running as a carrier in a race rather than on the interface. */
+    val racesEngine: Boolean get() = carrier == Carrier.AETHER && this != AETHER
+
+    /** What a win is remembered as: any Aether route is Aether, next time on the direct path. */
+    val remembersAs: AutoRoute get() = if (carrier == Carrier.AETHER) AETHER else this
 
     companion object {
         fun fromWire(name: String?): AutoRoute? = entries.firstOrNull { it.wireName == name }
@@ -33,11 +69,12 @@ sealed interface AutoStep {
      * Not raced against the carriers. Once the engine's interface is up it
      * carries this package's other processes too, and Psiphon and Tor run in
      * two of them: a carrier started beside it would be dialling out through a
-     * tunnel that does not work yet.
+     * tunnel that does not work yet. Inside a race the engine runs as a carrier
+     * instead, behind the race's interface like the others.
      */
     data class Engine(val budgetMs: Long, val deep: Boolean) : AutoStep
 
-    /** Carriers tried side by side; the first one to carry traffic wins. */
+    /** Routes tried side by side; the first one to carry traffic wins. */
     data class Race(val lanes: List<Lane>) : AutoStep
 }
 
@@ -45,8 +82,8 @@ sealed interface AutoStep {
  * Routes tried one after another, starting [startAfterMs] into the race -- or
  * sooner, the moment every lane already running has run out.
  *
- * Lanes rather than one list because Psiphon and Tor run in processes of their
- * own and can be tried at once, while two Tor routes cannot: there is one tor.
+ * Lanes rather than one list because different carriers can be tried at once,
+ * while two routes of one carrier cannot: there is one engine and one tor.
  */
 data class Lane(val routes: List<AutoRoute>, val startAfterMs: Long)
 
@@ -60,70 +97,123 @@ data class AutoOptions(
     val transportsAvailable: Boolean,
     /** The user has bridges of their own saved. */
     val hasCustomBridges: Boolean,
-    /** The engine's transport has a longer search worth spending time on. */
+    /**
+     * The engine's transport is one of the two MASQUE framings or Automatic,
+     * so both framings can be tried. False for WireGuard and WARP-in-WARP.
+     */
     val engineCanSearchDeeper: Boolean,
+    /** The engine has connected on this phone before, on some network. */
+    val engineWorkedBefore: Boolean = false,
+    /** The framing that last connected on this phone, when it was one of the two. */
+    val provenFraming: String? = null,
+    /** On mobile data rather than Wi-Fi or a cable. */
+    val onMobileData: Boolean = false,
 )
 
 /**
  * The order Automatic tries things in.
  *
- * Aether first, because where it works it is the fastest route by a distance
- * and the one most sessions already use. Then Psiphon, with Tor joining it
- * shortly after rather than waiting its turn: on the networks where Aether
- * fails, Psiphon can need minutes, and a user watching a spinner is not helped
- * by Tor idling for all of them.
+ * Everything at once, from the tap. 1.6.0 went one step at a time -- Aether,
+ * then the carriers, then Aether again -- and a log from Iran showed where that
+ * leads: Aether spent its minute on the one framing that network did not
+ * carry, Psiphon started a minute late with no tactics yet, and the user
+ * stopped it at two. So Aether races in both framings beside Psiphon, Tor joins
+ * shortly after, and the first route that carries traffic wins.
+ *
+ * Except where Aether has already worked: there the engine goes first, on the
+ * interface directly, which is the fastest and most direct session this app
+ * has. It comes back to the race if it does not connect.
  *
  * Whatever worked on a network goes first next time on that network. That is
  * what makes the second connect quick, and it is only a starting point -- the
- * rest of the plan is still there behind it.
+ * rest of the plan is still behind it.
  *
  * No chains. A chain gets out exactly when its first hop does, so it can never
  * connect where that carrier on its own would not -- trying one only adds time.
  */
 object AutoPlanner {
-    /** Long enough for the quick probe of both framings on a network that carries MASQUE. */
+    /** The engine on its own where there is nothing to race it against: one quick search. */
     const val ENGINE_QUICK_MS = 60_000L
 
-    /** Where Aether worked before: its remembered transport, with room for a full search. */
-    const val ENGINE_REMEMBERED_MS = 90_000L
+    /**
+     * The engine first, where it has worked before: the framing that connected
+     * last, at the user's search depth. A balanced search is two minutes on its
+     * own (`budget=120s`), so this is that and the connect after it.
+     */
+    const val ENGINE_REMEMBERED_MS = 150_000L
 
-    /** Aether after the carriers have failed, when it has the whole ladder to climb. */
-    const val ENGINE_LATE_MS = 150_000L
+    /** The engine on its own as the last thing left: its full searches, one per framing. */
+    const val ENGINE_DEEP_MS = 300_000L
 
-    /** The last thing left: one thorough search. */
-    const val ENGINE_DEEP_MS = 180_000L
-
-    /** How long the first lane runs alone before the second joins it. */
+    /** How long Tor waits for the lanes ahead of it before it joins them. */
     const val SECOND_LANE_AFTER_MS = 45_000L
 
     fun plan(remembered: AutoRoute?, options: AutoOptions): List<AutoStep> {
         val offered = offeredRoutes(options)
         // A route remembered from a build or a setup that can no longer offer
         // it -- bridges since deleted, say -- is a memory of nothing.
-        val known = remembered?.takeIf { it in offered }
-        val deep = AutoStep.Engine(ENGINE_DEEP_MS, deep = true).takeIf { options.engineCanSearchDeeper }
-        val engine = AutoStep.Engine(
-            if (known == AutoRoute.AETHER) ENGINE_REMEMBERED_MS else ENGINE_QUICK_MS,
-            deep = false,
-        )
-        if (!options.wholeDevice || !options.chainAvailable) return listOfNotNull(engine, deep)
+        val known = remembered?.remembersAs?.takeIf { it in offered }
+        val aetherLikely = known == AutoRoute.AETHER || (known == null && options.engineWorkedBefore)
 
+        if (!options.wholeDevice || !options.chainAvailable) {
+            return listOfNotNull(
+                AutoStep.Engine(if (aetherLikely) ENGINE_REMEMBERED_MS else ENGINE_QUICK_MS, deep = false),
+                AutoStep.Engine(ENGINE_DEEP_MS, deep = true).takeIf { options.engineCanSearchDeeper },
+            )
+        }
+
+        val aether = aetherLane(options)
         val tor = offered.filter { it.carrier == Carrier.TOR }
         val psiphon = listOf(AutoRoute.PSIPHON)
-        // Where a carrier worked before, Aether has most likely already failed
-        // here, so it goes after the race -- with one budget large enough for
-        // its whole ladder, rather than a quick step and a deep one back to
-        // back, which would put two engine sessions next to each other.
-        val late = AutoStep.Engine(ENGINE_LATE_MS, deep = false)
-        return when (known?.carrier) {
-            null, Carrier.AETHER -> listOfNotNull(engine, race(psiphon, tor), deep)
-            Carrier.PSIPHON -> listOf(race(psiphon, tor), late)
-            Carrier.TOR -> listOf(race(listOfNotNull(known) + tor.filter { it != known }, psiphon), late)
+        val race = if (known?.carrier == Carrier.TOR) {
+            // Tor worked here, so it goes at once; Psiphon, which evidently did
+            // not, after it.
+            AutoStep.Race(
+                listOf(
+                    Lane(listOfNotNull(known) + tor.filter { it != known }, 0L),
+                    Lane(aether, 0L),
+                    Lane(psiphon, SECOND_LANE_AFTER_MS),
+                ),
+            )
+        } else {
+            AutoStep.Race(
+                listOf(Lane(aether, 0L), Lane(psiphon, 0L), Lane(tor, SECOND_LANE_AFTER_MS))
+                    .filter { it.routes.isNotEmpty() },
+            )
+        }
+        return if (aetherLikely) {
+            listOf(AutoStep.Engine(ENGINE_REMEMBERED_MS, deep = false), race)
+        } else {
+            listOf(race)
         }
     }
 
     /**
-     * Every route this phone could try, Tor's in the order worth trying them.
+     * The engine's runs in a race, in the order worth trying them.
+     *
+     * Quick searches first, one per framing, then the full ones: a network
+     * that carries either framing at all usually shows it within a quick
+     * search. The framing that connected last goes first; with nothing to go
+     * on, H2 first on mobile data -- where operators have dropped QUIC for
+     * weeks at a time -- and H3 first elsewhere, which is what the Wi-Fi in
+     * that log needed.
+     */
+    fun aetherLane(options: AutoOptions): List<AutoRoute> {
+        if (!options.engineCanSearchDeeper) return listOf(AutoRoute.AETHER_AS_SET)
+        val h3First = when (options.provenFraming) {
+            "h3" -> true
+            "h2" -> false
+            else -> !options.onMobileData
+        }
+        return if (h3First) {
+            listOf(AutoRoute.AETHER_H3_QUICK, AutoRoute.AETHER_H2_QUICK, AutoRoute.AETHER_H3_FULL, AutoRoute.AETHER_H2_FULL)
+        } else {
+            listOf(AutoRoute.AETHER_H2_QUICK, AutoRoute.AETHER_H3_QUICK, AutoRoute.AETHER_H2_FULL, AutoRoute.AETHER_H3_FULL)
+        }
+    }
+
+    /**
+     * Every carrier route this phone could try, Tor's in the order worth trying them.
      *
      * Bridges the user was given first: handed out one at a time, they are the
      * only kind with a real chance where Tor is properly blocked. Then
@@ -133,6 +223,7 @@ object AutoPlanner {
     fun offeredRoutes(options: AutoOptions): List<AutoRoute> = buildList {
         add(AutoRoute.AETHER)
         if (!options.wholeDevice || !options.chainAvailable) return@buildList
+        addAll(aetherLane(options))
         add(AutoRoute.PSIPHON)
         if (options.transportsAvailable) {
             if (options.hasCustomBridges) add(AutoRoute.TOR_CUSTOM)
@@ -143,25 +234,26 @@ object AutoPlanner {
     }
 
     /**
-     * How long one carrier route gets before it counts as failed.
+     * How long one route gets before it counts as failed.
      *
-     * Psiphon keeps tunnel-core's own window: it races a dozen protocols and
-     * on a hostile network that race is minutes, which is exactly the network
-     * this is for. Tor gets less than when chosen by hand, because here it is
-     * one of several things being tried and not the only one -- and direct Tor
-     * least of all, since where it is blocked it is blocked at once.
+     * The engine's from its own search deadlines -- 45 s quick, 120 s balanced
+     * -- plus registration and the connect after the search. Psiphon keeps
+     * tunnel-core's own window: it races a dozen protocols and, on a first run
+     * with no tactics stored, needs them to open its in-proxy path at all.
+     * Tor gets less than when chosen by hand, because here it is one of
+     * several things being tried; direct Tor least of all, since where it is
+     * blocked it is blocked at once.
      */
     fun budgetMs(route: AutoRoute): Long = when (route) {
         AutoRoute.AETHER -> ENGINE_QUICK_MS
+        AutoRoute.AETHER_H3_QUICK, AutoRoute.AETHER_H2_QUICK -> 75_000L
+        AutoRoute.AETHER_H3_FULL, AutoRoute.AETHER_H2_FULL -> 180_000L
+        AutoRoute.AETHER_AS_SET -> 300_000L
         AutoRoute.PSIPHON -> 330_000L
         AutoRoute.TOR_CUSTOM, AutoRoute.TOR_SNOWFLAKE -> 180_000L
         AutoRoute.TOR_OBFS4 -> 150_000L
         AutoRoute.TOR_DIRECT -> 90_000L
     }
-
-    private fun race(first: List<AutoRoute>, second: List<AutoRoute>) = AutoStep.Race(
-        listOf(Lane(first, 0L), Lane(second, SECOND_LANE_AFTER_MS)).filter { it.routes.isNotEmpty() },
-    )
 }
 
 /**
@@ -192,7 +284,7 @@ object RouteMemory {
 
     /** [stored] with [route] recorded for [network], keeping the most recent networks. */
     fun remember(stored: String?, network: String, route: AutoRoute, nowMs: Long): String {
-        val entries = decode(stored) + (network to Entry(route, nowMs))
+        val entries = decode(stored) + (network to Entry(route.remembersAs, nowMs))
         val json = JSONObject()
         entries.entries
             .sortedByDescending { it.value.atMs }
@@ -242,4 +334,7 @@ object NetworkKey {
             .digest(material.joinToString("|").toByteArray())
         return kind + ":" + digest.take(6).joinToString("") { "%02x".format(it) }
     }
+
+    /** True for a key [cellular] produced. */
+    fun isCellular(key: String): Boolean = key == "cell" || key.startsWith("cell:")
 }

@@ -100,39 +100,13 @@ class NetworkKeyTest {
 
 class AutomaticCarrierDefaultTest {
     @Test
-    fun aNewInstallStartsAutomatic() {
-        assertTrue(AppSettings().automaticCarrier)
-    }
+    fun automaticIsOffUntilChosen() {
+        // Opt-in until it has been confirmed on the filtered networks where
+        // 1.6.0, with it on by default, gave up on routes 1.5.0 got through.
+        val settings = AppSettings()
 
-    @Test
-    fun settingsStillOnTheOriginalDefaultsBecomeAutomatic() {
-        assertTrue(
-            AppSettings.automaticByDefault(
-                Carrier.AETHER,
-                null,
-                TunnelProtocol.AUTO,
-                EndpointMode.AUTOMATIC,
-            ),
-        )
-    }
-
-    @Test
-    fun aChosenCarrierOrChainIsLeftAlone() {
-        assertFalse(
-            AppSettings.automaticByDefault(Carrier.PSIPHON, null, TunnelProtocol.AUTO, EndpointMode.AUTOMATIC),
-        )
-        assertFalse(
-            AppSettings.automaticByDefault(Carrier.AETHER, Carrier.TOR, TunnelProtocol.AUTO, EndpointMode.AUTOMATIC),
-        )
-    }
-
-    @Test
-    fun aTunedAetherIsLeftAlone() {
-        assertFalse(
-            AppSettings.automaticByDefault(Carrier.AETHER, null, TunnelProtocol.WIREGUARD, EndpointMode.AUTOMATIC),
-        )
-        assertFalse(
-            AppSettings.automaticByDefault(Carrier.AETHER, null, TunnelProtocol.AUTO, EndpointMode.CUSTOM_ONLY),
-        )
+        assertFalse(settings.automaticCarrier)
+        // Which leaves the session exactly as 1.5.0 ran it: Aether alone.
+        assertEquals(listOf(Carrier.AETHER), settings.carrierPath)
     }
 }

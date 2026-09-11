@@ -92,6 +92,9 @@ class AetherCarrierClient(
     }
 
     override fun stop() {
+        // Stops a running engine. A search still inside prepare() is not
+        // reached by this or by cancelScan(), which belongs to the endpoint
+        // scanner; whoever stops this does not wait for it -- see raceLanes.
         runCatching { NativeAetherBridge.stop() }
         engine?.cancel()
         engine = null

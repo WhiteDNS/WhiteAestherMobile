@@ -15,63 +15,111 @@ class AutoPlannerTest {
     )
 
     @Test
-    fun aNewNetworkTriesAetherThenRacesTheCarriersThenSearchesHarder() {
+    fun aNewPhoneRacesEverythingFromTheTap() {
         val plan = AutoPlanner.plan(null, everything)
 
-        assertEquals(3, plan.size)
-        val first = plan[0] as AutoStep.Engine
-        assertEquals(AutoPlanner.ENGINE_QUICK_MS, first.budgetMs)
-        assertFalse(first.deep)
-
-        val race = plan[1] as AutoStep.Race
-        assertEquals(listOf(AutoRoute.PSIPHON), race.lanes[0].routes)
+        // One race, nothing before it: a cold Psiphon gets its whole window
+        // from the moment the user taps, not a minute later.
+        assertEquals(1, plan.size)
+        val race = plan[0] as AutoStep.Race
+        assertTrue(race.lanes[0].routes.all { it.racesEngine })
         assertEquals(0L, race.lanes[0].startAfterMs)
+        assertEquals(listOf(AutoRoute.PSIPHON), race.lanes[1].routes)
+        assertEquals(0L, race.lanes[1].startAfterMs)
         assertEquals(
             listOf(AutoRoute.TOR_SNOWFLAKE, AutoRoute.TOR_OBFS4, AutoRoute.TOR_DIRECT),
-            race.lanes[1].routes,
+            race.lanes[2].routes,
         )
-        // Joining Psiphon, not waiting for it: Psiphon alone can take minutes.
-        assertEquals(AutoPlanner.SECOND_LANE_AFTER_MS, race.lanes[1].startAfterMs)
-
-        assertTrue((plan[2] as AutoStep.Engine).deep)
+        assertEquals(AutoPlanner.SECOND_LANE_AFTER_MS, race.lanes[2].startAfterMs)
     }
 
     @Test
-    fun whereAetherWorkedBeforeItIsGivenLonger() {
-        val first = AutoPlanner.plan(AutoRoute.AETHER, everything)[0] as AutoStep.Engine
-
-        assertEquals(AutoPlanner.ENGINE_REMEMBERED_MS, first.budgetMs)
+    fun aetherRacesInBothFramingsQuickFirst() {
+        // The log that prompted this: a Wi-Fi network that carried QUIC and
+        // not TCP, where 1.6.0 tried only H2 before giving up on Aether.
+        assertEquals(
+            listOf(
+                AutoRoute.AETHER_H3_QUICK,
+                AutoRoute.AETHER_H2_QUICK,
+                AutoRoute.AETHER_H3_FULL,
+                AutoRoute.AETHER_H2_FULL,
+            ),
+            AutoPlanner.aetherLane(everything),
+        )
     }
 
     @Test
-    fun whereACarrierWorkedBeforeTheRaceComesFirst() {
-        val plan = AutoPlanner.plan(AutoRoute.PSIPHON, everything)
+    fun onMobileDataH2GoesFirst() {
+        assertEquals(
+            AutoRoute.AETHER_H2_QUICK,
+            AutoPlanner.aetherLane(everything.copy(onMobileData = true)).first(),
+        )
+    }
 
-        val race = plan[0] as AutoStep.Race
-        assertEquals(listOf(AutoRoute.PSIPHON), race.lanes[0].routes)
-        // Aether has most likely failed here already, so it goes after, with
-        // a budget large enough for its whole ladder.
-        assertEquals(AutoStep.Engine(AutoPlanner.ENGINE_LATE_MS, deep = false), plan[1])
+    @Test
+    fun theFramingThatConnectedLastGoesFirstWherever() {
+        assertEquals(
+            AutoRoute.AETHER_H2_QUICK,
+            AutoPlanner.aetherLane(everything.copy(provenFraming = "h2")).first(),
+        )
+        assertEquals(
+            AutoRoute.AETHER_H3_QUICK,
+            AutoPlanner.aetherLane(everything.copy(provenFraming = "h3", onMobileData = true)).first(),
+        )
+    }
+
+    @Test
+    fun aFixedTransportRacesAsTheUserSetIt() {
+        assertEquals(
+            listOf(AutoRoute.AETHER_AS_SET),
+            AutoPlanner.aetherLane(everything.copy(engineCanSearchDeeper = false)),
+        )
+    }
+
+    @Test
+    fun whereAetherWorkedTheDirectEngineGoesFirstThenTheRace() {
+        val plan = AutoPlanner.plan(AutoRoute.AETHER, everything)
+
+        assertEquals(AutoStep.Engine(AutoPlanner.ENGINE_REMEMBERED_MS, deep = false), plan[0])
+        assertTrue(plan[1] is AutoStep.Race)
         assertEquals(2, plan.size)
     }
 
     @Test
-    fun aRememberedTorRouteLeadsItsLaneAndPsiphonJoinsLater() {
+    fun anEngineThatHasConnectedOnThisPhoneGoesFirstOnANewNetwork() {
+        val options = everything.copy(engineWorkedBefore = true)
+
+        assertTrue(AutoPlanner.plan(null, options)[0] is AutoStep.Engine)
+        // What this network is remembered for still decides.
+        assertEquals(1, AutoPlanner.plan(AutoRoute.PSIPHON, options).size)
+    }
+
+    @Test
+    fun anyAetherWinIsRememberedAsTheDirectEngine() {
+        AutoRoute.entries.filter { it.racesEngine }.forEach {
+            assertEquals(AutoRoute.AETHER, it.remembersAs)
+        }
+        val stored = RouteMemory.remember(null, "wifi:a", AutoRoute.AETHER_H3_QUICK, 1L)
+        assertEquals(AutoRoute.AETHER, RouteMemory.recall(stored, "wifi:a", 2L))
+    }
+
+    @Test
+    fun aRememberedTorRouteLeadsAndPsiphonJoinsLater() {
         val race = AutoPlanner.plan(AutoRoute.TOR_OBFS4, everything)[0] as AutoStep.Race
 
         assertEquals(
             listOf(AutoRoute.TOR_OBFS4, AutoRoute.TOR_SNOWFLAKE, AutoRoute.TOR_DIRECT),
             race.lanes[0].routes,
         )
-        assertEquals(listOf(AutoRoute.PSIPHON), race.lanes[1].routes)
-        assertEquals(AutoPlanner.SECOND_LANE_AFTER_MS, race.lanes[1].startAfterMs)
+        assertEquals(listOf(AutoRoute.PSIPHON), race.lanes[2].routes)
+        assertEquals(AutoPlanner.SECOND_LANE_AFTER_MS, race.lanes[2].startAfterMs)
     }
 
     @Test
     fun bridgesTheUserWasGivenComeBeforeAnyPublicOne() {
-        val race = AutoPlanner.plan(null, everything.copy(hasCustomBridges = true))[1] as AutoStep.Race
+        val race = AutoPlanner.plan(null, everything.copy(hasCustomBridges = true))[0] as AutoStep.Race
 
-        assertEquals(AutoRoute.TOR_CUSTOM, race.lanes[1].routes.first())
+        assertEquals(AutoRoute.TOR_CUSTOM, race.lanes[2].routes.first())
     }
 
     @Test
@@ -79,13 +127,13 @@ class AutoPlannerTest {
         val race = AutoPlanner.plan(
             null,
             everything.copy(transportsAvailable = false, hasCustomBridges = true),
-        )[1] as AutoStep.Race
+        )[0] as AutoStep.Race
 
-        assertEquals(listOf(AutoRoute.TOR_DIRECT), race.lanes[1].routes)
+        assertEquals(listOf(AutoRoute.TOR_DIRECT), race.lanes[2].routes)
     }
 
     @Test
-    fun proxyOnlyCanOnlyTryTheEngine() {
+    fun proxyOnlyCanOnlyRunTheEngineDirectly() {
         val options = everything.copy(wholeDevice = false)
 
         assertEquals(listOf(AutoRoute.AETHER), AutoPlanner.offeredRoutes(options))
@@ -110,13 +158,13 @@ class AutoPlannerTest {
     }
 
     @Test
-    fun theEngineIsNeverRacedAndNoCarrierRunsTwiceAtOnce() {
+    fun theDirectEngineIsNeverRacedAndNoCarrierRunsTwiceAtOnce() {
         everyPlan { plan ->
             plan.filterIsInstance<AutoStep.Race>().forEach { race ->
+                assertTrue(race.lanes.none { AutoRoute.AETHER in it.routes })
                 val carriers = race.lanes.map { lane -> lane.routes.map { it.carrier }.toSet() }
-                assertTrue(carriers.none { Carrier.AETHER in it })
-                // One tor and one Psiphon: lanes run side by side, so two lanes
-                // sharing a carrier would start it twice.
+                // One engine, one tor, one Psiphon: lanes run side by side, so
+                // two lanes sharing a carrier would start it twice.
                 assertTrue(carriers.all { it.size == 1 })
                 assertEquals(carriers.size, carriers.flatten().toSet().size)
             }
@@ -124,11 +172,7 @@ class AutoPlannerTest {
     }
 
     @Test
-    fun twoEngineStepsNeverFollowEachOther() {
-        // Back to back, the second engine session can start while the first is
-        // still inside a call the leash could not interrupt. The only pair
-        // allowed is a quick search then a thorough one, and only where there
-        // is no race to put between them.
+    fun twoDirectEngineStepsFollowEachOtherOnlyWhereNothingCanRace() {
         everyPlan { plan ->
             plan.zipWithNext()
                 .filter { (a, b) -> a is AutoStep.Engine && b is AutoStep.Engine }
@@ -141,21 +185,32 @@ class AutoPlannerTest {
     }
 
     @Test
-    fun everyPlanTriesSomethingAndEveryRouteHasABudget() {
-        everyPlan { plan -> assertTrue(plan.isNotEmpty()) }
-        AutoRoute.entries.forEach { assertTrue(AutoPlanner.budgetMs(it) > 0) }
-        // tunnel-core's own window, which users watched Psiphon's app need.
+    fun budgetsCoverTheEnginesOwnSearches() {
+        // Its own deadlines: 45 s quick, 120 s balanced, before registration
+        // and the connect after. 1.6.0 cut a 300 s thorough search off at
+        // 180 s, so its last step could never find anything.
+        assertTrue(AutoPlanner.budgetMs(AutoRoute.AETHER_H3_QUICK) >= 60_000L)
+        assertTrue(AutoPlanner.budgetMs(AutoRoute.AETHER_H3_FULL) >= 150_000L)
+        assertTrue(AutoPlanner.ENGINE_REMEMBERED_MS >= 150_000L)
+        // tunnel-core's own window, which a cold Psiphon needs.
         assertTrue(AutoPlanner.budgetMs(AutoRoute.PSIPHON) >= 300_000L)
+        AutoRoute.entries.forEach { assertTrue(AutoPlanner.budgetMs(it) > 0) }
+    }
+
+    @Test
+    fun everyPlanTriesSomething() {
+        everyPlan { plan -> assertTrue(plan.isNotEmpty()) }
     }
 
     private fun everyPlan(check: (List<AutoStep>) -> Unit) {
         val flags = listOf(true, false)
         for (wholeDevice in flags) for (chain in flags) for (transports in flags)
-            for (bridges in flags) for (deeper in flags) {
-                val options = AutoOptions(wholeDevice, chain, transports, bridges, deeper)
-                (AutoRoute.entries + listOf(null)).forEach { remembered ->
-                    check(AutoPlanner.plan(remembered, options))
+            for (bridges in flags) for (deeper in flags) for (worked in flags)
+                for (mobile in flags) for (proven in listOf(null, "h2", "h3")) {
+                    val options = AutoOptions(wholeDevice, chain, transports, bridges, deeper, worked, proven, mobile)
+                    (AutoRoute.entries + listOf(null)).forEach { remembered ->
+                        check(AutoPlanner.plan(remembered, options))
+                    }
                 }
-            }
     }
 }
