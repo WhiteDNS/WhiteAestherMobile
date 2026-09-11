@@ -537,8 +537,9 @@ class AetherVpnService : VpnService() {
     /**
      * How long to give this carrier before calling it a failure.
      *
-     * Not one number for all of them. Psiphon races a dozen protocols and is
-     * either up in seconds or not coming; tor fetches a consensus and builds a
+     * Not one number for all of them. Psiphon races a dozen protocols, and on
+     * a filtered network that race can take minutes -- the two minutes this
+     * used to allow was shorter than users saw Psiphon's own app need; tor fetches a consensus and builds a
      * circuit through three relays, and on a filtered network spends most of
      * that working out which directory authorities it can reach. A timeout set
      * for the first would report the second broken for working normally.
@@ -558,6 +559,39 @@ class AetherVpnService : VpnService() {
         runCatching { psiphonClient?.stop() }
         runCatching { torClient?.stop() }
         runCatching { aetherCarrier?.stop() }
+    }
+
+    /**
+     * Whether Android is refusing traffic that does not go through a VPN.
+     *
+     * A question about the carriers, not the engine, because of where they
+     * run. The engine protects its own sockets. Psiphon and Tor run in
+     * processes of their own, cannot reach protect(), and get out only because
+     * this package is excluded from its own interface -- and under lockdown
+     * Android may block an excluded app outright, which leaves the carrier with
+     * no network and nothing in its own logs to say so.
+     */
+    private fun lockdownHint(): String? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && isLockdownEnabled) {
+            sayNow(R.string.err_carrier_lockdown_hint)
+        } else {
+            null
+        }
+
+    /**
+     * A carrier failure, with whatever this app knows that might explain it.
+     *
+     * Two things, both of which a user can change and neither of which the
+     * carrier itself can see: lockdown, and a Psiphon exit country, which
+     * tunnel-core treats as the only country to try rather than a preference.
+     */
+    private fun withCarrierHint(reason: String): String {
+        val hints = listOfNotNull(
+            lockdownHint(),
+            psiphonRegion.takeIf { Carrier.PSIPHON in hops && it.isNotBlank() }
+                ?.let { sayNow(R.string.err_psiphon_region_hint, it.uppercase(java.util.Locale.US)) },
+        )
+        return if (hints.isEmpty()) reason else reason + " \u2014 " + hints.joinToString(" ")
     }
 
     /**
@@ -629,13 +663,6 @@ class AetherVpnService : VpnService() {
         }
 
     /**
-     * A failure with the hop that produced it named.
-     *
-     * With one carrier the name is noise. With two it is the whole message: the
-     * user is about to decide which end to change, and "the carrier failed" does
-     * not say which end that is.
-     */
-    /**
      * The path, written the way the user chose it.
      *
      * Naming only the first carrier would be true and useless: with two hops
@@ -694,6 +721,13 @@ class AetherVpnService : VpnService() {
         hopStages[hop] = stage
     }
 
+    /**
+     * A failure with the hop that produced it named.
+     *
+     * With one carrier the name is noise. With two it is the whole message: the
+     * user is about to decide which end to change, and "the carrier failed" does
+     * not say which end that is.
+     */
     private fun hopFailure(hop: Carrier, reason: String): String =
         if (hops.size > 1) "${sayNow(hop.label)}: $reason" else reason
 
@@ -706,6 +740,9 @@ class AetherVpnService : VpnService() {
     ) {
         val name = hops.joinToString(" -> ") { it.wireName }
         EngineLog.record(LogLevel.INFO, "carrier", "carrying this session on $name")
+        if (lockdownHint() != null) {
+            EngineLog.record(LogLevel.WARN, "carrier", "always-on VPN lockdown is on; $name may have no network")
+        }
         startEngineLogPump(sessionGeneration)
 
         // Whole-device only, and refused rather than quietly substituted. In
@@ -789,7 +826,7 @@ class AetherVpnService : VpnService() {
 
             port = client.start(carrierWaitMs(hop)).getOrElse { error ->
                 markHop(hop, CarrierStage.FAILED)
-                val reason = hopFailure(hop, error.message ?: sayNow(R.string.err_carrier_failed))
+                val reason = hopFailure(hop, withCarrierHint(error.message ?: sayNow(R.string.err_carrier_failed)))
                 EngineLog.record(LogLevel.ERROR, "carrier", reason)
                 stopCarrier()
                 runCatching { tun.close() }
@@ -1702,7 +1739,8 @@ class AetherVpnService : VpnService() {
         // Psiphon establishes over a network that is actively hostile to it,
         // and its own timeout is two minutes. Ours has to be the longer of
         // the two or we would tear down a tunnel that was about to arrive.
-        private const val PSIPHON_WAIT_MS = 150_000L
+        // tunnel-core's own establish window, with room for it to report.
+        private const val PSIPHON_WAIT_MS = 330_000L
         private const val PREFS_NAME = "aether_service"
         // How long the chain waits for the tunnel it dials its nodes through.
         // Generous, because that tunnel is itself still searching for a route.

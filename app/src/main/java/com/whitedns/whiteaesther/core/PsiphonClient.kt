@@ -9,6 +9,8 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
+import com.whitedns.whiteaesther.service.EngineLog
+import com.whitedns.whiteaesther.service.LogLevel
 import com.whitedns.whiteaesther.service.PsiphonService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -40,6 +42,18 @@ class PsiphonClient(
     private val incoming = Messenger(
         object : Handler(Looper.getMainLooper()) {
             override fun handleMessage(message: Message) {
+                if (message.what == PsiphonService.MSG_NOTICE) {
+                    // Written here, in the process whose log the report reads.
+                    // The service's own EngineLog is a separate copy nobody sees.
+                    message.peekData()?.getString(PsiphonService.EXTRA_NOTICE)?.let { text ->
+                        EngineLog.record(
+                            if (message.arg1 == 1) LogLevel.WARN else LogLevel.INFO,
+                            "psiphon",
+                            text,
+                        )
+                    }
+                    return
+                }
                 if (message.what != PsiphonService.MSG_STATE) {
                     super.handleMessage(message)
                     return
