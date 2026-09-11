@@ -93,6 +93,7 @@ function Test-ServerList([string]$list) {
 
     $savedPreference = $ErrorActionPreference
     $savedCgo = $env:CGO_ENABLED
+    $savedToolchain = $env:GOTOOLCHAIN
     Push-Location $checkout
     try {
         # Go writes progress to stderr; that is not a failure, the exit code is.
@@ -100,23 +101,35 @@ function Test-ServerList([string]$list) {
         # The host's own toolchain, whatever the build is targeting.
         $env:CGO_ENABLED = '0'
         Remove-Item Env:GOOS, Env:GOARCH -ErrorAction SilentlyContinue
-        # proxy.golang.org drops connections mid-download often enough to have
-        # cost a release once. Fetch up front, and retry.
+        # tunnel-core v2.0.41 declares go 1.26.0. The workflows install an older
+        # Go for the rest of the build and set GOTOOLCHAIN=local, which makes Go
+        # refuse the module outright rather than fetch the toolchain it names.
+        # Auto, for this step only, lets it fetch exactly that toolchain without
+        # moving the chain engine or the transports onto a Go they were not
+        # built with. Its dependencies are vendored, so nothing else is fetched.
+        $env:GOTOOLCHAIN = 'auto'
+        # A verdict is final; anything else is Go failing to get as far as one --
+        # most often a toolchain download proxy.golang.org dropped mid-stream --
+        # and is worth another try. Never retried away: an answer of N/430.
+        $verdict = 'server entries verify against the signature key'
         foreach ($attempt in 1..3) {
-            go mod download 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) { break }
-            if ($attempt -eq 3) { throw "go mod download failed for psiphon-tunnel-core" }
+            $out = (go run ./zz_whiteaesther_verify $list $keyFile 2>&1 | Out-String).Trim()
+            $code = $LASTEXITCODE
+            if ($code -eq 0 -or $out.Contains($verdict) -or $attempt -eq 3) { break }
+            Write-Host "  the verifier did not run (attempt $attempt of 3); retrying" -ForegroundColor Yellow
             Start-Sleep -Seconds (5 * $attempt)
         }
-        $out = (go run ./zz_whiteaesther_verify $list $keyFile 2>&1 | Out-String).Trim()
-        $code = $LASTEXITCODE
     } finally {
         Pop-Location
         $ErrorActionPreference = $savedPreference
         $env:CGO_ENABLED = $savedCgo
+        $env:GOTOOLCHAIN = $savedToolchain
         Remove-Item $probe -Recurse -Force -ErrorAction SilentlyContinue
     }
 
+    if ($code -ne 0 -and -not $out.Contains($verdict)) {
+        throw "The Psiphon signature check could not run: $out"
+    }
     if ($code -ne 0) {
         throw ("The Psiphon server list does not verify against the signature key the app ships with. " +
             "Either Psiphon rotated the key or the list is not Psiphon's; refusing it.`n$out")
