@@ -87,7 +87,16 @@ pub async fn connect_tcp(peer: std::net::SocketAddr) -> Result<tokio::net::TcpSt
     };
     let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP)).map_err(AetherError::Io)?;
     socket.set_nonblocking(true).map_err(AetherError::Io)?;
-    protect(&socket)?;
+    // Not when the connection never leaves the device. Protection binds a
+    // socket to the network under the tunnel, which is exactly right for
+    // everything the engine dials outward and exactly wrong for loopback: a
+    // socket bound to Wi-Fi cannot reach 127.0.0.1, and Android reports that as
+    // a refused connection rather than as an unreachable one. An upstream proxy
+    // running on this device is dialled through here, so protecting it made
+    // every local proxy look like a proxy that was not running.
+    if !peer.ip().is_loopback() {
+        protect(&socket)?;
+    }
     match socket.connect(&peer.into()) {
         Ok(()) => {}
         Err(error)

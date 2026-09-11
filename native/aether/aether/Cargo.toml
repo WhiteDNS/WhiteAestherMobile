@@ -23,7 +23,13 @@ boring = "4.22"
 foreign-types-shared = "0.3"
 libc = "0.2"
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "io-std", "signal"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies"] }
+# "socks" because registration is the one request that goes out through
+# reqwest rather than through this crate's own dialler, and Upstream
+# hands it a socks5:// proxy. Without the feature Proxy::all still accepts
+# the URL and every request through it then fails instantly with a bare
+# "error sending request" -- a proxy that looks configured and carries
+# nothing.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies", "socks"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1"

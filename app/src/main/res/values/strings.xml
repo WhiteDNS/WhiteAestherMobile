@@ -460,7 +460,14 @@
     <string name="carrier_aether">Aether</string>
     <string name="carrier_psiphon">Psiphon</string>
     <string name="carrier">Carrier</string>
-    <string name="carrier_subtitle">Which engine carries the tunnel</string>
+    <string name="carrier_subtitle">Which engines carry the tunnel, and in what order</string>
+    <string name="carrier_first">First — what your network sees</string>
+    <string name="carrier_then">Then — what the internet sees</string>
+    <string name="carrier_second_none">Nothing further</string>
+    <string name="carrier_second_none_detail">One carrier. The fastest, and what most connections want.</string>
+    <string name="carrier_swap">Swap the order</string>
+    <string name="carrier_chain_h2_note">Behind another carrier Aether uses H2, the only transport a proxy can carry. The protocol below does not apply here.</string>
+    <string name="carrier_chain_snowflake_note">Snowflake cannot run behind another carrier, so Tor connects directly here. Choose a different bridge if direct is blocked.</string>
     <string name="carrier_aether_detail">MASQUE over Cloudflare. The fastest path, and the one everything else here is built around.</string>
     <string name="carrier_psiphon_detail">Psiphon’s own network. Slower, and someone else’s servers — for networks Aether cannot get out of.</string>
     <string name="carrier_needs_chain_notice">This build cannot run Psiphon: the routing library it needs is missing.</string>
@@ -469,6 +476,7 @@
     <string name="status_carrier_connecting">%1$s is looking for a way out. This can take a minute.</string>
     <string name="err_carrier_lockdown_hint">Always-on VPN with “Block connections without VPN” is on. In that mode Android may give Psiphon and Tor no network — turn it off in Android settings and try again.</string>
     <string name="err_psiphon_region_hint">Exit country %1$s is set, and Psiphon tries only that country. Choose Best available if it will not connect.</string>
+    <string name="carrier_path_join">", then "</string>
     <string name="status_carrier_carries">Connected through %1$s</string>
     <string name="err_carrier_whole_device_only">Psiphon cannot run in proxy-only mode</string>
     <string name="err_carrier_needs_chain">This build cannot route Psiphon: the chain library is missing</string>

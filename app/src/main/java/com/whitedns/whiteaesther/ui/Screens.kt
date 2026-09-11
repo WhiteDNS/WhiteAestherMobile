@@ -64,6 +64,9 @@ import com.whitedns.whiteaesther.IdentityMessage
 import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.data.AppLanguage
 import com.whitedns.whiteaesther.data.AppSettings
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
+import com.whitedns.whiteaesther.core.CarrierStage
 import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.core.TorBridges
 import com.whitedns.whiteaesther.data.TorBridge
@@ -78,6 +81,7 @@ import com.whitedns.whiteaesther.data.ThemeMode
 import com.whitedns.whiteaesther.data.TunnelProtocol
 import com.whitedns.whiteaesther.data.UpdateChecker
 import com.whitedns.whiteaesther.service.EngineStage
+import com.whitedns.whiteaesther.service.HopStatus
 import com.whitedns.whiteaesther.service.EngineStatus
 import com.whitedns.whiteaesther.service.LogEntry
 import com.whitedns.whiteaesther.service.LogLevel
@@ -188,6 +192,61 @@ internal fun ScreenColumn(content: @Composable ColumnScopeAlias.() -> Unit) {
 }
 
 // ------------------------------------------------------------------ home ----
+
+/**
+ * The carrier path, hop by hop, and how far each one has got.
+ *
+ * Only worth showing when there are two. With one carrier this would repeat
+ * the card the user set it on; with two it is the one thing worth reading when
+ * a session will not come up, because "it did not connect" does not say which
+ * end to change.
+ *
+ * The arrow follows the layout direction rather than being drawn once and left
+ * to point the wrong way in Persian, where the row itself is laid out from the
+ * right and the first hop is the rightmost.
+ */
+@Composable
+private fun CarrierPathRow(path: List<HopStatus>, modifier: Modifier = Modifier) {
+    val colors = AetherTheme.colors
+    val arrow = if (LocalLayoutDirection.current == LayoutDirection.Rtl) "\u2190" else "\u2192"
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp, Alignment.CenterHorizontally),
+    ) {
+        path.forEachIndexed { index, hop ->
+            if (index > 0) {
+                Text(arrow, style = AetherTheme.type.Label, color = colors.text3)
+            }
+            val tint = when (hop.stage) {
+                CarrierStage.CONNECTED -> colors.signalLive
+                CarrierStage.FAILED -> colors.signalFailed
+                CarrierStage.CONNECTING -> colors.signalWorking
+                CarrierStage.STOPPED -> colors.text3
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    hop.carrier.wireName.take(3).uppercase(),
+                    style = AetherTheme.type.Label,
+                    color = tint,
+                )
+                Text(
+                    when (hop.stage) {
+                        CarrierStage.CONNECTED -> "\u2713"
+                        CarrierStage.FAILED -> "\u2715"
+                        CarrierStage.CONNECTING -> "\u2026"
+                        CarrierStage.STOPPED -> "\u00b7"
+                    },
+                    style = AetherTheme.type.Label,
+                    color = tint,
+                )
+            }
+        }
+    }
+}
 
 @Composable
 fun HomeScreen(
@@ -326,6 +385,10 @@ fun HomeScreen(
                 color = if (status.stage == EngineStage.ERROR) colors.signalFailed else colors.text2,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
+            if (status.path.size > 1) {
+                Spacer(Modifier.height(10.dp))
+                CarrierPathRow(status.path)
+            }
         }
 
         Spacer(Modifier.height(16.dp))
@@ -658,6 +721,14 @@ private fun countryName(code: String, locale: java.util.Locale): String =
         .getDisplayCountry(locale)
         .ifBlank { code.uppercase() }
 
+/** What each carrier is, in the one sentence the card has room for. */
+@Composable
+private fun carrierDetail(carrier: Carrier): String = when (carrier) {
+    Carrier.AETHER -> stringResource(R.string.carrier_aether_detail)
+    Carrier.PSIPHON -> stringResource(R.string.carrier_psiphon_detail)
+    Carrier.TOR -> stringResource(R.string.carrier_tor_detail)
+}
+
 @Composable
 fun RoutesScreen(
     settings: AppSettings,
@@ -735,36 +806,105 @@ fun RoutesScreen(
                 stringResource(R.string.carrier),
                 stringResource(R.string.carrier_subtitle),
             )
+            // Two lists rather than one, because the pair is ordered and a pair
+            // written side by side does not say which end is which. The labels
+            // do the work an arrow would: what the network sees, and what the
+            // internet sees.
             Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                SectionLabel(
+                    stringResource(R.string.carrier_first),
+                    Modifier.padding(start = 4.dp, bottom = 4.dp),
+                )
                 Carrier.entries.forEach { carrier ->
                     OptionRow(
                         code = carrier.wireName.take(3).uppercase(),
                         title = stringResource(carrier.label),
-                        subtitle = when (carrier) {
-                            Carrier.AETHER -> stringResource(R.string.carrier_aether_detail)
-                            Carrier.PSIPHON -> stringResource(R.string.carrier_psiphon_detail)
-                            Carrier.TOR -> stringResource(R.string.carrier_tor_detail)
-                        },
+                        subtitle = carrierDetail(carrier),
                         selected = settings.carrier == carrier,
                         // OptionRow tags itself from the title, so this row is
                         // reachable in a test as option-aether / option-psiphon.
-                        onClick = { onSettingsChange(settings.copy(carrier = carrier)) },
+                        onClick = {
+                            // A carrier chained to itself is a hop to nowhere,
+                            // so taking one for the first position gives up the
+                            // second rather than leaving an impossible pair.
+                            onSettingsChange(
+                                settings.copy(
+                                    carrier = carrier,
+                                    secondCarrier = settings.secondCarrier?.takeIf { it != carrier },
+                                ),
+                            )
+                        },
                     )
                 }
             }
+
+            Divider()
+
+            Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                SectionLabel(
+                    stringResource(R.string.carrier_then),
+                    Modifier.padding(start = 4.dp, bottom = 4.dp),
+                )
+                OptionRow(
+                    code = null,
+                    title = stringResource(R.string.carrier_second_none),
+                    subtitle = stringResource(R.string.carrier_second_none_detail),
+                    selected = settings.secondCarrier == null,
+                    onClick = { onSettingsChange(settings.copy(secondCarrier = null)) },
+                )
+                Carrier.entries.filter { it != settings.carrier }.forEach { carrier ->
+                    OptionRow(
+                        code = carrier.wireName.take(3).uppercase(),
+                        title = stringResource(carrier.label),
+                        subtitle = carrierDetail(carrier),
+                        selected = settings.secondCarrier == carrier,
+                        onClick = { onSettingsChange(settings.copy(secondCarrier = carrier)) },
+                    )
+                }
+            }
+
+            // One tap, because trying the other order is the whole point of
+            // offering two. Behind two menus nobody tries it.
+            val second = settings.secondCarrier
+            if (second != null) {
+                OutlineButton(
+                    text = stringResource(R.string.carrier_swap),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 13.dp, vertical = 2.dp),
+                    icon = AetherIcons.Traffic,
+                    onClick = {
+                        onSettingsChange(
+                            settings.copy(carrier = second, secondCarrier = settings.carrier),
+                        )
+                    },
+                )
+            }
+
             // Said here rather than left for the user to discover at connect
             // time. Everything below this card -- the endpoint, the protocol,
             // the discovery depth -- describes a search for a Cloudflare
-            // gateway, and a carrier that never looks for one makes all of it
+            // gateway, and a path that never looks for one makes all of it
             // inert. A screen full of controls that quietly do nothing is worse
             // than a sentence saying so.
-            if (!settings.carrier.usesEngine) {
-                // Padded to the card's own inset. Note adds only 2dp of its
-                // own, which is right inside a column that already has padding
-                // and wrong here, where it is a direct child of the card and
-                // the text ends up sitting on the border.
+            //
+            // Padded to the card's own inset. Note adds only 2dp of its own,
+            // which is right inside a column that already has padding and wrong
+            // here, where it is a direct child of the card and the text would
+            // sit on the border.
+            val note = when {
+                settings.carrierPath.none { it.usesEngine } ->
+                    stringResource(R.string.carrier_not_engine_note)
+                // Aether behind something else cannot use the transports that
+                // are datagrams, so the protocol control below is not what this
+                // session will run.
+                second?.usesEngine == true -> stringResource(R.string.carrier_chain_h2_note)
+                else -> null
+            }
+            if (note != null) Note(note, Modifier.padding(horizontal = 13.dp))
+            if (second == Carrier.TOR && settings.torBridge == TorBridge.SNOWFLAKE) {
                 Note(
-                    stringResource(R.string.carrier_not_engine_note),
+                    stringResource(R.string.carrier_chain_snowflake_note),
                     Modifier.padding(horizontal = 13.dp),
                 )
             }
@@ -774,7 +914,11 @@ fun RoutesScreen(
         // Before the first connection there is nothing to list, and a picker
         // showing every country in the world would be offering exits that may
         // not exist.
-        if (settings.carrier == Carrier.PSIPHON) {
+        // Whichever position Psiphon is in. A control that appears only
+        // when a carrier is first is one that vanishes when the user swaps
+        // the order, and the exit country still decides where the session
+        // leaves from when Psiphon is the last hop.
+        if (Carrier.PSIPHON in settings.carrierPath) {
             Spacer(Modifier.height(12.dp))
             AetherCard {
                 CardHead(
@@ -819,7 +963,7 @@ fun RoutesScreen(
         // Psiphon picks its own protocols and gives no say in it, and offering
         // a control that belongs to one carrier under all of them is how a
         // screen stops meaning anything.
-        if (settings.carrier == Carrier.TOR) {
+        if (Carrier.TOR in settings.carrierPath) {
             Spacer(Modifier.height(12.dp))
             AetherCard {
                 CardHead(

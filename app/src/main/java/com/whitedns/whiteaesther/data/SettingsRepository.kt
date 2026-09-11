@@ -19,6 +19,8 @@ class SettingsRepository(private val context: Context) {
             proxyPort = preferences[PROXY_PORT]?.coerceIn(1_024, 65_535) ?: 1819,
             transport = enumValueOrDefault(preferences[TRANSPORT], TunnelProtocol.AUTO),
             carrier = enumValueOrDefault(preferences[CARRIER], Carrier.AETHER),
+            secondCarrier = preferences[SECOND_CARRIER]
+                ?.let { name -> Carrier.entries.firstOrNull { it.name == name } },
             psiphonRegion = preferences[PSIPHON_REGION].orEmpty(),
             torBridge = enumValueOrDefault(preferences[TOR_BRIDGE], TorBridge.NONE),
             torBridges = preferences[TOR_BRIDGES].orEmpty(),
@@ -65,6 +67,15 @@ class SettingsRepository(private val context: Context) {
             preferences[PROXY_PORT] = settings.proxyPort
             preferences[TRANSPORT] = settings.transport.name
             preferences[CARRIER] = settings.carrier.name
+            // Removed rather than written empty: absent is what "one carrier"
+            // means, and a blank string would have to be spelled out as such
+            // everywhere it is read.
+            val second = settings.secondCarrier
+            if (second == null) {
+                preferences.remove(SECOND_CARRIER)
+            } else {
+                preferences[SECOND_CARRIER] = second.name
+            }
             preferences[PSIPHON_REGION] = settings.psiphonRegion
             preferences[TOR_BRIDGE] = settings.torBridge.name
             preferences[TOR_BRIDGES] = settings.torBridges
@@ -109,6 +120,7 @@ class SettingsRepository(private val context: Context) {
         val PROXY_PORT = intPreferencesKey("proxy_port")
         val TRANSPORT = stringPreferencesKey("transport")
         val CARRIER = stringPreferencesKey("carrier")
+        val SECOND_CARRIER = stringPreferencesKey("second_carrier")
         val PSIPHON_REGION = stringPreferencesKey("psiphon_region")
         val TOR_BRIDGE = stringPreferencesKey("tor_bridge")
         val TOR_BRIDGES = stringPreferencesKey("tor_bridges")

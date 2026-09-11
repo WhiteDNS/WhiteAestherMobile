@@ -1,5 +1,7 @@
 package com.whitedns.whiteaesther.service
 
+import com.whitedns.whiteaesther.core.CarrierStage
+import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.EngineMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -12,6 +14,12 @@ enum class EngineStage {
     STOPPING,
     ERROR,
 }
+
+/** One hop of the carrier path, and how far it has got. */
+data class HopStatus(
+    val carrier: Carrier,
+    val stage: CarrierStage,
+)
 
 data class EngineStatus(
     val stage: EngineStage = EngineStage.IDLE,
@@ -40,6 +48,15 @@ data class EngineStatus(
      * app, and it is the carrier's own listener, so it costs nothing extra.
      */
     val carrierSocksPort: Int? = null,
+    /**
+     * How far each hop of the carrier path has got, in the order it is dialled.
+     *
+     * Empty unless there are at least two, because with one carrier there is
+     * nothing to disambiguate. With two, "it did not connect" is not a usable
+     * thing to tell someone who is about to decide which end to change: the
+     * screen has to say which hop is still waiting and which one went.
+     */
+    val path: List<HopStatus> = emptyList(),
 )
 
 object EngineStatusStore {

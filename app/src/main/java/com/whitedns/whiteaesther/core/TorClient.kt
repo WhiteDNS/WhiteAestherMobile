@@ -29,6 +29,8 @@ class TorClient(
     private val context: Context,
     private val bridge: TorBridge,
     private val customBridges: String,
+    /** A loopback SOCKS5 port to dial out through, or 0 to dial the network. */
+    private val upstreamPort: Int = 0,
 ) : CarrierClient {
     private val mutableState = MutableStateFlow(CarrierSnapshot())
     override val state = mutableState
@@ -65,7 +67,8 @@ class TorClient(
             Intent(context, TorCarrierService::class.java)
                 .setAction(TorCarrierService.ACTION_START)
                 .putExtra(TorCarrierService.EXTRA_BRIDGE, bridge.wireName)
-                .putExtra(TorCarrierService.EXTRA_BRIDGES, customBridges),
+                .putExtra(TorCarrierService.EXTRA_BRIDGES, customBridges)
+                .putExtra(TorCarrierService.EXTRA_UPSTREAM, upstreamPort),
         )
 
         val settled = withTimeoutOrNull(timeoutMs) {

@@ -270,6 +270,20 @@ data class AppSettings(
      */
     val carrier: Carrier = Carrier.AETHER,
     /**
+     * A second carrier for the first one to dial through, if any.
+     *
+     * The pair is ordered and the order is the whole point: [carrier] is
+     * what the network sees, this is what the internet sees, and which way
+     * round works is a property of the network rather than something that
+     * can be decided here. So both directions are offered and the user is
+     * expected to try them.
+     *
+     * Null is a single carrier, and a single Aether carrier is the path
+     * this app has always taken -- engine on the interface, no chain, no
+     * second process. Nothing about that changes when this is null.
+     */
+    val secondCarrier: Carrier? = null,
+    /**
      * How Tor reaches its first hop, when Tor is the carrier.
      *
      * Direct by default, which is both the fastest and the one that fails on
@@ -548,6 +562,16 @@ data class AppSettings(
      * behind without an address is what [endpointProtocolMismatch] reads to
      * accuse a pin that no longer exists. They move together or not at all.
      */
+    /**
+     * The carriers this session would run, the one the network sees first.
+     *
+     * One entry is the ordinary case; two is a chain. Written as a list because
+     * everything downstream asks list questions of it -- does any hop use the
+     * engine, which hop carries the traffic out -- and answering those from two
+     * nullable fields is where the two drift apart.
+     */
+    val carrierPath: List<Carrier> get() = listOfNotNull(carrier, secondCarrier)
+
     fun withoutPinnedEndpoint(): AppSettings = copy(
         endpointMode = EndpointMode.AUTOMATIC,
         customEndpoint = "",

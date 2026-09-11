@@ -146,6 +146,7 @@ class TorCarrierService : android.app.Service() {
                     ?: TorBridge.NONE,
                 intent.getStringExtra(EXTRA_COUNTRY),
                 intent.getStringExtra(EXTRA_BRIDGES).orEmpty(),
+                intent.getIntExtra(EXTRA_UPSTREAM, 0),
             )
             ACTION_STOP -> {
                 stopTor()
@@ -162,7 +163,12 @@ class TorCarrierService : android.app.Service() {
         super.onDestroy()
     }
 
-    private fun start(bridge: TorBridge, exitCountry: String?, customBridges: String) {
+    private fun start(
+        bridge: TorBridge,
+        exitCountry: String?,
+        customBridges: String,
+        upstreamPort: Int,
+    ) {
         if (started) return
         started = true
         state = State.CONNECTING
@@ -206,7 +212,7 @@ class TorCarrierService : android.app.Service() {
             // startup. TorService owns torrc-defaults -- that is where the
             // SOCKS port lands -- so this is the file for everything else.
             TorService.getTorrc(this).writeText(
-                TorConfig.render(bridge, exitCountry, listening, customBridges),
+                TorConfig.render(bridge, exitCountry, listening, customBridges, upstreamPort),
             )
         }.onFailure { error ->
             fail("Could not write tor's configuration: ${error.message}")
@@ -345,6 +351,7 @@ class TorCarrierService : android.app.Service() {
         const val EXTRA_COUNTRY = "country"
         const val EXTRA_BRIDGE = "bridge"
         const val EXTRA_BRIDGES = "bridges"
+        const val EXTRA_UPSTREAM = "upstream"
         const val EXTRA_FAILURE = "failure"
 
         const val MSG_REGISTER = 1
