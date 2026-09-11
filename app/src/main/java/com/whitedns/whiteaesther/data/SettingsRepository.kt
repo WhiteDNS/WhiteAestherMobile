@@ -25,10 +25,8 @@ class SettingsRepository(private val context: Context) {
             transport = transport,
             carrier = carrier,
             secondCarrier = secondCarrier,
-            // Absent for everyone who saved settings before Automatic existed,
-            // and what that absence means depends on what they had chosen.
-            automaticCarrier = preferences[CARRIER_AUTOMATIC]
-                ?: AppSettings.automaticByDefault(carrier, secondCarrier, transport, endpointMode),
+            // Off until the user turns it on.
+            automaticCarrier = preferences[CARRIER_AUTOMATIC] ?: false,
             psiphonRegion = preferences[PSIPHON_REGION].orEmpty(),
             torBridge = enumValueOrDefault(preferences[TOR_BRIDGE], TorBridge.NONE),
             torBridges = preferences[TOR_BRIDGES].orEmpty(),
@@ -130,7 +128,11 @@ class SettingsRepository(private val context: Context) {
         val TRANSPORT = stringPreferencesKey("transport")
         val CARRIER = stringPreferencesKey("carrier")
         val SECOND_CARRIER = stringPreferencesKey("second_carrier")
-        val CARRIER_AUTOMATIC = booleanPreferencesKey("carrier_automatic")
+        // Not 1.6.0's "carrier_automatic". That build turned Automatic on for
+        // everyone still on the defaults and saved it with every setting
+        // after, so a stored true there does not mean anyone chose it. A key
+        // of its own starts everyone off, and records only a real choice.
+        val CARRIER_AUTOMATIC = booleanPreferencesKey("carrier_automatic_opt_in")
         val PSIPHON_REGION = stringPreferencesKey("psiphon_region")
         val TOR_BRIDGE = stringPreferencesKey("tor_bridge")
         val TOR_BRIDGES = stringPreferencesKey("tor_bridges")

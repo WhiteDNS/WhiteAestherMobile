@@ -288,12 +288,14 @@ data class AppSettings(
      * side by side, and whatever carried traffic remembered for the network it
      * worked on.
      *
-     * On by default, because the people most in need of a route out are the
-     * least likely to know which carrier their network allows -- and should not
-     * have to. [carrier] and [secondCarrier] are kept while this is on, as the
-     * choice waiting for anyone who turns it off, not as what a session runs.
+     * Off until the user turns it on. 1.6.0 turned it on for everyone still on
+     * the defaults, and it was not ready: on filtered networks it gave up on
+     * routes that 1.5.0 connected through. It stays opt-in until it has been
+     * confirmed on those networks. [carrier] and [secondCarrier] are kept while
+     * this is on, as the choice waiting for anyone who turns it off, not as
+     * what a session runs.
      */
-    val automaticCarrier: Boolean = true,
+    val automaticCarrier: Boolean = false,
     /**
      * How Tor reaches its first hop, when Tor is the carrier.
      *
@@ -637,28 +639,6 @@ data class AppSettings(
             EndpointAddress.normalize(customEndpoint)?.let { json.put("peer", it) }
         }
         return json.toString()
-    }
-
-    companion object {
-        /**
-         * Whether settings saved before Automatic existed should start with it on.
-         *
-         * On for anyone still where the app started them -- Aether alone, on its
-         * automatic transport, finding its own endpoint -- which is where
-         * Automatic begins anyway, and where it helps most. Off for anyone who
-         * chose otherwise: a carrier, a chain, a transport or a pinned endpoint
-         * is a decision, and an update is no reason to overrule it.
-         */
-        fun automaticByDefault(
-            carrier: Carrier,
-            secondCarrier: Carrier?,
-            transport: TunnelProtocol,
-            endpointMode: EndpointMode,
-        ): Boolean =
-            carrier == Carrier.AETHER &&
-                secondCarrier == null &&
-                transport == TunnelProtocol.AUTO &&
-                endpointMode == EndpointMode.AUTOMATIC
     }
 }
 

@@ -466,7 +466,7 @@
     <string name="carrier_second_none">Nothing further</string>
     <string name="carrier_second_none_detail">One carrier. The fastest, and what most connections want.</string>
     <string name="carrier_swap">Swap the order</string>
-    <string name="carrier_automatic">Automatic (recommended)</string>
+    <string name="carrier_automatic">Automatic (experimental)</string>
     <string name="carrier_automatic_detail">The app tries each way out itself, and remembers what worked on each network for next time.</string>
     <string name="carrier_manual">I will choose</string>
     <string name="carrier_manual_detail">One carrier, or two in the order you pick.</string>
