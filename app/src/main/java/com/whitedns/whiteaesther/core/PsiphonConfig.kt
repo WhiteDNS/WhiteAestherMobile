@@ -1,6 +1,7 @@
 package com.whitedns.whiteaesther.core
 
 import android.content.Context
+import android.telephony.TelephonyManager
 import com.whitedns.whiteaesther.BuildConfig
 import org.json.JSONObject
 import java.io.File
@@ -65,8 +66,39 @@ object PsiphonConfig {
      * carrier that never reports failure, and the service above it can neither
      * retry nor tell the user that this network is not working -- the screen
      * would say "connecting" until the phone was rebooted.
+     *
+     * But not two minutes either, which is what it was. Psiphon's own app keeps
+     * going for as long as it takes, and users reported networks where it got
+     * through and this app, stopping at 120 seconds and starting again from
+     * nothing, never did. A retry here restarts tunnel-core, and everything it
+     * was halfway through dialling is thrown away with it.
      */
-    private const val ESTABLISH_TIMEOUT_SECONDS = 120
+    private const val ESTABLISH_TIMEOUT_SECONDS = 300
+
+    /**
+     * How many servers tunnel-core dials at once.
+     *
+     * Its default is ten. On a network that drops most attempts the ones that
+     * would have worked are somewhere down the candidate list, and more of them
+     * in flight at a time is how that list gets reached inside the window above.
+     */
+    private const val CONNECTION_WORKERS = 12
+
+    /**
+     * The country of the network the phone is on, or null.
+     *
+     * The operator's answer only. MoatClient falls back to the phone's locale,
+     * which is fine for picking a bridge list and wrong here: a phone set to
+     * English on wifi would claim to be in the United States and fetch tactics
+     * for a network that filters nothing. No answer leaves DeviceRegion out,
+     * which is what every build before this one did.
+     */
+    private fun networkRegion(context: Context): String? {
+        val telephony = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+        return telephony?.networkCountryIso
+            ?.takeIf { it.length == 2 && it.all(Char::isLetter) }
+            ?.uppercase(java.util.Locale.US)
+    }
 
     /** Everything tunnel-core writes, under one directory we can delete. */
     fun dataDirectory(context: Context): File =
@@ -91,6 +123,13 @@ object PsiphonConfig {
         json.put("DataRootDirectory", dataDirectory(context).absolutePath)
         json.put("EgressRegion", egressRegion)
         json.put("EstablishTunnelTimeoutSeconds", ESTABLISH_TIMEOUT_SECONDS)
+        json.put("ConnectionWorkerPoolSize", CONNECTION_WORKERS)
+        // Where the phone is, so the tactics for that network -- which protocols
+        // to lead with, how to pad them, which servers to try first -- arrive
+        // before the first connection rather than after it. Without it tunnel-core
+        // learns the region from a server handshake, which on the networks that
+        // need those tactics most is the handshake that never completes.
+        networkRegion(context)?.let { json.put("DeviceRegion", it) }
 
         // Zero means "pick a free one and tell me", and the port that comes back
         // is what the chain is configured against. A fixed port would be one

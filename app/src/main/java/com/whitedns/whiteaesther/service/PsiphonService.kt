@@ -12,6 +12,7 @@ import android.os.RemoteException
 import android.util.Log
 import ca.psiphon.PsiphonTunnel
 import com.whitedns.whiteaesther.core.PsiphonConfig
+import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -43,6 +44,12 @@ class PsiphonService : Service() {
     private val socksPort = AtomicInteger(0)
     private var state = State.STOPPED
     private var failure: String? = null
+
+    /** Notices forwarded to the report this session, so tunnel-core cannot flood it. */
+    private var forwarded = 0
+
+    /** Servers dialled per protocol since the last summary. */
+    private val attempts = linkedMapOf<String, Int>()
 
     enum class State { STOPPED, CONNECTING, CONNECTED, FAILED }
 
@@ -91,6 +98,8 @@ class PsiphonService : Service() {
         state = State.CONNECTING
         failure = null
         socksPort.set(0)
+        forwarded = 0
+        attempts.clear()
         broadcast()
 
         val entries = runCatching {
@@ -148,14 +157,19 @@ class PsiphonService : Service() {
             }
 
             override fun onDiagnosticMessage(message: String) {
-                // logcat, not EngineLog. EngineLog is an object, so this
-                // process has its own copy of it and nothing written here
-                // would ever reach the Diagnostics screen -- and tunnel-core
-                // emits hundreds of notices while establishing, which would
-                // evict the engine's own entries from a 400-line buffer if
-                // they were forwarded. What the user's report needs is the
-                // state changes and the failure, and those cross on their own.
+                // All of it to logcat, and a few kinds of it to the report.
+                //
+                // Only the state changes used to cross, on the reasoning that
+                // tunnel-core emits hundreds of notices while establishing and
+                // would evict the engine's own lines from a 400-line buffer. The
+                // reasoning holds; the conclusion left every report about a
+                // Psiphon that would not connect saying only that it did not,
+                // with nothing about how many servers it had, which protocols it
+                // tried, or whether it ever got tactics. So a short list of
+                // notice types crosses, capped per session, and the hundreds of
+                // per-server attempts are folded into one line of counts.
                 Log.d("psiphon", message)
+                handler.post { consider(message) }
             }
         }
 
@@ -180,6 +194,82 @@ class PsiphonService : Service() {
         socksPort.set(0)
         if (state != State.FAILED) state = State.STOPPED
         broadcast()
+    }
+
+    /**
+     * Decides whether a notice is worth a line in the user's report.
+     *
+     * PsiphonTunnel does not pass the notice through as tunnel-core wrote it: it
+     * arrives as "Type: {json}", the type pulled out in front of its data. A
+     * JSON parse of the whole string fails on every one of them, which is how
+     * the first version of this forwarded nothing at all.
+     *
+     * Success is ConnectedServer. ActiveTunnel, which reads like the obvious
+     * signal, is not delivered here.
+     */
+    private fun consider(raw: String) {
+        val separator = raw.indexOf(": ")
+        if (separator <= 0) return
+        val type = raw.substring(0, separator)
+        val payload = runCatching { JSONObject(raw.substring(separator + 2)) }.getOrNull()
+        when (type) {
+            "ConnectingServer" -> {
+                val protocol = payload?.optString("protocol").orEmpty().ifBlank { "unknown" }
+                attempts[protocol] = (attempts[protocol] ?: 0) + 1
+            }
+            "ConnectedServer" -> {
+                summariseAttempts()
+                forwardText(
+                    "connected over ${payload?.optString("protocol").orEmpty()} " +
+                        "to a server in ${payload?.optString("region").orEmpty()}",
+                    warn = false,
+                )
+            }
+            // Where Psiphon believes the phone is. If this says the wrong country
+            // the tactics it applied were for the wrong network.
+            "ClientRegion" ->
+                forwardText("Psiphon sees this device in ${payload?.optString("region").orEmpty()}", warn = false)
+            "EstablishTunnelTimeout", "Exiting" -> {
+                summariseAttempts()
+                forward(type, payload, warn = type == "EstablishTunnelTimeout")
+            }
+            "CandidateServers", "RequestedTactics", "Tactics" ->
+                forward(type, payload, warn = false)
+            "Alert", "Error", "ServerAlert", "UpstreamProxyError", "LocalProxyError" ->
+                forward(type, payload, warn = true)
+        }
+    }
+
+    private fun summariseAttempts() {
+        if (attempts.isEmpty()) return
+        val total = attempts.values.sum()
+        val detail = attempts.entries.joinToString(", ") { "${it.key} x${it.value}" }
+        attempts.clear()
+        forwardText("dialled $total servers: $detail", warn = false)
+    }
+
+    private fun forward(type: String, payload: JSONObject?, warn: Boolean) {
+        forwardText(
+            buildString {
+                append(type)
+                payload?.let { append(' ').append(it.toString().take(MAX_NOTICE_CHARS)) }
+            },
+            warn,
+        )
+    }
+
+    private fun forwardText(text: String, warn: Boolean) {
+        if (forwarded >= MAX_FORWARDED) return
+        forwarded += 1
+        clients.toList().forEach { client ->
+            send(
+                client,
+                Message.obtain(null, MSG_NOTICE).apply {
+                    arg1 = if (warn) 1 else 0
+                    data = Bundle().apply { putString(EXTRA_NOTICE, text) }
+                },
+            )
+        }
     }
 
     private fun fail(reason: String) {
@@ -216,9 +306,15 @@ class PsiphonService : Service() {
         const val ACTION_STOP = "com.whitedns.whiteaesther.PSIPHON_STOP"
         const val EXTRA_REGION = "region"
         const val EXTRA_FAILURE = "failure"
+        const val EXTRA_NOTICE = "notice"
 
         const val MSG_REGISTER = 1
         const val MSG_UNREGISTER = 2
         const val MSG_STATE = 3
+        const val MSG_NOTICE = 4
+
+        /** A session's worth of report lines, out of a 400-line buffer. */
+        private const val MAX_FORWARDED = 40
+        private const val MAX_NOTICE_CHARS = 300
     }
 }
