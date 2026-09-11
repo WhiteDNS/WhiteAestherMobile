@@ -870,31 +870,12 @@ mod tests {
         }
     }
 
-    /// Whether a TCP endpoint answers, and how quickly.
-    ///
-    /// Through the upstream proxy when one is configured, because that is where
-    /// the tunnel this probe is choosing an endpoint for will go: `masque_h2`
-    /// consults the same proxy. Probing directly and then dialling through a
-    /// proxy asks two different questions -- on a network that blocks these
-    /// addresses outright, the scan finds nothing and the attempt ends before
-    /// the proxy is ever tried, which is precisely the network someone
-    /// configures a proxy for.
-    ///
-    /// Only this probe. `quic_answers` is a datagram and stays direct, matching
-    /// H3, which does not consult the proxy either. The two halves are kept
-    /// consistent rather than uniform: each probe goes where its own transport
-    /// will go.
     async fn tcp_answers(peer: SocketAddr, timeout: Duration) -> Option<Duration> {
         let started = Instant::now();
-        let answered = match crate::upstream::configured() {
-            Some(proxy) => tokio::time::timeout(timeout, proxy.connect(peer))
-                .await
-                .is_ok_and(|result| result.is_ok()),
-            None => tokio::time::timeout(timeout, tokio::net::TcpStream::connect(peer))
-                .await
-                .is_ok_and(|result| result.is_ok()),
-        };
-        answered.then(|| started.elapsed())
+        match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(peer)).await {
+            Ok(Ok(_)) => Some(started.elapsed()),
+            _ => None,
+        }
     }
 
     async fn first_answer(
