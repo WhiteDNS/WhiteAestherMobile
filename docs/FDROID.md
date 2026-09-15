@@ -56,7 +56,10 @@ https://whitedns.github.io/WhiteAestherMobile/fdroid/repo
 ```
 
 The workflow runs after a successful Release, and can be run by hand against any
-existing tag.
+existing tag. Until those secrets exist it does nothing and says so in a notice:
+publishing here is opt-in, and a release that has not opted in has not failed.
+Once they are set, a key that cannot be decoded *is* a failure and is reported as
+one.
 
 ## The main repository — what stands in the way
 

@@ -51,7 +51,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # First, and not fatal. Publishing here is opt-in: until somebody makes
+      # the signing key and sets the three secrets, there is nothing to publish
+      # and nothing has gone wrong. Failing instead would put a red cross on
+      # every release from now until then, and an expected red cross is how
+      # people learn to stop reading them.
+      - name: Is publishing configured
+        id: configured
+        shell: bash
+        env:
+          FDROID_KEYSTORE_BASE64: ${{ secrets.FDROID_KEYSTORE_BASE64 }}
+          FDROID_KEYSTORE_PASSWORD: ${{ secrets.FDROID_KEYSTORE_PASSWORD }}
+          FDROID_KEY_ALIAS: ${{ secrets.FDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in FDROID_KEYSTORE_BASE64 FDROID_KEYSTORE_PASSWORD FDROID_KEY_ALIAS; do
+            [[ -n "${!name:-}" ]] || missing="$missing $name"
+          done
+          if [[ -n "$missing" ]]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=F-Droid repository not published::No repository was \
+            published because these secrets are not set:$missing. See docs/FDROID.md \
+            to turn this on; nothing else about the release is affected."
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
       - name: Install fdroidserver
+        if: steps.configured.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -59,6 +87,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends fdroidserver
 
       - name: Fetch the release APKs
+        if: steps.configured.outputs.ready == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -75,18 +104,23 @@ jobs:
           ls -l fdroid/repo
 
       - name: Restore the repository signing key
+        if: steps.configured.outputs.ready == 'true'
         shell: bash
         env:
           FDROID_KEYSTORE_BASE64: ${{ secrets.FDROID_KEYSTORE_BASE64 }}
         run: |
           set -euo pipefail
-          if [[ -z "${FDROID_KEYSTORE_BASE64:-}" ]]; then
-            echo "FDROID_KEYSTORE_BASE64 is not set; see docs/FDROID.md" >&2
+          # Present by now, so this failing is a real failure: a secret that was
+          # set and cannot be decoded. A secret pasted from Windows can arrive
+          # with a trailing carriage return, and base64 holds no whitespace.
+          if ! printf '%s' "$FDROID_KEYSTORE_BASE64" | tr -d '[:space:]' \
+              | base64 -d > fdroid/keystore.p12 2>/dev/null; then
+            echo "::error::FDROID_KEYSTORE_BASE64 is not valid base64. Re-set it from the .p12 file."
             exit 1
           fi
-          printf '%s' "$FDROID_KEYSTORE_BASE64" | base64 -d > fdroid/keystore.p12
 
       - name: Build the index
+        if: steps.configured.outputs.ready == 'true'
         shell: bash
         env:
           FDROID_KEYSTORE_PASSWORD: ${{ secrets.FDROID_KEYSTORE_PASSWORD }}
@@ -114,9 +148,12 @@ jobs:
           rm -f keystore.p12 config.yml
 
       - uses: actions/configure-pages@v5
+        if: steps.configured.outputs.ready == 'true'
 
       - uses: actions/upload-pages-artifact@v3
+        if: steps.configured.outputs.ready == 'true'
         with:
           path: fdroid
 
       - uses: actions/deploy-pages@v4
+        if: steps.configured.outputs.ready == 'true'
