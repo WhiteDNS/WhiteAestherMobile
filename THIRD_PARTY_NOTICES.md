@@ -10,8 +10,8 @@ and the GPL-3.0 parts remain GPL-3.0.
 ## Aether — AGPL-3.0
 
 The native engine is vendored from `CluvexStudio/Aether` revision
-`a916ff6fbbb4ebafe8314c53cf3718eb51dcae53`, released as `v1.8.0`. The original
-license and revision record are included under `native/aether/`.
+`0e6f6a52`, released as `v2.0.0`. The original license and revision record are
+included under `native/aether/`.
 
 The project moved: earlier releases name `MatinSenPai/Aether`, which still
 carries the revision shipped up to v1.2.1 but stops at its own `v1.3.0`. Both
@@ -20,8 +20,17 @@ hold identical objects for the tags they share.
 The vendored copy is not byte-identical to that revision. It is formatted with
 `cargo fmt`, its line endings are normalised to LF, and `aether/src/ffi.rs` is
 omitted -- nothing here calls upstream's C API, `native/android-bridge` serves
-that purpose, and the omitted file does not build against this tree. Source for
-the complete original is at the revision named above.
+that purpose, and the omitted file does not build against this tree.
+
+Upstream's optional `tor` feature is also not built. The six crates behind it --
+`arti-client`, `tor-chanmgr`, `tor-rtcompat`, `tokio-util`, `liblzma` and
+`tracing-subscriber` -- are absent from `aether/Cargo.toml` and from the
+lockfile, so none of them ships. `aether/src/tor.rs` and `aether/src/bridges.rs`
+are vendored for completeness and compile to their feature-off stubs; this app
+reaches tor through `info.guardianproject:tor-android` instead. See
+`docs/AETHER_2_0_MERGE.md` for why.
+
+Source for the complete original is at the revision named above.
 
 Shipped as `libwhiteaesther_core.so`.
 

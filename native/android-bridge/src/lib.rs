@@ -1008,6 +1008,9 @@ mod tests {
     #[test]
     fn reports_core_version() {
         assert_eq!(BRIDGE_VERSION.split('.').count(), 3);
-        assert_eq!(aether::version(), "1.8.0");
+        // Pinned deliberately. The engine version crosses into the app's
+        // diagnostics and its update notice, and an engine bump that nobody
+        // noticed is one nobody tested on a phone either.
+        assert_eq!(aether::version(), "2.0.0");
     }
 }

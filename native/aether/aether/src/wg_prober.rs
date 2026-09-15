@@ -622,9 +622,13 @@ fn build_wg_candidates(
         }
     };
 
-    let mut ips: Vec<IpAddr> = Vec::with_capacity(anchors.len() + pool.len());
-    ips.extend(anchors.iter().copied());
-    ips.extend(pool.iter().copied());
+    let mut seen_ip: HashSet<IpAddr> = HashSet::new();
+    let ips: Vec<IpAddr> = anchors
+        .iter()
+        .chain(pool.iter())
+        .copied()
+        .filter(|ip| seen_ip.insert(*ip))
+        .collect();
 
     for wave in 0..st.pool_port_waves.max(1) {
         for (idx, candidate_ip) in ips.iter().enumerate() {

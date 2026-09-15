@@ -43,11 +43,13 @@ runs:
       shell: bash
       run: sudo apt-get update && sudo apt-get install -y clang libclang-dev ninja-build cmake
 
-    # The tag is the compiler version. dependabot is configured to leave it
-    # alone, because bumping it here silently changes what the release is
-    # built with.
+    # The tag is the compiler version, and it has to match
+    # native/rust-toolchain.toml: Aether 2.0.0 declares rust-version 1.98, and
+    # cargo refuses to build it with anything older. dependabot is configured to
+    # leave this alone, because bumping it here silently changes what the
+    # release is built with.
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@1.88.0
+      uses: dtolnay/rust-toolchain@1.98.0
       with:
         components: ${{ inputs.rust-components }}
         targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android

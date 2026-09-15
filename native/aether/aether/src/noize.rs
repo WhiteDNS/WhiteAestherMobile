@@ -144,6 +144,17 @@ fn parse_cps(spec: &str) -> Vec<u8> {
     out
 }
 
+async fn send_junk(sock: &UdpSocket, peer: SocketAddr, pkt: &[u8]) -> std::io::Result<usize> {
+    if sock.peer_addr().is_ok() {
+        return sock.send(pkt).await;
+    }
+    let target = match sock.local_addr() {
+        Ok(local) => crate::upstream::relay_target(local, peer),
+        Err(_) => peer,
+    };
+    sock.send_to(pkt, target).await
+}
+
 pub async fn pre_handshake(sock: &UdpSocket, peer: SocketAddr, cfg: &NoizeConfig) {
     if !cfg.is_enabled() {
         return;
@@ -153,7 +164,7 @@ pub async fn pre_handshake(sock: &UdpSocket, peer: SocketAddr, cfg: &NoizeConfig
 
     for i in 0..cfg.jc_before_hs {
         let pkt = junk_packet(cfg);
-        match sock.send_to(&pkt, peer).await {
+        match send_junk(sock, peer, &pkt).await {
             Ok(n) => log::trace!("junk[{i}] sent {n} bytes"),
             Err(e) => log::debug!("junk[{i}] send failed: {e}"),
         }
@@ -165,7 +176,7 @@ pub async fn pre_handshake(sock: &UdpSocket, peer: SocketAddr, cfg: &NoizeConfig
     if let Some(i1) = &cfg.i1 {
         let pkt = parse_cps(i1);
         if !pkt.is_empty() {
-            match sock.send_to(&pkt, peer).await {
+            match send_junk(sock, peer, &pkt).await {
                 Ok(n) => log::trace!("signature i1 sent {n} bytes"),
                 Err(e) => log::debug!("signature i1 send failed: {e}"),
             }
@@ -175,7 +186,7 @@ pub async fn pre_handshake(sock: &UdpSocket, peer: SocketAddr, cfg: &NoizeConfig
 
     for i in 0..cfg.jc_after_i1 {
         let pkt = junk_packet(cfg);
-        match sock.send_to(&pkt, peer).await {
+        match send_junk(sock, peer, &pkt).await {
             Ok(n) => log::trace!("junk_after[{i}] sent {n} bytes"),
             Err(e) => log::debug!("junk_after[{i}] send failed: {e}"),
         }
@@ -187,7 +198,7 @@ pub async fn pre_handshake(sock: &UdpSocket, peer: SocketAddr, cfg: &NoizeConfig
     if let Some(i2) = &cfg.i2 {
         let pkt = parse_cps(i2);
         if !pkt.is_empty() {
-            match sock.send_to(&pkt, peer).await {
+            match send_junk(sock, peer, &pkt).await {
                 Ok(n) => log::trace!("signature i2 sent {n} bytes"),
                 Err(e) => log::debug!("signature i2 send failed: {e}"),
             }
