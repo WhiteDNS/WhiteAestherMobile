@@ -24,6 +24,13 @@ runs:
 
     - name: Install Android SDK tools
       uses: android-actions/setup-android@v4
+      with:
+        # Not the action's default of "tools platform-tools". `tools` is the
+        # obsolete SDK Tools package, which Google has since removed from the
+        # repository -- sdkmanager now exits 1 on it and takes the whole job
+        # with it, which is what broke every run from 2026-09-15. Everything
+        # this build actually needs is installed by name in the next step.
+        packages: platform-tools
 
     - name: Install Android platform, NDK and CMake
       shell: bash
