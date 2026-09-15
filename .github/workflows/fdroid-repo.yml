@@ -1,0 +1,122 @@
+name: F-Droid repository
+run-name: F-Droid repo for ${{ inputs.tag || github.ref_name }}
+
+# Publishes an F-Droid repository of our own, built from the APKs a release has
+# already produced, and served from GitHub Pages.
+#
+# Our own rather than f-droid.org's, and that is a decision rather than a first
+# step. Their inclusion policy accepts prebuilt dependencies only from a closed
+# list of Maven repositories -- Maven Central, Google, Sonatype, JFrog, JitPack,
+# Clojars -- and `ca.psiphon:psiphontunnel` comes from a Maven layout served out
+# of raw.githubusercontent.com, which is how Psiphon publish it. Getting into
+# the main repository therefore means building Psiphon's AAR from source with
+# gomobile inside the recipe, which is a project of its own; see
+# docs/FDROID.md.
+#
+# What this buys in the meantime: the APK keeps this project's own signature, so
+# nobody has to uninstall and reinstall to switch channels, and F-Droid clients
+# get update notifications without the app checking GitHub for itself.
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish, for example v1.6.2
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fdroid-repo
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish the repository index
+    # Only for a release that actually succeeded. A failed release leaves some
+    # assets uploaded and others missing, and an index built from that half is
+    # worse than no index.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install fdroidserver
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fdroidserver
+
+      - name: Fetch the release APKs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.event.workflow_run.head_branch }}"
+          echo "Publishing $tag"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          mkdir -p fdroid/repo
+          # The universal APK only. The split APKs share a version code, and an
+          # F-Droid repository keys on that -- three files claiming to be the
+          # same version is an index that picks one arbitrarily.
+          gh release download "$tag" --pattern '*-universal.apk' --dir fdroid/repo
+          ls -l fdroid/repo
+
+      - name: Restore the repository signing key
+        shell: bash
+        env:
+          FDROID_KEYSTORE_BASE64: ${{ secrets.FDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${FDROID_KEYSTORE_BASE64:-}" ]]; then
+            echo "FDROID_KEYSTORE_BASE64 is not set; see docs/FDROID.md" >&2
+            exit 1
+          fi
+          printf '%s' "$FDROID_KEYSTORE_BASE64" | base64 -d > fdroid/keystore.p12
+
+      - name: Build the index
+        shell: bash
+        env:
+          FDROID_KEYSTORE_PASSWORD: ${{ secrets.FDROID_KEYSTORE_PASSWORD }}
+          FDROID_KEY_ALIAS: ${{ secrets.FDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          cd fdroid
+          cat > config.yml <<'CONFIG'
+          repo_url: https://whitedns.github.io/WhiteAestherMobile/fdroid/repo
+          repo_name: WhiteAesther
+          repo_description: >-
+            Official builds of WhiteAesther, signed with the project's own key.
+            The same APKs published on GitHub Releases.
+          archive_older: 0
+          CONFIG
+          {
+            echo "keystore: $PWD/keystore.p12"
+            echo "repo_keyalias: $FDROID_KEY_ALIAS"
+            echo "keystorepass: $FDROID_KEYSTORE_PASSWORD"
+            echo "keypass: $FDROID_KEYSTORE_PASSWORD"
+          } >> config.yml
+          chmod 600 config.yml
+          fdroid update --create-metadata --pretty --verbose
+          # The key must never reach Pages.
+          rm -f keystore.p12 config.yml
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: fdroid
+
+      - uses: actions/deploy-pages@v4
