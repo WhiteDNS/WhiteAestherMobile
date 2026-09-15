@@ -85,6 +85,7 @@ pub struct WgConfig {
 pub struct WgTunnel {
     tunn: Arc<Mutex<Box<Tunn>>>,
     sock: Arc<UdpSocket>,
+    detour: crate::upstream::DetourGuard,
     peer: SocketAddr,
     inbound_tx: mpsc::Sender<Vec<u8>>,
     pub obf_sent: Arc<Mutex<bool>>,
@@ -96,13 +97,14 @@ pub struct WgTunnel {
 pub struct EstablishedSession {
     tunn: Arc<Mutex<Box<Tunn>>>,
     sock: Arc<UdpSocket>,
+    detour: crate::upstream::DetourGuard,
     peer: SocketAddr,
     client_id: [u8; 3],
 }
 
 impl WgTunnel {
     pub async fn new(cfg: WgConfig, inbound_tx: mpsc::Sender<Vec<u8>>) -> Result<Self> {
-        let (sock, _) = crate::upstream::bind_via_upstream(cfg.peer_endpoint).await?;
+        let (sock, _, detour) = crate::upstream::bind_via_upstream(cfg.peer_endpoint).await?;
 
         let local_secret = StaticSecret::from(cfg.local_private_key);
         let peer_public = PublicKey::from(cfg.peer_public_key);
@@ -120,6 +122,7 @@ impl WgTunnel {
         Ok(Self {
             tunn: Arc::new(Mutex::new(Box::new(tunn))),
             sock: Arc::new(sock),
+            detour,
             peer: cfg.peer_endpoint,
             inbound_tx,
             obf_sent: Arc::new(Mutex::new(false)),
@@ -138,6 +141,7 @@ impl WgTunnel {
         Self {
             tunn: session.tunn,
             sock: session.sock,
+            detour: session.detour,
             peer: session.peer,
             inbound_tx,
             obf_sent: Arc::new(Mutex::new(true)),
@@ -175,6 +179,7 @@ impl WgTunnel {
             let mut transient_errors = 0u32;
             loop {
                 match sock_r.recv(&mut buf).await {
+                    Ok(0) => {}
                     Ok(n) => {
                         transient_errors = 0;
                         strip_client_id(&mut buf[..n]);
@@ -284,11 +289,9 @@ impl WgTunnel {
 
         let stale_timeout = wg_stale_timeout();
         let health_task = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(WG_HEALTHCHECK_INTERVAL);
-            let probe = build_dataplane_probe(local_ipv4);
             let mut out_buf = vec![0u8; MAX_PACKET];
             loop {
-                interval.tick().await;
+                tokio::time::sleep(health_check_pause()).await;
 
                 let idle = last_valid_rx_h.lock().elapsed();
                 if idle >= stale_timeout {
@@ -302,6 +305,7 @@ impl WgTunnel {
                     ));
                 }
 
+                let probe = build_dataplane_probe(local_ipv4);
                 let mut tunn = tunn_h.lock().await;
                 if let Err(e) =
                     send_dataplane_probe(&sock_h, &mut tunn, &client_id_h, &probe, &mut out_buf)
@@ -346,12 +350,20 @@ impl WgTunnel {
 }
 
 const WG_HEALTHCHECK_INTERVAL: Duration = Duration::from_secs(3);
+const WG_HEALTHCHECK_JITTER: Duration = Duration::from_millis(500);
+
+fn health_check_pause() -> Duration {
+    let jitter = WG_HEALTHCHECK_JITTER.as_millis() as u64;
+    let offset = rand::rng().random_range(0..=jitter * 2);
+    WG_HEALTHCHECK_INTERVAL - WG_HEALTHCHECK_JITTER + Duration::from_millis(offset)
+}
 
 fn wg_stale_timeout() -> Duration {
     let secs = std::env::var("AETHER_WG_STALE_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|&v| v > 0)
+        .map(|v| v.min(86_400))
         .unwrap_or(10);
     Duration::from_secs(secs)
 }
@@ -553,7 +565,7 @@ pub async fn verify_endpoint_keep_session(
         data_check
     );
 
-    let (sock, _) = crate::upstream::bind_via_upstream(peer).await?;
+    let (sock, _, detour) = crate::upstream::bind_via_upstream(peer).await?;
 
     let start = Instant::now();
     let deadline = start + timeout;
@@ -611,6 +623,9 @@ pub async fn verify_endpoint_keep_session(
             r = sock.recv(&mut recv_buf) => {
                 attempts += 1;
                 let n = r?;
+                if n == 0 {
+                    continue;
+                }
                 log::trace!("[wg] recv {} bytes (attempt {})", n, attempts);
                 strip_client_id(&mut recv_buf[..n]);
 
@@ -623,6 +638,7 @@ pub async fn verify_endpoint_keep_session(
                             return Ok((dp_elapsed, EstablishedSession {
                                 tunn: Arc::new(Mutex::new(Box::new(tunn))),
                                 sock: Arc::new(sock),
+                                detour,
                                 peer,
                                 client_id,
                             }));
@@ -630,6 +646,7 @@ pub async fn verify_endpoint_keep_session(
                         return Ok((elapsed, EstablishedSession {
                             tunn: Arc::new(Mutex::new(Box::new(tunn))),
                             sock: Arc::new(sock),
+                            detour,
                             peer,
                             client_id,
                         }));
@@ -646,6 +663,7 @@ pub async fn verify_endpoint_keep_session(
                             return Ok((dp_elapsed, EstablishedSession {
                                 tunn: Arc::new(Mutex::new(Box::new(tunn))),
                                 sock: Arc::new(sock),
+                                detour,
                                 peer,
                                 client_id,
                             }));
@@ -653,6 +671,7 @@ pub async fn verify_endpoint_keep_session(
                         return Ok((elapsed, EstablishedSession {
                             tunn: Arc::new(Mutex::new(Box::new(tunn))),
                             sock: Arc::new(sock),
+                            detour,
                             peer,
                             client_id,
                         }));
@@ -840,6 +859,26 @@ mod tests {
                 "{kind:?} should be transient"
             );
         }
+    }
+
+    #[test]
+    fn health_probes_are_jittered_around_the_interval() {
+        for _ in 0..200 {
+            let pause = health_check_pause();
+            assert!(pause >= WG_HEALTHCHECK_INTERVAL - WG_HEALTHCHECK_JITTER);
+            assert!(pause <= WG_HEALTHCHECK_INTERVAL + WG_HEALTHCHECK_JITTER);
+        }
+    }
+
+    #[test]
+    fn every_health_probe_is_a_fresh_packet() {
+        let local = Ipv4Addr::new(172, 16, 0, 2);
+        let distinct: std::collections::HashSet<Vec<u8>> =
+            (0..16).map(|_| build_dataplane_probe(local)).collect();
+        assert!(
+            distinct.len() > 1,
+            "the probe must not repeat byte for byte"
+        );
     }
 
     #[test]

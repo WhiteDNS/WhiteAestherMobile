@@ -35,7 +35,7 @@ pub async fn fetch_ech_config() -> Result<Vec<u8>> {
 }
 
 async fn query_ech(server: SocketAddr, host: &str) -> Result<Vec<u8>> {
-    let (sock, _) = crate::upstream::bind_via_upstream(server).await?;
+    let (sock, _, _detour) = crate::upstream::bind_via_upstream(server).await?;
 
     let (query, id) = build_query(host, RR_HTTPS);
     sock.send(&query).await?;

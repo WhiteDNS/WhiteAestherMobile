@@ -717,7 +717,20 @@ private fun homeAttention(settings: AppSettings, status: EngineStatus): Attentio
             tone = colors.signalFailed,
             title = stringResource(R.string.the_last_attempt_failed),
             body = status.message.ifBlank { stringResource(R.string.the_engine_stopped_without_a_working_route) },
-            actions = listOf(stringResource(R.string.change_profile) to AttentionTarget.ROUTES, stringResource(R.string.pin_an_endpoint) to AttentionTarget.ENDPOINT),
+            // The first action leads to the same screen either way; what
+            // changes is whether it says what is on it. Someone whose carrier
+            // has just failed every attempt is not looking for a profile to
+            // change -- they are looking for something that works, and this
+            // build has two more of those behind a switch they have never had
+            // a reason to find.
+            actions = listOf(
+                if (settings.automaticCarrier) {
+                    stringResource(R.string.change_profile)
+                } else {
+                    stringResource(R.string.try_every_way_out)
+                } to AttentionTarget.ROUTES,
+                stringResource(R.string.pin_an_endpoint) to AttentionTarget.ENDPOINT,
+            ),
         )
         validationError != null -> Attention(
             tone = colors.signalWorking,
@@ -1021,30 +1034,42 @@ fun RoutesScreen(
                         stringResource(R.string.psiphon_region_unknown),
                         Modifier.padding(horizontal = 13.dp),
                     )
-                } else {
-                    Column(
-                        Modifier.padding(11.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        (listOf("") + psiphonRegions).forEach { region ->
-                            OptionRow(
-                                code = region.ifEmpty { "ANY" }.uppercase(),
-                                title = if (region.isEmpty()) {
-                                    stringResource(R.string.psiphon_region_best)
-                                } else {
-                                    countryName(region, uiLocale)
-                                },
-                                subtitle = if (region.isEmpty()) {
-                                    stringResource(R.string.psiphon_region_best_detail)
-                                } else {
-                                    stringResource(R.string.psiphon_region_detail)
-                                },
-                                selected = settings.psiphonRegion == region,
-                                onClick = {
-                                    onSettingsChange(settings.copy(psiphonRegion = region))
-                                },
-                            )
-                        }
+                }
+                Column(
+                    Modifier.padding(11.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    // Best available first and always, even with nothing to
+                    // list beside it. It used to live inside the branch that
+                    // needed countries, so a phone whose cache was empty --
+                    // a fresh install, or a session where Psiphon reported
+                    // nothing -- was told in the error message to choose it
+                    // and then offered no way to. A country already chosen is
+                    // listed too, whether or not Psiphon has named it: it is
+                    // what the next attempt will ask for, and a setting the
+                    // screen hides is one the user cannot take back.
+                    val chosen = settings.psiphonRegion
+                    val unlisted = chosen.isNotEmpty() && chosen !in psiphonRegions
+                    val offered = listOf("") + psiphonRegions + if (unlisted) listOf(chosen) else emptyList()
+                    offered.forEach { region ->
+                        OptionRow(
+                            code = region.ifEmpty { "ANY" }.uppercase(),
+                            title = if (region.isEmpty()) {
+                                stringResource(R.string.psiphon_region_best)
+                            } else {
+                                countryName(region, uiLocale)
+                            },
+                            subtitle = when {
+                                region.isEmpty() -> stringResource(R.string.psiphon_region_best_detail)
+                                region == chosen && unlisted ->
+                                    stringResource(R.string.psiphon_region_unlisted_detail)
+                                else -> stringResource(R.string.psiphon_region_detail)
+                            },
+                            selected = chosen == region,
+                            onClick = {
+                                onSettingsChange(settings.copy(psiphonRegion = region))
+                            },
+                        )
                     }
                 }
             }

@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
 use base64::Engine;
@@ -36,13 +36,25 @@ impl Kind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Upstream {
     pub kind: Kind,
     pub host: String,
     pub port: u16,
     pub user: Option<String>,
     pub password: Option<String>,
+}
+
+impl std::fmt::Debug for Upstream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Upstream")
+            .field("kind", &self.kind)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("user", &self.user)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 /// The upstream proxy to dial through, as it is configured right now.
@@ -132,6 +144,21 @@ impl Upstream {
             None => (None, rest),
         };
 
+        if scheme == "https" {
+            if credentials.is_some() {
+                return Err(AetherError::Other(
+                    "an https:// upstream with a password is refused: aether talks to its upstream \
+                     over plain http, which would send the password in the clear; use http:// \
+                     only if that is acceptable, or socks5://"
+                        .into(),
+                ));
+            }
+            log::warn!(
+                "[-] the upstream is written as https:// but aether talks to it over plain http; \
+                 the tunnel inside stays encrypted"
+            );
+        }
+
         let endpoint = endpoint.trim_end_matches('/');
         let (host, port) = split_endpoint(endpoint)?;
 
@@ -185,8 +212,9 @@ impl Upstream {
         let attempt = async {
             // The proxy is reached over the network like anything else, so
             // on Android this socket needs protecting too -- otherwise the
-            // detour meant to carry the tunnel is carried by it.
-            let mut stream = crate::socketprotect::connect_tcp_host(&self.endpoint()).await?;
+            // detour meant to carry the tunnel is carried by it. egress
+            // protects everything it opens.
+            let mut stream = crate::egress::tcp_connect_host(&self.host, self.port).await?;
             let _ = stream.set_nodelay(true);
 
             match self.kind {
@@ -219,7 +247,7 @@ impl Upstream {
         }
 
         let attempt = async {
-            let mut control = crate::socketprotect::connect_tcp_host(&self.endpoint()).await?;
+            let mut control = crate::egress::tcp_connect_host(&self.host, self.port).await?;
             let _ = control.set_nodelay(true);
             self.socks_greet(&mut control).await?;
 
@@ -234,7 +262,7 @@ impl Upstream {
             } else {
                 "[::]:0"
             };
-            let socket = UdpSocket::bind(local).await?;
+            let socket = crate::egress::udp_bind(local.parse().expect("a wildcard address"))?;
             crate::socketprotect::protect(&socket)?;
             socket.connect(relay).await?;
 
@@ -409,8 +437,35 @@ impl UdpRelay {
 }
 
 struct Detour {
+    id: u64,
     shim: SocketAddr,
     peer: SocketAddr,
+}
+
+#[derive(Default)]
+#[must_use = "the detour is closed as soon as its guard is dropped"]
+pub struct DetourGuard(Option<(SocketAddr, u64, tokio::task::AbortHandle)>);
+
+impl Drop for DetourGuard {
+    fn drop(&mut self) {
+        if let Some((client, id, pump)) = self.0.take() {
+            pump.abort();
+            forget_detour(client, id);
+        }
+    }
+}
+
+fn forget_detour(client: SocketAddr, id: u64) {
+    if let Ok(mut map) = detours().lock() {
+        if map.get(&client).is_some_and(|detour| detour.id == id) {
+            map.remove(&client);
+        }
+    }
+}
+
+fn next_detour_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 fn detours() -> &'static std::sync::Mutex<std::collections::HashMap<SocketAddr, Detour>> {
@@ -437,26 +492,39 @@ pub fn real_source(local: SocketAddr, observed: SocketAddr) -> SocketAddr {
     }
 }
 
-pub async fn attach_detour(socket: &UdpSocket, peer: SocketAddr) -> Result<()> {
-    let proxy = match configured() {
-        Some(proxy) => proxy,
-        None => return Ok(()),
-    };
+pub async fn attach_detour(socket: &UdpSocket, peer: SocketAddr) -> Result<DetourGuard> {
+    match configured() {
+        Some(proxy) => attach_detour_via(&proxy, socket, peer).await,
+        None => Ok(DetourGuard::default()),
+    }
+}
 
+async fn attach_detour_via(
+    proxy: &Upstream,
+    socket: &UdpSocket,
+    peer: SocketAddr,
+) -> Result<DetourGuard> {
     if crate::routing::is_private(peer.ip()) {
         log::debug!("[*] {peer} is local, reaching it without the upstream proxy");
-        return Ok(());
+        return Ok(DetourGuard::default());
     }
 
     let relay = proxy.associate().await?;
-    let shim = UdpSocket::bind("127.0.0.1:0").await?;
-    let shim_address = shim.local_addr()?;
     let client = socket.local_addr()?;
+    let loopback = if client.is_ipv4() {
+        IpAddr::V4(Ipv4Addr::LOCALHOST)
+    } else {
+        IpAddr::V6(Ipv6Addr::LOCALHOST)
+    };
+    let shim = UdpSocket::bind(SocketAddr::new(loopback, 0)).await?;
+    let shim_address = shim.local_addr()?;
+    let id = next_detour_id();
 
     if let Ok(mut map) = detours().lock() {
         map.insert(
             client,
             Detour {
+                id,
                 shim: shim_address,
                 peer,
             },
@@ -468,38 +536,43 @@ pub async fn attach_detour(socket: &UdpSocket, peer: SocketAddr) -> Result<()> {
         relay.relay()
     );
 
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         if let Err(error) = pump(shim, client, peer, relay).await {
             log::warn!("[-] the upstream udp relay for {peer} stopped: {error}");
         }
-        if let Ok(mut map) = detours().lock() {
-            map.remove(&client);
-        }
+        forget_detour(client, id);
     });
 
-    Ok(())
+    Ok(DetourGuard(Some((client, id, task.abort_handle()))))
 }
 
-pub async fn bind_via_upstream(peer: SocketAddr) -> Result<(UdpSocket, SocketAddr)> {
+/// Whether a datagram that arrived really came back through this socket's own
+/// detour, rather than from somewhere else that happens to share a port.
+fn from_detoured_socket(client: SocketAddr, origin: SocketAddr) -> bool {
+    origin.port() == client.port()
+        && (origin.ip() == client.ip()
+            || (client.ip().is_unspecified() && origin.ip().is_loopback()))
+}
+
+pub async fn bind_via_upstream(peer: SocketAddr) -> Result<(UdpSocket, SocketAddr, DetourGuard)> {
     let bind = if peer.is_ipv4() {
         "0.0.0.0:0"
     } else {
         "[::]:0"
     };
 
-    let socket = UdpSocket::bind(bind).await?;
-    // Every UDP socket the engine sends on now comes from here, which is why
-    // protection belongs here rather than at each call site. It used to be
-    // injected separately into dns, wireguard and the probers, and a new
-    // caller had no way of knowing it had to.
-    crate::socketprotect::protect(&socket)?;
-    attach_detour(&socket, peer).await?;
+    // Every UDP socket the engine sends on comes from here, which is why
+    // protection belongs in egress rather than at each call site. It used to be
+    // injected separately into dns, wireguard and the probers, and a new caller
+    // had no way of knowing it had to.
+    let socket = crate::egress::udp_bind(bind.parse().expect("a wildcard address"))?;
+    let detour = attach_detour(&socket, peer).await?;
 
     let local = socket.local_addr()?;
     let target = relay_target(local, peer);
     socket.connect(target).await?;
 
-    Ok((socket, target))
+    Ok((socket, target, detour))
 }
 
 async fn pump(
@@ -510,19 +583,27 @@ async fn pump(
 ) -> std::io::Result<()> {
     let mut from_client = vec![0u8; 65535];
     let mut from_relay = vec![0u8; 65535];
+    let mut reply_to: Option<SocketAddr> = None;
 
     loop {
         tokio::select! {
             read = shim.recv_from(&mut from_client) => {
                 let (len, origin) = read?;
-                if origin != client {
+                if !from_detoured_socket(client, origin) {
                     continue;
                 }
+                reply_to = Some(origin);
                 relay.send_to(&from_client[..len], peer).await?;
             }
             read = relay.recv_from(&mut from_relay) => {
-                let (len, _origin) = read?;
-                shim.send_to(&from_relay[..len], client).await?;
+                let len = match read {
+                    Ok((len, _origin)) => len,
+                    Err(error) if error.kind() == std::io::ErrorKind::InvalidData => continue,
+                    Err(error) => return Err(error),
+                };
+                if let Some(to) = reply_to {
+                    shim.send_to(&from_relay[..len], to).await?;
+                }
             }
         }
     }
@@ -914,6 +995,183 @@ mod tests {
 
         std::env::remove_var("AETHER_UPSTREAM");
         server.abort();
+    }
+
+    async fn round_trip_through_a_detour(bind: &str, peer: SocketAddr) {
+        let (proxy_address, server) = fake_socks_udp_server().await;
+        let proxy = Upstream::parse(&format!("socks5://{proxy_address}")).unwrap();
+
+        let socket = UdpSocket::bind(bind).await.unwrap();
+        let detour = attach_detour_via(&proxy, &socket, peer).await.unwrap();
+
+        let local = socket.local_addr().unwrap();
+        let target = relay_target(local, peer);
+        assert_ne!(
+            target, peer,
+            "the datagram has to go to the shim, not straight to the peer"
+        );
+        socket.send_to(b"ping", target).await.unwrap();
+
+        let mut buf = [0u8; 64];
+        let (len, observed) =
+            tokio::time::timeout(Duration::from_secs(3), socket.recv_from(&mut buf))
+                .await
+                .expect("the answer must come back through the relay")
+                .unwrap();
+        assert_eq!(&buf[..len], b"pong:ping");
+        assert_eq!(real_source(local, observed), peer);
+
+        drop(detour);
+        assert_eq!(
+            relay_target(local, peer),
+            peer,
+            "dropping the guard retires the detour"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_wildcard_bound_socket_reaches_its_peer_through_the_relay() {
+        round_trip_through_a_detour("0.0.0.0:0", "162.159.192.1:2408".parse().unwrap()).await;
+    }
+
+    #[tokio::test]
+    async fn an_ipv6_socket_reaches_its_peer_through_the_relay() {
+        if UdpSocket::bind("[::1]:0").await.is_err() {
+            eprintln!("skipped: this machine has no IPv6 loopback");
+            return;
+        }
+        round_trip_through_a_detour("[::]:0", "[2606:4700:d0::a29f:c001]:2408".parse().unwrap())
+            .await;
+    }
+
+    #[test]
+    fn only_the_detoured_socket_is_served_by_its_shim() {
+        let wildcard: SocketAddr = "0.0.0.0:5000".parse().unwrap();
+        assert!(from_detoured_socket(
+            wildcard,
+            "127.0.0.1:5000".parse().unwrap()
+        ));
+        assert!(!from_detoured_socket(
+            wildcard,
+            "127.0.0.1:5001".parse().unwrap()
+        ));
+        assert!(!from_detoured_socket(
+            wildcard,
+            "192.168.1.2:5000".parse().unwrap()
+        ));
+
+        let wildcard_v6: SocketAddr = "[::]:5000".parse().unwrap();
+        assert!(from_detoured_socket(
+            wildcard_v6,
+            "[::1]:5000".parse().unwrap()
+        ));
+        assert!(!from_detoured_socket(
+            wildcard_v6,
+            "[::1]:5001".parse().unwrap()
+        ));
+
+        let bound: SocketAddr = "127.0.0.1:5000".parse().unwrap();
+        assert!(from_detoured_socket(
+            bound,
+            "127.0.0.1:5000".parse().unwrap()
+        ));
+    }
+
+    async fn fake_socks_http_server() -> (SocketAddr, tokio::task::JoinHandle<Option<String>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let handle = tokio::spawn(async move {
+            let (mut control, _) = listener.accept().await.ok()?;
+
+            let mut greeting = [0u8; 2];
+            control.read_exact(&mut greeting).await.ok()?;
+            let mut methods = vec![0u8; greeting[1] as usize];
+            control.read_exact(&mut methods).await.ok()?;
+            control.write_all(&[VER, AUTH_NONE]).await.ok()?;
+
+            let mut head = [0u8; 4];
+            control.read_exact(&mut head).await.ok()?;
+            if head[1] != CMD_CONNECT {
+                return None;
+            }
+            let target = match head[3] {
+                ATYP_NAME => {
+                    let mut len = [0u8; 1];
+                    control.read_exact(&mut len).await.ok()?;
+                    let mut name = vec![0u8; len[0] as usize];
+                    control.read_exact(&mut name).await.ok()?;
+                    String::from_utf8(name).ok()?
+                }
+                ATYP_V4 => {
+                    let mut octets = [0u8; 4];
+                    control.read_exact(&mut octets).await.ok()?;
+                    Ipv4Addr::from(octets).to_string()
+                }
+                _ => return None,
+            };
+            let mut port = [0u8; 2];
+            control.read_exact(&mut port).await.ok()?;
+
+            let mut answer = vec![VER, REP_OK, 0x00];
+            answer.extend_from_slice(&encode_address("127.0.0.1:1".parse().unwrap()));
+            control.write_all(&answer).await.ok()?;
+
+            let mut request = vec![0u8; 2048];
+            let _ = control.read(&mut request).await.ok()?;
+            control
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await
+                .ok()?;
+            Some(target)
+        });
+
+        (address, handle)
+    }
+
+    #[tokio::test]
+    async fn the_api_client_reaches_its_host_through_a_socks5_upstream() {
+        let (proxy_address, server) = fake_socks_http_server().await;
+        let upstream = Upstream::parse(&format!("socks5://{proxy_address}")).unwrap();
+        let client = reqwest::Client::builder()
+            .proxy(upstream.as_reqwest_proxy().unwrap())
+            .build()
+            .unwrap();
+
+        let body = tokio::time::timeout(Duration::from_secs(5), async {
+            client
+                .get("http://api.example.test/ping")
+                .send()
+                .await?
+                .text()
+                .await
+        })
+        .await
+        .expect("the request finishes")
+        .expect("the request goes through the socks5 proxy");
+
+        assert_eq!(body, "ok");
+        assert_eq!(
+            server.await.unwrap().as_deref(),
+            Some("api.example.test"),
+            "the name has to be resolved by the proxy, not looked up locally"
+        );
+    }
+
+    #[test]
+    fn a_password_is_never_sent_in_the_clear_to_an_https_upstream() {
+        assert!(Upstream::parse("https://alice:s3cret@proxy.example:8443").is_err());
+        let plain = Upstream::parse("https://proxy.example:8443").unwrap();
+        assert_eq!(plain.kind, Kind::Http);
+    }
+
+    #[test]
+    fn the_upstream_password_stays_out_of_debug_output() {
+        let upstream = Upstream::parse("socks5://alice:s3cret@127.0.0.1:1080").unwrap();
+        let shown = format!("{upstream:?}");
+        assert!(!shown.contains("s3cret"), "{shown}");
+        assert!(shown.contains("alice"));
     }
 
     #[tokio::test]

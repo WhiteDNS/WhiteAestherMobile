@@ -3,6 +3,7 @@ package com.whitedns.whiteaesther.core
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -40,13 +41,47 @@ class AetherCarrierClient(
 
     private var engine: Job? = null
 
+    /**
+     * True between a [stop] and the engine job it cancelled finishing.
+     *
+     * The watcher below cannot tell a tunnel that broke from one that was taken
+     * down on purpose -- both arrive as the run call returning -- and reporting
+     * a deliberate stop as a failure would have the service reconnect a session
+     * the user had just ended.
+     */
+    @Volatile
+    private var stopping = false
+
     override suspend fun start(timeoutMs: Long): Result<Int> {
+        stopping = false
         mutableState.value = CarrierSnapshot(stage = CarrierStage.CONNECTING)
 
-        val prepared = withContext(Dispatchers.IO) {
-            NativeAetherBridge.prepare(engineConfig)
-        }.getOrElse { error ->
+        // Inside the budget, not before it. prepare provisions an identity and
+        // picks an endpoint, and a thorough search of those can run for five
+        // minutes -- so a start that only began counting afterwards had no
+        // ceiling at all, and the race's budgets described a wait that was
+        // already over. The watchdog is a separate coroutine because the call
+        // itself is blocking JNI: nothing suspends inside it for a timeout to
+        // fire at, and cancelPrepare is what actually ends it.
+        val deadline = System.currentTimeMillis() + timeoutMs
+        val watchdog = scope.launch {
+            delay(timeoutMs)
+            NativeAetherBridge.cancelPrepare()
+        }
+        val preparation = try {
+            withContext(Dispatchers.IO) { NativeAetherBridge.prepare(engineConfig) }
+        } finally {
+            watchdog.cancel()
+        }
+        val prepared = preparation.getOrElse { error ->
             return failed(error.message ?: "the engine could not prepare a route")
+        }
+
+        // Whatever preparation did not spend. A route that opens is still worth
+        // waiting for, but not on top of a budget that has already gone.
+        val remaining = deadline - System.currentTimeMillis()
+        if (remaining <= 0) {
+            return failed("the engine did not find a route in time")
         }
 
         val port = runCatching {
@@ -70,7 +105,7 @@ class AetherCarrierClient(
         }
         engine = job
 
-        val reached = withTimeoutOrNull(timeoutMs) {
+        val reached = withTimeoutOrNull(remaining) {
             select {
                 up.onAwait { true }
                 job.onJoin { false }
@@ -88,13 +123,33 @@ class AetherCarrierClient(
         }
 
         mutableState.value = CarrierSnapshot(stage = CarrierStage.CONNECTED, port = port)
+
+        // The wait above ends at the first route; the engine goes on running
+        // after it, and can stop at any point in the session that follows --
+        // a transport that dies, a keepalive that is never answered. Nothing
+        // used to publish that: the snapshot stayed CONNECTED, the hop's
+        // watcher had no event to act on, and the phone sat behind an
+        // interface routed into a listener that had gone.
+        scope.launch {
+            job.join()
+            // A later start has replaced this engine, or stop() took it down
+            // and has already said so. Either way this is not news.
+            if (stopping || engine !== job) return@launch
+            mutableState.value = CarrierSnapshot(
+                stage = CarrierStage.FAILED,
+                failure = outcome?.error ?: "the engine stopped",
+            )
+        }
         return Result.success(port)
     }
 
     override fun stop() {
-        // Stops a running engine. A search still inside prepare() is not
-        // reached by this or by cancelScan(), which belongs to the endpoint
-        // scanner; whoever stops this does not wait for it -- see raceLanes.
+        // Stops a running engine, and a preparation that has not produced one
+        // yet: nativeStop reaches only the session, and cancelScan belongs to
+        // the endpoint scanner rather than to prepare's own search. Neither is
+        // waited for -- see raceLanes.
+        stopping = true
+        runCatching { NativeAetherBridge.cancelPrepare() }
         runCatching { NativeAetherBridge.stop() }
         engine?.cancel()
         engine = null

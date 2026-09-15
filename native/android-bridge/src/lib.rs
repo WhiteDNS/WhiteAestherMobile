@@ -29,12 +29,39 @@ const SCAN_RESULT_LIMIT: usize = 6;
 static STOP_SENDER: Lazy<Mutex<Option<oneshot::Sender<()>>>> = Lazy::new(|| Mutex::new(None));
 static SCAN_RUNNING: AtomicBool = AtomicBool::new(false);
 static SCAN_CANCELLED: AtomicBool = AtomicBool::new(false);
+static PREPARE_RUNNING: AtomicBool = AtomicBool::new(false);
+static PREPARE_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+/// How often a cancelled preparation notices it was cancelled.
+const CANCEL_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
 struct ScanRunningGuard;
 
 impl Drop for ScanRunningGuard {
     fn drop(&mut self) {
         SCAN_RUNNING.store(false, Ordering::SeqCst);
+    }
+}
+
+struct PrepareRunningGuard;
+
+impl Drop for PrepareRunningGuard {
+    fn drop(&mut self) {
+        PREPARE_RUNNING.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Completes once `flag` is set.
+///
+/// The flag rather than a channel because the setter is a JNI call from another
+/// thread with no runtime of its own, and polling it every tenth of a second
+/// costs nothing next to what it interrupts.
+async fn until_cancelled(flag: &AtomicBool) {
+    loop {
+        if flag.load(Ordering::Relaxed) {
+            return;
+        }
+        tokio::time::sleep(CANCEL_POLL).await;
     }
 }
 
@@ -555,13 +582,35 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
             if SCAN_RUNNING.load(Ordering::SeqCst) {
                 return Err("endpoint scan is already running".into());
             }
+            // Preparation holds no lock of its own upstream, and this is a
+            // blocking JNI call: a caller that gave up waiting for one and
+            // started another used to get two provisionings racing for the same
+            // identity file. Refused rather than queued -- whoever is waiting
+            // has a budget, and a second wait behind the first would outlast it.
+            if PREPARE_RUNNING.swap(true, Ordering::SeqCst) {
+                return Err("route preparation is already running".into());
+            }
+            let _guard = PrepareRunningGuard;
+            PREPARE_CANCELLED.store(false, Ordering::SeqCst);
             let raw = read_java_string(&mut env, &config)?;
             let config = BridgeConfig::parse(&raw)?;
             config.apply_environment();
             let embedded = config.embedded(None)?;
-            let prepared = runtime()?
-                .block_on(aether::prepare_embedded(&embedded))
-                .map_err(|error| error.to_string())?;
+            // Raced against the cancel flag rather than simply awaited. Dropping
+            // the future is what actually ends provisioning and the endpoint
+            // search inside it; without this the caller's deadline only stopped
+            // it waiting, and the work went on behind whatever came next.
+            let prepared = runtime()?.block_on(async {
+                tokio::select! {
+                    biased;
+                    _ = until_cancelled(&PREPARE_CANCELLED) => {
+                        Err("route preparation was cancelled".to_string())
+                    }
+                    result = aether::prepare_embedded(&embedded) => {
+                        result.map_err(|error| error.to_string())
+                    }
+                }
+            })?;
             Ok(response(
                 true,
                 serde_json::json!({
@@ -588,6 +637,9 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
         let result = (|| -> Result<String, String> {
             if STOP_SENDER.lock().is_some() {
                 return Err("disconnect before scanning endpoints".into());
+            }
+            if PREPARE_RUNNING.load(Ordering::SeqCst) {
+                return Err("route preparation is already running".into());
             }
             if SCAN_RUNNING.swap(true, Ordering::SeqCst) {
                 return Err("endpoint scan is already running".into());
@@ -660,6 +712,24 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
 ) -> jboolean {
     if SCAN_RUNNING.load(Ordering::SeqCst) {
         SCAN_CANCELLED.store(true, Ordering::SeqCst);
+        JNI_TRUE
+    } else {
+        JNI_FALSE
+    }
+}
+
+/// Ends a preparation that is still running, and says whether there was one.
+///
+/// Separate from cancelScan because they interrupt different work: that one
+/// belongs to the standalone endpoint search, and never reached the
+/// provisioning and peer selection that prepare does before a session starts.
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeCancelPrepare(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+) -> jboolean {
+    if PREPARE_RUNNING.load(Ordering::SeqCst) {
+        PREPARE_CANCELLED.store(true, Ordering::SeqCst);
         JNI_TRUE
     } else {
         JNI_FALSE
@@ -938,6 +1008,9 @@ mod tests {
     #[test]
     fn reports_core_version() {
         assert_eq!(BRIDGE_VERSION.split('.').count(), 3);
-        assert_eq!(aether::version(), "1.8.0");
+        // Pinned deliberately. The engine version crosses into the app's
+        // diagnostics and its update notice, and an engine bump that nobody
+        // noticed is one nobody tested on a phone either.
+        assert_eq!(aether::version(), "2.0.0");
     }
 }

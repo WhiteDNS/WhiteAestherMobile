@@ -113,15 +113,24 @@ enum class Carrier(val wireName: String, @StringRes val label: Int) {
     val usesEngine: Boolean get() = this == AETHER
 
     /**
-     * Whether this carrier forwards datagrams.
+     * Whether this carrier's SOCKS5 listener forwards datagrams.
      *
-     * Tor does not, and saying so is not a detail. A proxy declared as carrying
-     * UDP that cannot swallows every datagram instead of refusing it, and a
-     * phone experiences that as DNS and QUIC hanging while TCP works -- the
-     * hardest shape of broken to recognise. Declared false, mihomo refuses them
-     * and everything falls back to TCP within a round trip.
+     * The listener, not the tunnel behind it, and the difference is the whole
+     * point. Psiphon's network carries UDP; the local proxy it hands us does
+     * not -- tunnel-core binds it through goptlib, whose SOCKS server answers
+     * CONNECT and refuses UDP ASSOCIATE outright, and Psiphon's own client
+     * reaches datagrams by a separate udpgw channel this app does not speak.
+     * Tor has no datagrams at any layer. Only the engine's own listener
+     * implements UDP ASSOCIATE, in socks.rs.
+     *
+     * Saying so is not a detail. A proxy declared as carrying UDP that cannot
+     * swallows every datagram instead of refusing it, and a phone experiences
+     * that as DNS and QUIC hanging while TCP works -- the hardest shape of
+     * broken to recognise. Declared false, mihomo refuses them and everything
+     * falls back to TCP within a round trip. DNS is unaffected either way: the
+     * chain resolves over DoH, which is TCP.
      */
-    val carriesUdp: Boolean get() = this != TOR
+    val carriesUdp: Boolean get() = this == AETHER
 
     /**
      * True when the carrier needs mihomo to reach the interface.
@@ -295,7 +304,7 @@ data class AppSettings(
      * this is on, as the choice waiting for anyone who turns it off, not as
      * what a session runs.
      */
-    val automaticCarrier: Boolean = false,
+    val automaticCarrier: Boolean = true,
     /**
      * How Tor reaches its first hop, when Tor is the carrier.
      *

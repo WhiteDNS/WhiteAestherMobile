@@ -228,12 +228,7 @@ fn http_client() -> Result<reqwest::Client> {
         .timeout(std::time::Duration::from_secs(20));
 
     if let Some(upstream) = crate::upstream::configured() {
-        match upstream.as_reqwest_proxy() {
-            Ok(proxy) => builder = builder.proxy(proxy),
-            Err(error) => {
-                log::warn!("[-] the api calls could not be sent through the proxy: {error}")
-            }
-        }
+        builder = builder.proxy(upstream.as_reqwest_proxy()?);
     }
 
     builder.build().map_err(|e| AetherError::Api(e.to_string()))
@@ -335,8 +330,9 @@ async fn fallback_call(
         );
         return serde_json::from_str::<AccountData>(&response.body).map_err(|e| {
             AetherError::Api(format!(
-                "{label} decode over {}: {e}; body={}",
-                response.route, response.body
+                "{label} decode over {}: {e} ({} byte answer)",
+                response.route,
+                response.body.len()
             ))
         });
     }
@@ -364,8 +360,8 @@ fn describe_rejection(status: reqwest::StatusCode, body: &str) -> String {
         let trimmed = body.trim();
         if trimmed.is_empty() {
             "no details returned".to_string()
-        } else if trimmed.len() > 220 {
-            format!("{}…", &trimmed[..220])
+        } else if trimmed.chars().count() > 220 {
+            format!("{}…", trimmed.chars().take(220).collect::<String>())
         } else {
             trimmed.to_string()
         }
@@ -391,16 +387,16 @@ fn extract_api_error(body: &str) -> Option<String> {
     let errors = value.get("errors")?.as_array()?;
     let parts: Vec<String> = errors
         .iter()
-        .filter_map(|entry| {
+        .map(|entry| {
             let message = entry
                 .get("message")
                 .and_then(|value| value.as_str())
                 .unwrap_or("unknown");
             let code = entry.get("code").and_then(|value| value.as_i64());
-            Some(match code {
+            match code {
                 Some(code) => format!("{message} (code {code})"),
                 None => message.to_string(),
-            })
+            }
         })
         .collect();
 
@@ -445,8 +441,9 @@ where
             .map_err(|e| AetherError::Api(format!("{label}: {e}")))?;
 
         if status.is_success() {
-            return serde_json::from_str::<AccountData>(&body)
-                .map_err(|e| AetherError::Api(format!("{label} decode: {e}; body={body}")));
+            return serde_json::from_str::<AccountData>(&body).map_err(|e| {
+                AetherError::Api(format!("{label} decode: {e} ({} byte answer)", body.len()))
+            });
         }
 
         let described = format!("{label}: {}", describe_rejection(status, &body));
@@ -960,6 +957,13 @@ impl Identity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_rejection_in_any_script_is_cut_without_panicking() {
+        let body = format!("{}{}", "x".repeat(219), "é".repeat(200));
+        let described = describe_rejection(reqwest::StatusCode::BAD_REQUEST, &body);
+        assert!(described.contains('…'));
+    }
 
     #[test]
     fn the_certificate_lives_far_longer_than_a_day() {

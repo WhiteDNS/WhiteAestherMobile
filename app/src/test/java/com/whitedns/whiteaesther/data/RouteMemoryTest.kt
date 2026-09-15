@@ -98,15 +98,111 @@ class NetworkKeyTest {
     }
 }
 
+/**
+ * What is remembered about the engine having failed, and for how long.
+ *
+ * The engine going first is worth two and a half minutes when it works and
+ * costs the same when it does not, so the evidence for placing that bet has to
+ * be about this network and has to go stale. It used to be a single flag set
+ * the first time the engine ever connected anywhere, which never expired.
+ */
+class EngineFailureMemoryTest {
+    private val now = 1_700_000_000_000L
+    private val network = "cell:43211"
+
+    @Test
+    fun aFreshFailureKeepsTheEngineOutOfTheLead() {
+        val stored = RouteMemory.rememberEngineFailure(null, network, now)
+
+        assertTrue(RouteMemory.engineFailedRecently(stored, network, now))
+        assertTrue(RouteMemory.engineFailedRecently(stored, network, now + 60_000))
+    }
+
+    @Test
+    fun theEngineGetsTheLeadBackAfterAWhile() {
+        val stored = RouteMemory.rememberEngineFailure(null, network, now)
+
+        // A network that came good the same afternoon has to be able to say so,
+        // which is why this expires far sooner than a remembered success.
+        assertFalse(
+            RouteMemory.engineFailedRecently(
+                stored,
+                network,
+                now + RouteMemory.ENGINE_RETRY_AFTER_MS + 1,
+            ),
+        )
+    }
+
+    @Test
+    fun aFailureOnOneNetworkSaysNothingAboutAnother() {
+        val stored = RouteMemory.rememberEngineFailure(null, network, now)
+
+        assertFalse(RouteMemory.engineFailedRecently(stored, "wifi:abc123", now))
+    }
+
+    @Test
+    fun theEngineConnectingHereClearsIt() {
+        var stored = RouteMemory.rememberEngineFailure(null, network, now)
+        stored = RouteMemory.remember(stored, network, AutoRoute.AETHER_H2_QUICK, now + 1_000)
+
+        // Any Aether route is remembered as the engine, so a win in the race
+        // answers the failure that kept it out of the lead.
+        assertFalse(RouteMemory.engineFailedRecently(stored, network, now + 1_000))
+        assertEquals(AutoRoute.AETHER, RouteMemory.recall(stored, network, now + 1_000))
+    }
+
+    @Test
+    fun anotherCarrierWinningLeavesTheMarkAlone() {
+        var stored = RouteMemory.rememberEngineFailure(null, network, now)
+        stored = RouteMemory.remember(stored, network, AutoRoute.PSIPHON, now + 1_000)
+
+        // Psiphon winning says nothing about whether the engine would have.
+        assertTrue(RouteMemory.engineFailedRecently(stored, network, now + 1_000))
+        assertEquals(AutoRoute.PSIPHON, RouteMemory.recall(stored, network, now + 1_000))
+    }
+
+    @Test
+    fun aFailureSurvivesBesideARememberedRoute() {
+        var stored = RouteMemory.remember(null, network, AutoRoute.PSIPHON, now)
+        stored = RouteMemory.rememberEngineFailure(stored, network, now + 1_000)
+
+        assertEquals(AutoRoute.PSIPHON, RouteMemory.recall(stored, network, now + 1_000))
+        assertTrue(RouteMemory.engineFailedRecently(stored, network, now + 1_000))
+    }
+
+    @Test
+    fun aNetworkKnownOnlyForAFailureIsStillAnEntry() {
+        val stored = RouteMemory.rememberEngineFailure(null, network, now)
+
+        assertNull(RouteMemory.recall(stored, network, now))
+        assertTrue(RouteMemory.engineFailedRecently(stored, network, now))
+    }
+}
+
 class AutomaticCarrierDefaultTest {
     @Test
-    fun automaticIsOffUntilChosen() {
-        // Opt-in until it has been confirmed on the filtered networks where
-        // 1.6.0, with it on by default, gave up on routes 1.5.0 got through.
+    fun aPhoneThatHasNotChosenGetsEveryWayOut() {
+        // Opt-in after 1.6.0, where Automatic on by default did worse than
+        // 1.5.0. Both reasons are gone: the sequential plan that gave the
+        // engine sixty seconds became a race that starts everything at once,
+        // and the check deciding which route wins no longer resolves its
+        // targets on the phone -- which on a network with a hijacked resolver
+        // had it discard carriers that were working.
+        //
+        // A default of one carrier is a default that hides two, on a phone
+        // whose owner has not said which they want.
         val settings = AppSettings()
 
+        assertTrue(settings.automaticCarrier)
+    }
+
+    @Test
+    fun choosingOneCarrierStillMeansOneCarrier() {
+        // Turning Automatic off has to leave the session exactly as 1.5.0 ran
+        // it, because that is what the person who turned it off asked for.
+        val settings = AppSettings(automaticCarrier = false)
+
         assertFalse(settings.automaticCarrier)
-        // Which leaves the session exactly as 1.5.0 ran it: Aether alone.
         assertEquals(listOf(Carrier.AETHER), settings.carrierPath)
     }
 }

@@ -22,6 +22,7 @@ import com.whitedns.whiteaesther.core.AetherCarrierClient
 import com.whitedns.whiteaesther.core.CarrierClient
 import com.whitedns.whiteaesther.core.CarrierStage
 import com.whitedns.whiteaesther.core.PsiphonClient
+import com.whitedns.whiteaesther.core.PsiphonConfig
 import com.whitedns.whiteaesther.core.TorClient
 import com.whitedns.whiteaesther.core.TorBridges
 import com.whitedns.whiteaesther.core.TorConfig
@@ -134,7 +135,7 @@ class AetherVpnService : VpnService() {
     private val startedHops = mutableListOf<Pair<Carrier, CarrierClient>>()
 
     /**
-     * The session whose collapse has already been dealt with.
+     * The attempt whose collapse has already been dealt with.
      *
      * Hops fail together: the second one goes because the first did, moments
      * apart. Without this each watcher schedules its own reconnect, so one
@@ -142,7 +143,28 @@ class AetherVpnService : VpnService() {
      * whichever hop happened to notice last rather than the one that went
      * first.
      */
-    private var collapsedGeneration: Long = -1
+    private var collapsedAttempt: Long = -1
+
+    /**
+     * Which dial of the hops the watchers and [collapsedAttempt] belong to.
+     *
+     * Not the generation. A retry reuses it -- scheduleReconnect hands the same
+     * one back to runSession -- so a marker keyed on the generation stays set
+     * for every attempt after the first, and the second failure of a session
+     * was watched by nothing: the VPN stayed up, carrying nothing, with no
+     * reconnect scheduled. This moves every time hops are dialled, so each
+     * attempt collapses its own failures and no one else's.
+     */
+    private var hopAttempt: Long = 0
+
+    /**
+     * The watchers of the current attempt's hops.
+     *
+     * Cancelled when the next attempt begins. Without that they accumulate one
+     * collector per retry, each still subscribed to a client that was stopped
+     * attempts ago.
+     */
+    private val hopWatchers = mutableListOf<Job>()
 
     /**
      * How far each hop has got, in the order the path dials them.
@@ -298,6 +320,14 @@ class AetherVpnService : VpnService() {
                         putString(LAST_TOR_BRIDGES, torBridges)
                         putString(LAST_PSIPHON_REGION, psiphonRegion)
                         putBoolean(LAST_AUTOMATIC, automatic)
+                        // Part of the session, not of the request that started
+                        // it. Without these two the START_STICKY restart after
+                        // the process was killed came back with both false, so
+                        // a tunnel the user had told to block on failure
+                        // stopped blocking -- silently, and only at the moment
+                        // it mattered.
+                        putBoolean(LAST_KILL_SWITCH, blockOnFailure)
+                        putBoolean(LAST_STRICT_KILL, blockAfterStop)
                     }
                     restartPolicy = START_STICKY
                 } else {
@@ -311,6 +341,8 @@ class AetherVpnService : VpnService() {
                         remove(LAST_TOR_BRIDGES)
                         remove(LAST_PSIPHON_REGION)
                         remove(LAST_AUTOMATIC)
+                        remove(LAST_KILL_SWITCH)
+                        remove(LAST_STRICT_KILL)
                     }
                 }
                 startForegroundNow(sayNow(R.string.status_preparing_connection), sayNow(R.string.status_validating_engine))
@@ -334,6 +366,8 @@ class AetherVpnService : VpnService() {
                     torBridges = preferences.getString(LAST_TOR_BRIDGES, null).orEmpty()
                     psiphonRegion = preferences.getString(LAST_PSIPHON_REGION, null).orEmpty()
                     automatic = preferences.getBoolean(LAST_AUTOMATIC, false)
+                    blockOnFailure = preferences.getBoolean(LAST_KILL_SWITCH, false)
+                    blockAfterStop = preferences.getBoolean(LAST_STRICT_KILL, false)
                     restartPolicy = START_STICKY
                     startForegroundNow(sayNow(R.string.status_restoring), sayNow(R.string.status_reconnecting_tun))
                     replaceSession(
@@ -376,7 +410,7 @@ class AetherVpnService : VpnService() {
         serviceScope.launch {
             commandMutex.withLock {
                 generation += 1
-                collapsedGeneration = -1
+                newHopAttempt()
                 reconnectAttempt = 0
                 // A new connect is a new search, planned for whichever network
                 // the phone is on now.
@@ -713,7 +747,21 @@ class AetherVpnService : VpnService() {
         val hints = listOfNotNull(
             lockdownHint(),
             psiphonRegion.takeIf { Carrier.PSIPHON in hops && it.isNotBlank() }
-                ?.let { sayNow(R.string.err_psiphon_region_hint, it.uppercase(java.util.Locale.US)) },
+                ?.let { region ->
+                    val code = region.uppercase(java.util.Locale.US)
+                    // Named separately when Psiphon has listed its countries
+                    // and this is not among them. tunnel-core treats an
+                    // unreachable region as a reason to fail rather than to
+                    // substitute, and each attempt has a five-minute window of
+                    // its own -- so without being told, someone can wait out
+                    // eight retries on a country that was never on offer.
+                    val known = PsiphonConfig.availableRegions(this)
+                    if (known.isNotEmpty() && region !in known) {
+                        sayNow(R.string.err_psiphon_region_unlisted, code)
+                    } else {
+                        sayNow(R.string.err_psiphon_region_hint, code)
+                    }
+                },
         )
         return if (hints.isEmpty()) reason else reason + " \u2014 " + hints.joinToString(" ")
     }
@@ -821,15 +869,16 @@ class AetherVpnService : VpnService() {
         configJson: String,
         mode: EngineMode,
         sessionGeneration: Long,
+        attempt: Long,
     ) {
-        serviceScope.launch {
+        hopWatchers += serviceScope.launch {
             client.state.collect { snapshot ->
-                if (sessionGeneration != generation) return@collect
+                if (sessionGeneration != generation || attempt != hopAttempt) return@collect
                 if (snapshot.stage != CarrierStage.FAILED && snapshot.stage != CarrierStage.STOPPED) {
                     return@collect
                 }
-                if (collapsedGeneration == sessionGeneration) return@collect
-                collapsedGeneration = sessionGeneration
+                if (collapsedAttempt == attempt) return@collect
+                collapsedAttempt = attempt
                 markHop(hop, snapshot.stage)
 
                 val reason = hopFailure(hop, snapshot.failure ?: sayNow(R.string.err_carrier_stopped))
@@ -839,6 +888,24 @@ class AetherVpnService : VpnService() {
                 scheduleReconnect(configJson, sessionGeneration, mode, reason)
             }
         }
+    }
+
+    /**
+     * Retires the previous attempt's watchers and opens a new attempt.
+     *
+     * Both halves matter. Clearing the marker alone would let a watcher from
+     * the attempt before this one report a failure the retry has already moved
+     * past; cancelling alone would leave the marker set and the new hops
+     * unwatched.
+     *
+     * @return the token every watcher of this attempt is scoped to.
+     */
+    private fun newHopAttempt(): Long {
+        hopWatchers.forEach { it.cancel() }
+        hopWatchers.clear()
+        hopAttempt += 1
+        collapsedAttempt = -1
+        return hopAttempt
     }
 
     /**
@@ -940,6 +1007,7 @@ class AetherVpnService : VpnService() {
         startedHops.clear()
         hopStages.clear()
         hops.forEach { hopStages[it] = CarrierStage.STOPPED }
+        val attempt = newHopAttempt()
         var port = 0
         for (hop in hops) {
             markHop(hop, CarrierStage.CONNECTING)
@@ -984,7 +1052,7 @@ class AetherVpnService : VpnService() {
             if (hop == Carrier.AETHER && upstream == 0) {
                 rememberWorkingTransport(carrierEngineConfig(configJson, upstream))
             }
-            watchHop(hop, client, configJson, mode, sessionGeneration)
+            watchHop(hop, client, configJson, mode, sessionGeneration, attempt)
         }
         publish(
             EngineStatus(EngineStage.CONNECTING, mode, null, sayNow(R.string.status_starting_chain)),
@@ -994,11 +1062,11 @@ class AetherVpnService : VpnService() {
             chain.startCarrier(
                 settings = chainSettings,
                 socksPort = port,
-                // Psiphon forwards UDP over its own tunnel; Tor carries none at
-                // all. Declaring it either way is not cosmetic: a proxy that
-                // says it takes datagrams and then drops them makes DNS and
-                // QUIC hang, while one that refuses them makes both fall back
-                // within a round trip.
+                // Only the engine's listener takes datagrams; Psiphon's and
+                // Tor's refuse them. Declaring it either way is not cosmetic: a
+                // proxy that says it takes datagrams and then drops them makes
+                // DNS and QUIC hang, while one that refuses them makes both
+                // fall back within a round trip.
                 // The last hop is the one carrying traffic out, so it is the
                 // one whose answer this is.
                 udp = hops.last().carriesUdp,
@@ -1010,7 +1078,7 @@ class AetherVpnService : VpnService() {
             // Claimed before the hops are stopped: each of them is watched, and
             // a watcher seeing its hop stop would report this same failure a
             // second time and spend a second attempt on it.
-            collapsedGeneration = sessionGeneration
+            collapsedAttempt = attempt
             runCatching { chain.stop() }
             stopCarrier()
             if (sessionGeneration != generation) return
@@ -1087,9 +1155,22 @@ class AetherVpnService : VpnService() {
         val step = autoSteps.getOrNull(autoStepIndex) ?: return null
         if (step is AutoStep.Engine) {
             // One engine at a time. A session the leash had to leave behind may
-            // still be inside a call that has not yet heard the stop.
+            // still be inside a call that has not yet heard the stop, and the
+            // reference is cleared only once it really has finished: the wait
+            // below can expire with the old engine still going, and forgetting
+            // it then was how two of them came to run at once.
+            //
+            // Moving on rather than giving up. This step cannot run, but the
+            // rest of the ladder is carriers that have nothing to do with the
+            // engine, and ending the session here would leave the screen on
+            // "connecting" with nothing behind it.
             staleEngine?.let { stale ->
-                withTimeoutOrNull(STALE_ENGINE_WAIT_MS) { stale.join() }
+                if (withTimeoutOrNull(STALE_ENGINE_WAIT_MS) { stale.join() } == null) {
+                    val stuck = sayNow(R.string.err_auto_engine_busy)
+                    EngineLog.record(LogLevel.WARN, "auto", stuck)
+                    finishStep(sessionGeneration, mode, stuck)
+                    return null
+                }
                 staleEngine = null
             }
             if (sessionGeneration != generation) return null
@@ -1146,6 +1227,7 @@ class AetherVpnService : VpnService() {
                 "aether did not connect within ${step.budgetMs / 1_000}s; moving on",
             )
             autoStepDeadline = 0L
+            runCatching { NativeAetherBridge.cancelPrepare() }
             runCatching { NativeAetherBridge.cancelScan() }
             runCatching { NativeAetherBridge.stop() }
             delay(LEASH_GRACE_MS)
@@ -1153,7 +1235,7 @@ class AetherVpnService : VpnService() {
             EngineLog.record(LogLevel.WARN, "auto", "the engine has not stopped; leaving it behind")
             staleEngine = sessionJob
             generation += 1
-            collapsedGeneration = -1
+            newHopAttempt()
             finishStep(generation, autoMode ?: EngineMode.TUN, sayNow(R.string.err_auto_engine_timeout))
         }
     }
@@ -1201,6 +1283,10 @@ class AetherVpnService : VpnService() {
     private fun finishStep(sessionGeneration: Long, mode: EngineMode, reason: String) {
         if (autoSteps.getOrNull(autoStepIndex) is AutoStep.Engine) {
             setAutoStage(Carrier.AETHER, CarrierStage.FAILED)
+            // Written down, so the next connect on this network does not spend
+            // the same two and a half minutes finding it out again. It only
+            // keeps the engine out of the lead; it still races.
+            rememberEngineFailure()
         }
         enterStep(autoStepIndex + 1, sessionGeneration)
         if (autoStepIndex < autoSteps.size) {
@@ -1285,11 +1371,20 @@ class AetherVpnService : VpnService() {
             hasCustomBridges = TorBridges.parse(torBridges).isNotEmpty(),
             engineCanSearchDeeper = transportOf(baseConfigJson ?: "{}") in DEEPER_TRANSPORTS,
             // Written whenever the engine connects, so anyone upgrading from a
-            // version where Aether worked for them has it.
+            // version where Aether worked for them has it. Deliberately not
+            // scoped to this network: the question is whether the engine has
+            // ever got out for this user, not whether it has here.
             engineWorkedBefore = preferences.getString(LAST_GOOD_TRANSPORT, null) != null,
-            provenFraming = preferences.getString(LAST_GOOD_TRANSPORT, null)
-                ?.takeIf { it == "h2" || it == "h3" },
+            // This one is scoped, because it decides which framing to lead
+            // with, and a framing proven on another network says nothing about
+            // whether this one carries it.
+            provenFraming = rememberedTransport()?.takeIf { it == "h2" || it == "h3" },
             onMobileData = NetworkKey.isCellular(autoNetworkKey),
+            engineFailedHere = RouteMemory.engineFailedRecently(
+                preferences.getString(AUTO_ROUTES, null),
+                autoNetworkKey,
+                System.currentTimeMillis(),
+            ),
         )
     }
 
@@ -1366,12 +1461,13 @@ class AetherVpnService : VpnService() {
             startedHops += carrier to winner.client
             hopStages.clear()
             hopStages[carrier] = CarrierStage.CONNECTED
+            val attempt = newHopAttempt()
             EngineLog.record(
                 LogLevel.INFO,
                 "auto",
                 "${winner.route.wireName} carries traffic; routing the interface into 127.0.0.1:${winner.port}",
             )
-            watchHop(carrier, winner.client, configJson, mode, sessionGeneration)
+            watchHop(carrier, winner.client, configJson, mode, sessionGeneration, attempt)
             publish(EngineStatus(EngineStage.CONNECTING, mode, null, sayNow(R.string.status_starting_chain)))
 
             val fd = tun.detachFd()
@@ -1388,7 +1484,7 @@ class AetherVpnService : VpnService() {
                 EngineLog.record(LogLevel.ERROR, "chain", failure)
                 // Claimed first, so the winner's watcher does not report this
                 // failure a second time when its carrier is stopped below.
-                collapsedGeneration = sessionGeneration
+                collapsedAttempt = attempt
                 runCatching { chain.stop() }
                 stopCarrier()
                 if (sessionGeneration != generation) return
@@ -1428,14 +1524,14 @@ class AetherVpnService : VpnService() {
         val begun = List(lanes.size) { CompletableDeferred<Unit>() }
         val finished = BooleanArray(lanes.size)
         // Not this coroutine's children. The engine's search inside prepare()
-        // is a blocking call that neither a cancellation nor cancelScan()
-        // reaches -- cancelScan() stops the endpoint scanner's scan, not
-        // prepare's -- and when the lanes were children, the race waited for
-        // them: on the emulator a Psiphon that had carried traffic in ten
-        // seconds sat for forty more while a losing Aether finished its quick
-        // search. The lanes are cancelled and left to finish in their own
-        // time; settling the race is what keeps a late one from touching
-        // anything.
+        // is a blocking call: cancelPrepare() ends the work it is doing, but
+        // the JNI call itself only returns once that unwinds, and a plain
+        // cancellation does not reach it at all. When the lanes were children
+        // the race waited for them: on the emulator a Psiphon that had carried
+        // traffic in ten seconds sat for forty more while a losing Aether
+        // finished its quick search. The lanes are cancelled and left to finish
+        // in their own time; settling the race is what keeps a late one from
+        // touching anything.
         val lanesScope = CoroutineScope(
             serviceScope.coroutineContext + SupervisorJob(serviceScope.coroutineContext[Job]),
         )
@@ -1501,7 +1597,14 @@ class AetherVpnService : VpnService() {
             // One engine at a time, as for an engine step: the step before
             // this race may have left one behind.
             staleEngine?.let { stale ->
-                withTimeoutOrNull(STALE_ENGINE_WAIT_MS) { stale.join() }
+                if (withTimeoutOrNull(STALE_ENGINE_WAIT_MS) { stale.join() } == null) {
+                    EngineLog.record(
+                        LogLevel.WARN,
+                        "auto",
+                        "${route.wireName}: the previous engine has still not stopped",
+                    )
+                    return null
+                }
                 staleEngine = null
             }
             if (sessionGeneration != generation) return null
@@ -1591,6 +1694,29 @@ class AetherVpnService : VpnService() {
             EngineLog.record(LogLevel.INFO, "auto", "remembering ${route.wireName} for network $autoNetworkKey")
         }
         preferences.edit { putString(AUTO_ROUTES, RouteMemory.remember(stored, autoNetworkKey, route, now)) }
+    }
+
+    /**
+     * Notes that leading with the engine did not work on this network.
+     *
+     * Only the engine-first step writes this. A loss inside the race says
+     * nothing new -- everything in a race loses except one -- and recording
+     * those would take the engine out of the lead on a network where it is
+     * simply slower than Psiphon, which is not the same thing at all.
+     */
+    private fun rememberEngineFailure() {
+        val stored = preferences.getString(AUTO_ROUTES, null)
+        EngineLog.record(
+            LogLevel.INFO,
+            "auto",
+            "the engine did not connect first on network $autoNetworkKey; it will race rather than lead",
+        )
+        preferences.edit {
+            putString(
+                AUTO_ROUTES,
+                RouteMemory.rememberEngineFailure(stored, autoNetworkKey, System.currentTimeMillis()),
+            )
+        }
     }
 
     private fun publishAutoProgress() {
@@ -1984,6 +2110,20 @@ class AetherVpnService : VpnService() {
                         "split",
                         "none of the chosen apps are installed; routing everything instead",
                     )
+                    // And routing everything means this app too, unless it is
+                    // excluded here. The allow list did that by construction;
+                    // an empty one does not, and a carrier in its own process
+                    // would have found itself inside the interface it was
+                    // supposed to be carrying.
+                    if (excludeSelf) {
+                        runCatching { builder.addDisallowedApplication(packageName) }.onFailure {
+                            EngineLog.record(
+                                LogLevel.WARN,
+                                "split",
+                                "could not exclude self: ${it.message}",
+                            )
+                        }
+                    }
                 }
             }
 
@@ -2147,6 +2287,7 @@ class AetherVpnService : VpnService() {
         // wedged in a native call may be holding that lock, and waiting for it
         // is what left the service unstoppable.
         generation += 1
+        runCatching { NativeAetherBridge.cancelPrepare() }
         runCatching { NativeAetherBridge.cancelScan() }
         runCatching { NativeAetherBridge.stop() }
 
@@ -2341,7 +2482,7 @@ class AetherVpnService : VpnService() {
      * this ladder is only ever climbed once per network.
      */
     private fun autoConfig(json: JSONObject, attempt: Int): String {
-        val remembered = preferences.getString(LAST_GOOD_TRANSPORT, null)
+        val remembered = rememberedTransport()
         val ladder = buildList {
             // Deep, because it is already known to work here.
             remembered?.let { add(it to json.optString("scanMode", "balanced")) }
@@ -2360,7 +2501,29 @@ class AetherVpnService : VpnService() {
     }
 
     /**
-     * Remembers the transport that reached CONNECTED.
+     * The framing that last worked on the network the phone is on now.
+     *
+     * Keyed on the network, as the route memory beside it always was. Held
+     * globally it said "H3 worked here" about a wifi the phone had left, and
+     * autoConfig puts the remembered rung first with a full search behind it --
+     * so moving from wifi to mobile data could begin with a four-minute hunt
+     * for UDP on an operator that drops it, before either quick probe was
+     * tried.
+     *
+     * Null when this network has not answered yet, which is the right starting
+     * position rather than a missing one: the ladder below it is the answer to
+     * not knowing.
+     */
+    private fun rememberedTransport(): String? {
+        val stored = preferences.getString(LAST_GOOD_TRANSPORT, null) ?: return null
+        val network = stored.substringBefore(MEMORY_SEPARATOR, missingDelimiterValue = "")
+        val transport = stored.substringAfter(MEMORY_SEPARATOR, missingDelimiterValue = "")
+        if (transport.isEmpty()) return null
+        return transport.takeIf { network == currentNetworkKey() }
+    }
+
+    /**
+     * Remembers the transport that reached CONNECTED, and where.
      *
      * Only meaningful for Automatic, and only worth writing when it changes:
      * this is on the connect path, and a preference write per session for a
@@ -2369,10 +2532,15 @@ class AetherVpnService : VpnService() {
     private fun rememberWorkingTransport(engineConfig: String) {
         val transport = transportOf(engineConfig)
         if (transport == "auto") return
-        if (preferences.getString(LAST_GOOD_TRANSPORT, null) == transport) return
-        preferences.edit { putString(LAST_GOOD_TRANSPORT, transport) }
-        EngineLog.record(LogLevel.INFO, "auto", "this network carries $transport")
+        val network = currentNetworkKey()
+        val entry = network + MEMORY_SEPARATOR + transport
+        if (preferences.getString(LAST_GOOD_TRANSPORT, null) == entry) return
+        preferences.edit { putString(LAST_GOOD_TRANSPORT, entry) }
+        EngineLog.record(LogLevel.INFO, "auto", "network $network carries $transport")
     }
+
+    private fun currentNetworkKey(): String =
+        NetworkIdentity.current(this).key ?: RouteMemory.ANY_NETWORK
 
     /** 3s, 6s, 12s, 24s, 48s, then a minute between attempts. */
     private fun reconnectDelayMs(attempt: Int): Long =
@@ -2395,14 +2563,19 @@ class AetherVpnService : VpnService() {
         // is not coming back on its own, and without this the phone resumes
         // over the ordinary route without saying anything.
         val blocking = blockOnFailure && raiseBlackhole(reason)
+        val said = told ?: sayNow(R.string.err_gave_up, reason, MAX_RECONNECT_ATTEMPTS)
         reportError(
             mode,
-            when {
-                told != null && blocking -> "$told ${sayNow(R.string.traffic_is_blocked)}"
-                told != null -> told
-                blocking -> "$reason. Stopped after $MAX_RECONNECT_ATTEMPTS attempts, and traffic is blocked."
-                else -> "$reason. Stopped after $MAX_RECONNECT_ATTEMPTS attempts."
-            },
+            listOfNotNull(
+                said,
+                // The app has Psiphon and Tor in it and a mode that tries them
+                // side by side, and a user whose carrier cannot get out of this
+                // network has no way of knowing that from here. Saying so is
+                // the difference between them finding the way out this build
+                // already has and concluding the app does not work.
+                sayNow(R.string.err_gave_up_try_automatic).takeIf { automaticWorthSuggesting(mode) },
+                sayNow(R.string.traffic_is_blocked).takeIf { blocking },
+            ).joinToString(" "),
         )
         serviceScope.launch {
             runCatching { chain.stop() }
@@ -2419,6 +2592,16 @@ class AetherVpnService : VpnService() {
             stopSelf()
         }
     }
+
+    /**
+     * Whether telling the user about Automatic would be telling them something.
+     *
+     * Not while it is already running -- it has its own sentence for having run
+     * out -- and not where it could not do anything this session did not: both
+     * of the other carriers need the whole device and mihomo to route into.
+     */
+    private fun automaticWorthSuggesting(mode: EngineMode): Boolean =
+        !automatic && mode == EngineMode.TUN && chain.isAvailable
 
     private fun finishIfCurrent(sessionGeneration: Long) {
         if (sessionGeneration != generation) return
@@ -2504,10 +2687,22 @@ class AetherVpnService : VpnService() {
         private const val EXTRA_SPLIT = "split"
         private const val EXTRA_KILL_SWITCH = "killSwitch"
         private const val EXTRA_STRICT_KILL = "strictKillSwitch"
+        private const val LAST_KILL_SWITCH = "last_kill_switch"
+        private const val LAST_STRICT_KILL = "last_strict_kill"
         private const val LAST_TUN_CONFIG = "last_tun_config"
         private const val LAST_CHAIN_CONFIG = "last_chain_config"
         private const val LAST_SPLIT_CONFIG = "last_split_config"
+        /**
+         * Which framing last worked, and on which network: "<network>|<transport>".
+         *
+         * One entry rather than a table. Unlike the route memory beside it this
+         * is only a starting rung on a ladder the session climbs anyway, so
+         * remembering every network the phone has ever seen would buy a few
+         * seconds on a return to one of them and cost a preference that grows
+         * without bound.
+         */
         private const val LAST_GOOD_TRANSPORT = "last_good_transport"
+        private const val MEMORY_SEPARATOR = "|"
         private const val EXTRA_CARRIER = "carrier"
         private const val EXTRA_SECOND_CARRIER = "second_carrier"
         private const val LAST_CARRIER = "last_carrier"
@@ -2546,9 +2741,12 @@ class AetherVpnService : VpnService() {
 
         /**
          * How long the engine waits for one left behind -- by the leash, or a
-         * race it lost -- to finish. As long as a full search can run, since
-         * nothing can interrupt one, and two engine sessions at once is not a
-         * state the engine was built for.
+         * race it lost -- to finish. Two engine sessions at once is not a state
+         * the engine was built for, so this is a wait rather than a formality:
+         * whoever is waiting moves on to something else instead of starting a
+         * second one. cancelPrepare is what keeps it short, by ending the
+         * abandoned search rather than letting it run out its own budget --
+         * which under Thorough is longer than this on its own.
          */
         private const val STALE_ENGINE_WAIT_MS = 130_000L
 

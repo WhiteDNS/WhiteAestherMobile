@@ -50,6 +50,7 @@
     <string name="endpoint_settings">تنظیمات نقطهٔ پایانی</string>
     <string name="the_engine_keeps_retrying">هسته همچنان تلاش می‌کند</string>
     <string name="retry"> · تلاش دوباره</string>
+    <string name="try_every_way_out">همهٔ راه‌ها را امتحان کن</string>
     <string name="change_profile">تغییر پروفایل</string>
     <string name="pin_an_endpoint">تثبیت یک نقطهٔ پایانی</string>
     <string name="the_last_attempt_failed">آخرین تلاش ناموفق بود</string>
@@ -475,9 +476,12 @@
     <string name="status_auto_waiting_network">اینترنت گوشی وصل نیست. منتظر وای‌فای یا دادهٔ همراه…</string>
     <string name="status_auto_lost">اتصال قطع شد. دوباره دنبال راه می‌گردیم…</string>
     <string name="status_auto_again">هنوز راهی پیدا نشد. یک بار دیگر همه را امتحان می‌کنیم…</string>
+    <string name="err_gave_up">%1$s. پس از %2$d تلاش متوقف شد.</string>
+    <string name="err_gave_up_try_automatic">این برنامه سایفون و تور را هم دارد. گزینهٔ خودکار در تنظیمات حامل، آن‌ها را همزمان با موتور امتحان می‌کند و هرکدام که عبور کرد را نگه می‌دارد.</string>
     <string name="err_auto_nothing_worked">هیچ راهی روی این شبکه کار نکرد. مطمئن شوید اینترنت گوشی کار می‌کند، بعد کمی بعد یا روی شبکهٔ دیگری دوباره امتحان کنید.</string>
     <string name="err_auto_no_network">اینترنت گوشی وصل نیست. وای‌فای یا دادهٔ همراه را روشن کنید و دوباره وصل شوید.</string>
     <string name="err_auto_race_failed">سایفون و تور راهی پیدا نکردند</string>
+    <string name="err_auto_engine_busy">موتور قبلی هنوز متوقف نشده است؛ ابتدا راه‌های دیگر امتحان می‌شوند.</string>
     <string name="err_auto_engine_timeout">اتر به‌موقع راهی پیدا نکرد</string>
     <string name="auto_searching_for">در حال جست‌وجو · %1$s</string>
     <string name="auto_patience">بار اول روی یک شبکهٔ سخت ممکن است چند دقیقه طول بکشد. لطفاً قطع نکنید؛ برنامه خودش راه را پیدا می‌کند.</string>
@@ -490,6 +494,7 @@
     <string name="status_starting_carrier">آماده‌سازی حامل…</string>
     <string name="status_carrier_connecting">%1$s دارد دنبال راه خروج می‌گردد. ممکن است یک دقیقه طول بکشد.</string>
     <string name="err_carrier_lockdown_hint">«VPN همیشه روشن» همراه با «مسدود کردن اتصال‌های بدون VPN» فعال است. در این حالت اندروید ممکن است به سایفون و تور شبکه ندهد — در تنظیمات اندروید خاموشش کنید و دوباره امتحان کنید.</string>
+    <string name="err_psiphon_region_unlisted">سایفون کشور خروج %1$s را فهرست نکرده است و تنها همان کشوری را می‌آزماید که انتخاب کرده‌اید. برای عبور از این وضعیت، «بهترین گزینهٔ موجود» یا کشور دیگری را انتخاب کنید.</string>
     <string name="err_psiphon_region_hint">کشور خروجی %1$s انتخاب شده و سایفون فقط همان کشور را امتحان می‌کند. اگر وصل نمی‌شود «بهترین موجود» را انتخاب کنید.</string>
     <string name="carrier_path_join">"، بعد "</string>
     <string name="status_carrier_carries">متصل از طریق %1$s</string>
@@ -526,7 +531,8 @@
     <string name="psiphon_region_best">بهترین گزینهٔ موجود</string>
     <string name="psiphon_region_best_detail">انتخاب با سایفون. سروری که آخرین بار جواب داده را دوباره می‌زند، پس تا وقتی کشوری انتخاب نکنید آی‌پی ثابت می‌ماند.</string>
     <string name="psiphon_region_detail">یک ترجیح است نه تضمین. سایفون به‌جای جایگزین‌کردن کشور دیگر، به تلاش ادامه می‌دهد.</string>
-    <string name="psiphon_region_unknown">سایفون فهرست کشورهایش را بعد از اولین اتصال می‌دهد. یک بار وصل شوید و برگردید.</string>
+    <string name="psiphon_region_unknown">سایفون هنوز فهرست کشورهایش را نداده است. این فهرست پس از نخستین اجرا می‌آید و تا آن زمان تنها گزینه، «بهترین گزینهٔ موجود» است.</string>
+    <string name="psiphon_region_unlisted_detail">سایفون این کشور را فهرست نکرده است. باز هم همین کشور خواسته می‌شود و اگر در دسترس نباشد، نشست شکست می‌خورد و از جای دیگری خارج نمی‌شود.</string>
     <string name="off_traffic_leaves_from_carrier">خاموش. ترافیک از %1$s خارج می‌شود</string>
     <string name="on_dialled_through_carrier">روشن، از داخل %1$s شماره‌گیری می‌شود</string>
     <string name="nodes_dialled_through_carrier">نودهای شما از داخل %1$s شماره‌گیری می‌شوند. یک راه خروج دارد و نودها از همان می‌روند، پس اینجا چیزی برای انتخاب نیست.</string>

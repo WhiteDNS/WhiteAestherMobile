@@ -75,6 +75,9 @@ object ChainConfig {
 
         val through = if (socksPort != null) {
             append("proxies:\n")
+            // True because this upstream is only ever the engine's own
+            // listener, which implements UDP ASSOCIATE -- see socks.rs. A
+            // carrier that does not gets renderCarrier, not this.
             append(
                 "  - {name: $proxyName, type: socks5, server: 127.0.0.1, " +
                     "port: $socksPort, udp: true}\n",
@@ -115,10 +118,11 @@ object ChainConfig {
      *   established. A port that is merely listening is not enough: traffic
      *   routed into a proxy whose tunnel has not come up is dropped rather than
      *   refused, which the phone experiences as everything hanging.
-     * \nparam udp whether the carrier forwards UDP. Psiphon does. Tor does not,
-     *   and a proxy declared `udp: true` that cannot carry it swallows every
-     *   datagram -- DNS and QUIC failing silently while TCP works, which is the
-     *   hardest shape of broken to recognise.
+     * \nparam udp whether the carrier's listener forwards UDP -- see
+     *   Carrier.carriesUdp, which is where that answer is kept. Only the
+     *   engine's own does. A proxy declared `udp: true` that cannot carry it
+     *   swallows every datagram -- DNS and QUIC failing silently while TCP
+     *   works, which is the hardest shape of broken to recognise.
      */
     fun renderCarrier(settings: ChainSettings, socksPort: Int, udp: Boolean = true): String =
         buildString {

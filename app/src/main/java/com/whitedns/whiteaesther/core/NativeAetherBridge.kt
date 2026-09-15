@@ -110,6 +110,16 @@ object NativeAetherBridge {
 
     fun cancelScan(): Boolean = isLoaded && nativeCancelScan()
 
+    /**
+     * Ends a [prepare] that is still running.
+     *
+     * [cancelScan] does not: that one belongs to the standalone endpoint
+     * search, and prepare's own provisioning and peer selection never heard it.
+     *
+     * @return true when there was a preparation to end.
+     */
+    fun cancelPrepare(): Boolean = isLoaded && nativeCancelPrepare()
+
     fun run(
         configJson: String,
         preparedPeer: String,
@@ -169,6 +179,9 @@ object NativeAetherBridge {
 
     @JvmStatic
     private external fun nativeCancelScan(): Boolean
+
+    @JvmStatic
+    private external fun nativeCancelPrepare(): Boolean
 
     @JvmStatic
     private external fun nativeRun(

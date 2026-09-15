@@ -25,8 +25,24 @@ class SettingsRepository(private val context: Context) {
             transport = transport,
             carrier = carrier,
             secondCarrier = secondCarrier,
-            // Off until the user turns it on.
-            automaticCarrier = preferences[CARRIER_AUTOMATIC] ?: false,
+            // On unless this phone has said otherwise.
+            //
+            // It was opt-in after 1.6.0, where Automatic on by default did
+            // worse than 1.5.0 -- but both reasons it did are gone. The plan
+            // was sequential and gave the engine sixty seconds, which a7b76f75
+            // replaced with a race that starts everything at once; and the
+            // check that decides which route wins resolved its targets on this
+            // device, so on a network with a hijacked resolver it asked every
+            // carrier to reach the block page and discarded the ones that could
+            // not. That was Automatic rejecting tunnels that worked.
+            //
+            // Absent means never asked, and never asked should get every way
+            // out this build has rather than the one carrier that happens to be
+            // first in the enum. A stored false is left alone: it is the
+            // answer of someone who went to the carrier screen and chose, and
+            // overriding that would route them through Psiphon or tor because
+            // we decided it was good for them.
+            automaticCarrier = preferences[CARRIER_AUTOMATIC] ?: true,
             psiphonRegion = preferences[PSIPHON_REGION].orEmpty(),
             torBridge = enumValueOrDefault(preferences[TOR_BRIDGE], TorBridge.NONE),
             torBridges = preferences[TOR_BRIDGES].orEmpty(),

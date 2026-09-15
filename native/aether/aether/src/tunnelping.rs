@@ -156,6 +156,8 @@ pub async fn masque_http_ping(p: &MasquePingParams, timeout: Duration) -> Result
                 noize: p.noize.clone(),
                 local_ipv4: p.local_ipv4,
                 quiet: true,
+                max_datagram: quic::MAX_DATAGRAM_SIZE,
+                version_bait: true,
             };
             AbortGuard(tokio::spawn(quic::run(
                 cfg,

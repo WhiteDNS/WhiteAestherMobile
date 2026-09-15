@@ -285,7 +285,7 @@ pub struct MasqueProbe {
 }
 
 pub async fn host_has_ipv6() -> bool {
-    match tokio::net::UdpSocket::bind("[::]:0").await {
+    match crate::egress::udp_bind("[::]:0".parse().expect("a wildcard address")) {
         Ok(sock) => sock.connect("[2606:4700:d0::a29f:c001]:443").await.is_ok(),
         Err(_) => false,
     }
