@@ -1,6 +1,7 @@
 package com.whitedns.whiteaesther
 
 import android.app.Application
+import android.os.FileObserver
 import androidx.annotation.StringRes
 import com.whitedns.whiteaesther.core.AppLocale
 import androidx.lifecycle.AndroidViewModel
@@ -166,12 +167,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * The exit countries Psiphon has said it has.
      *
      * Read from what the Psiphon process last wrote, because it is another
-     * process and this is a list of countries rather than something anything
-     * waits on. Empty until the first connection, which is honest: nothing
-     * knows what Psiphon has until Psiphon says.
+     * process. Empty until tunnel-core has run once and said what it has,
+     * which is honest: nothing knows what Psiphon has until Psiphon says.
      */
     private val mutablePsiphonRegions = MutableStateFlow(emptyList<String>())
     val psiphonRegions = mutablePsiphonRegions.asStateFlow()
+
+    /**
+     * Notices the Psiphon process writing the list, and re-reads it.
+     *
+     * Until this existed the only trigger was a change of [EngineStage], and
+     * tunnel-core reports its countries mid-session -- so the answer landed on
+     * disk while the screen was open and the picker went on showing whatever it
+     * had read when the stage last moved, often nothing at all.
+     *
+     * The directory rather than the file: the writer renames a temporary over
+     * it, and an observer holding the old file would be watching an inode
+     * nothing writes to again.
+     */
+    @Suppress("DEPRECATION")
+    private val regionWatch = object : FileObserver(
+        PsiphonConfig.dataDirectory(application).absolutePath,
+        MOVED_TO or CLOSE_WRITE,
+    ) {
+        override fun onEvent(event: Int, path: String?) {
+            if (path != null && path != REGIONS_FILE) return
+            readPsiphonRegions()
+        }
+    }.also { runCatching { it.startWatching() } }
 
     // Seeded with what the build can do, rather than waiting for a refresh
     // that only happens once connected. Whether the library is present is known
@@ -238,15 +261,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         watchConnectionForAddresses()
         sampleTrafficWhileConnected()
         viewModelScope.launch {
-            // Re-read whenever a session ends, which is when the list can have
-            // changed. Cheap enough that a timer would be the wrong shape.
+            // Still on every change of stage, as well as on the watch above: a
+            // file written while this screen was not running produces no event
+            // to catch up on, and the first read has to come from somewhere.
             EngineStatusStore.status
                 .map { it.stage }
                 .distinctUntilChanged()
-                .collect {
-                    mutablePsiphonRegions.value =
-                        withContext(Dispatchers.IO) { PsiphonConfig.availableRegions(getApplication()) }
-                }
+                .collect { readPsiphonRegions() }
+        }
+    }
+
+    private fun readPsiphonRegions() {
+        viewModelScope.launch {
+            val known = withContext(Dispatchers.IO) {
+                PsiphonConfig.availableRegions(getApplication())
+            }
+            // Only forward. The writer already refuses to record an empty
+            // answer; this is the same rule for a read that raced a rename.
+            if (known.isNotEmpty()) mutablePsiphonRegions.value = known
         }
     }
 
@@ -803,6 +835,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        runCatching { regionWatch.stopWatching() }
         NativeAetherBridge.cancelScan()
         endpointJob?.cancel()
         chainJob?.cancel()
@@ -810,6 +843,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private companion object {
+        /** What the Psiphon process names the file this watches for. */
+        const val REGIONS_FILE = "regions.txt"
+
         /**
          * How many nodes are measured at once.
          *

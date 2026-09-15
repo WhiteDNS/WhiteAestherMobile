@@ -34,6 +34,34 @@ class AutoPlannerTest {
     }
 
     @Test
+    fun theEngineStopsLeadingOnANetworkWhereItJustFailed() {
+        val knownGood = everything.copy(engineWorkedBefore = true)
+        // Connected somewhere once, so without this the engine leads every
+        // session on every network for the life of the install.
+        assertTrue(AutoPlanner.plan(null, knownGood).first() is AutoStep.Engine)
+
+        val plan = AutoPlanner.plan(null, knownGood.copy(engineFailedHere = true))
+
+        // Straight to the race -- and the engine is still in it, in its own
+        // lane, so nothing has been given up except the wait in front.
+        assertEquals(1, plan.size)
+        val race = plan[0] as AutoStep.Race
+        assertTrue(race.lanes[0].routes.all { it.racesEngine })
+    }
+
+    @Test
+    fun aRememberedAetherAlsoStandsDownAfterAFreshFailure() {
+        val options = everything.copy(engineFailedHere = true)
+
+        // Remembered from before is still evidence, but it is older evidence
+        // than the failure that just happened on this same network.
+        val plan = AutoPlanner.plan(AutoRoute.AETHER, options)
+
+        assertEquals(1, plan.size)
+        assertTrue(plan[0] is AutoStep.Race)
+    }
+
+    @Test
     fun aetherRacesInBothFramingsQuickFirst() {
         // The log that prompted this: a Wi-Fi network that carried QUIC and
         // not TCP, where 1.6.0 tried only H2 before giving up on Aether.

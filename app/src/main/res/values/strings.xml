@@ -52,6 +52,7 @@
     <string name="endpoint_settings">Endpoint settings</string>
     <string name="the_engine_keeps_retrying">The engine keeps retrying</string>
     <string name="retry"> · retry</string>
+    <string name="try_every_way_out">Try every way out</string>
     <string name="change_profile">Change profile</string>
     <string name="pin_an_endpoint">Pin an endpoint</string>
     <string name="the_last_attempt_failed">The last attempt failed</string>
@@ -481,9 +482,12 @@
     <string name="status_auto_waiting_network">This phone has no internet. Waiting for Wi-Fi or mobile data…</string>
     <string name="status_auto_lost">The connection dropped. Looking for a way out again…</string>
     <string name="status_auto_again">Nothing got out yet. Trying everything once more…</string>
+    <string name="err_gave_up">%1$s. Stopped after %2$d attempts.</string>
+    <string name="err_gave_up_try_automatic">This app also carries Psiphon and Tor. Automatic, in Carrier settings, tries them alongside the engine and keeps whichever gets through.</string>
     <string name="err_auto_nothing_worked">No way out worked on this network. Check that the phone\'s internet works, then try again in a little while or on another network.</string>
     <string name="err_auto_no_network">This phone has no internet. Turn on Wi-Fi or mobile data, then connect again.</string>
     <string name="err_auto_race_failed">Psiphon and Tor could not get out</string>
+    <string name="err_auto_engine_busy">The previous engine has not stopped yet; trying the other ways out first.</string>
     <string name="err_auto_engine_timeout">Aether could not get out in time</string>
     <string name="auto_searching_for">Searching · %1$s</string>
     <string name="auto_patience">The first time on a difficult network can take a few minutes. Please do not disconnect; the app is finding the way by itself.</string>
@@ -496,6 +500,7 @@
     <string name="status_starting_carrier">Preparing the carrier…</string>
     <string name="status_carrier_connecting">%1$s is looking for a way out. This can take a minute.</string>
     <string name="err_carrier_lockdown_hint">Always-on VPN with “Block connections without VPN” is on. In that mode Android may give Psiphon and Tor no network — turn it off in Android settings and try again.</string>
+    <string name="err_psiphon_region_unlisted">Psiphon has not listed exit country %1$s, and it tries only the country you set. Choose Best available, or another country, to get out of this.</string>
     <string name="err_psiphon_region_hint">Exit country %1$s is set, and Psiphon tries only that country. Choose Best available if it will not connect.</string>
     <string name="carrier_path_join">", then "</string>
     <string name="status_carrier_carries">Connected through %1$s</string>
@@ -532,7 +537,8 @@
     <string name="psiphon_region_best">Best available</string>
     <string name="psiphon_region_best_detail">Psiphon chooses. It reuses whichever server worked last, so the address stays the same until you pick a country.</string>
     <string name="psiphon_region_detail">A preference, not a guarantee. Psiphon keeps trying rather than substituting another country.</string>
-    <string name="psiphon_region_unknown">Psiphon lists its countries after it first connects. Connect once, then come back.</string>
+    <string name="psiphon_region_unknown">Psiphon has not listed its countries yet. It does that once it has run, so until then Best available is the only choice here.</string>
+    <string name="psiphon_region_unlisted_detail">Psiphon has not listed this country. It will still be asked for, and the session will fail rather than exit somewhere else.</string>
     <string name="off_traffic_leaves_from_carrier">Off. Traffic leaves from %1$s</string>
     <string name="on_dialled_through_carrier">On, dialled through %1$s</string>
     <string name="nodes_dialled_through_carrier">Your nodes are dialled through %1$s. It has one way out and they take it, so there is nothing to choose here.</string>

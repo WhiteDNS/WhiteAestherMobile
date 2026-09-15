@@ -78,10 +78,11 @@ object PsiphonConfig {
      * The exit countries Psiphon last said it had, newest answer wins.
      *
      * Written by the Psiphon process and read by the screen, which are two
-     * processes -- hence a file rather than a field. tunnel-core reports this
-     * after a handshake, so before the first connection there is nothing to
-     * offer and the screen says only "best available", which is honest: we do
-     * not know what it has until it tells us.
+     * processes -- hence a file rather than a field. tunnel-core derives it
+     * from the server entries it holds and the protocols the network allows,
+     * so it can arrive before a tunnel is established as well as after one --
+     * but on a fresh install, before tunnel-core has ever run, there is nothing
+     * here at all and the screen has only "best available" to offer.
      */
     fun regionsFile(context: Context): File = File(dataDirectory(context), "regions.txt")
 
@@ -89,9 +90,30 @@ object PsiphonConfig {
         regionsFile(context).readLines().map { it.trim() }.filter { it.length == 2 }.sorted()
     }.getOrDefault(emptyList())
 
+    /**
+     * Records what tunnel-core says it has, if it said anything.
+     *
+     * An empty answer is not news that there are no countries: tunnel-core can
+     * report one early in a session, and writing it through emptied the list
+     * the screen was showing -- taking "best available" down with it, because
+     * the picker only drew that option when it had countries to draw beside
+     * it. The last answer that named something is kept instead.
+     *
+     * Written to a temporary file and renamed, because the reader is another
+     * process: a screen that read this halfway through a write saw a truncated
+     * list and no error.
+     */
     fun rememberRegions(context: Context, regions: List<String>) {
+        val known = regions.filter { it.length == 2 }.sorted()
+        if (known.isEmpty()) return
         runCatching {
-            regionsFile(context).writeText(regions.filter { it.length == 2 }.joinToString("\n"))
+            val destination = regionsFile(context)
+            val staging = File(destination.parentFile, destination.name + ".tmp")
+            staging.writeText(known.joinToString("\n"))
+            if (!staging.renameTo(destination)) {
+                destination.writeText(known.joinToString("\n"))
+                staging.delete()
+            }
         }
     }
 

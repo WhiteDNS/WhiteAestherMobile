@@ -7,9 +7,8 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import com.whitedns.whiteaesther.core.CarriedSocket
 import java.net.HttpURLConnection
-import java.net.InetSocketAddress
-import java.net.Proxy
 import java.net.URL
 
 /**
@@ -24,12 +23,23 @@ import java.net.URL
  */
 object AddressReporter {
     /**
-     * Cloudflare answers this over whichever family the connection used, and
-     * the hostname carries both records -- so on a dual-stack network Java
-     * picks IPv6 and the answer is an IPv6 address regardless of what the user
-     * asked for.
+     * The host the trace endpoint lives on, for the request made by hand
+     * through a carrier. Sent as a name, so the carrier resolves it.
      */
-    private const val TRACE_HOST = "https://www.cloudflare.com/cdn-cgi/trace"
+    private const val TRACE_HOST = "www.cloudflare.com"
+
+    private const val TRACE_PATH = "/cdn-cgi/trace"
+
+    /**
+     * The same endpoint as a URL, for the direct lookup that uses this phone's
+     * own resolver.
+     *
+     * Cloudflare answers over whichever family the connection used, and the
+     * hostname carries both records -- so on a dual-stack network Java picks
+     * IPv6 and the answer is an IPv6 address regardless of what the user asked
+     * for, which is what [TRACE_V4] is for.
+     */
+    private const val TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace"
 
     /**
      * The same endpoint reached over IPv4 only.
@@ -105,24 +115,25 @@ object AddressReporter {
      * is exactly wrong through a carrier: Psiphon's servers refuse a port
      * forward to 1.1.1.1, and a name is resolved at the far end where it also
      * cannot leak.
+     *
+     * Which is why this is written by hand rather than through
+     * `URL.openConnection(proxy)`. That resolves the name on this device before
+     * it dials, so the row said nothing at all on exactly the networks where a
+     * carrier is worth having -- see [CarriedSocket], which is also where the
+     * certificate gets checked against the name.
      */
     suspend fun carrierAddress(socksPort: Int): String? = withContext(Dispatchers.IO) {
         runCatching {
-            val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
-            val connection = (URL(TRACE_HOST).openConnection(proxy) as HttpURLConnection).apply {
-                connectTimeout = CARRIER_TIMEOUT_MS
-                readTimeout = CARRIER_TIMEOUT_MS
-                requestMethod = "GET"
-                setRequestProperty("User-Agent", "")
-            }
-            try {
-                if (connection.responseCode != HttpURLConnection.HTTP_OK) return@runCatching null
-                connection.inputStream.bufferedReader().useLines { lines ->
-                    lines.firstOrNull { it.startsWith("ip=") }?.removePrefix("ip=")?.trim()
-                }
-            } finally {
-                connection.disconnect()
-            }
+            val answer = CarriedSocket.request(
+                host = TRACE_HOST,
+                path = TRACE_PATH,
+                socksPort = socksPort,
+                timeoutMs = CARRIER_TIMEOUT_MS,
+            )
+            answer.body.lineSequence()
+                .firstOrNull { it.startsWith("ip=") }
+                ?.removePrefix("ip=")
+                ?.trim()
         }.getOrNull()?.takeUnless { it.isNullOrBlank() }
     }
 
@@ -142,7 +153,7 @@ object AddressReporter {
         request(TRACE_V4)?.let { return it }
         // Only when IPv4 could not be had at all: a v6-only network, or a
         // network where the literal is blocked. Better a v6 answer than none.
-        return if (ipv4Only) null else request(TRACE_HOST)
+        return if (ipv4Only) null else request(TRACE_URL)
     }
 
     private suspend fun request(url: String): String? = withContext(Dispatchers.IO) {

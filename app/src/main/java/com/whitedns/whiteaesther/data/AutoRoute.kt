@@ -108,6 +108,14 @@ data class AutoOptions(
     val provenFraming: String? = null,
     /** On mobile data rather than Wi-Fi or a cable. */
     val onMobileData: Boolean = false,
+    /**
+     * The engine went first on this network recently and did not connect.
+     *
+     * The only thing this suppresses is going first. The engine still races in
+     * the lane beside the carriers, so nothing is given up -- what is given up
+     * is spending two and a half minutes on it before anything else starts.
+     */
+    val engineFailedHere: Boolean = false,
 )
 
 /**
@@ -153,7 +161,15 @@ object AutoPlanner {
         // A route remembered from a build or a setup that can no longer offer
         // it -- bridges since deleted, say -- is a memory of nothing.
         val known = remembered?.remembersAs?.takeIf { it in offered }
-        val aetherLikely = known == AutoRoute.AETHER || (known == null && options.engineWorkedBefore)
+        // Going first is a bet that costs ENGINE_REMEMBERED_MS when it loses,
+        // and it used to be placed on evidence that never expired: the engine
+        // connecting once, anywhere, set a flag for the life of the install. A
+        // phone that had connected at home then opened every session on a
+        // filtered mobile network by waiting two and a half minutes for a
+        // tunnel that network does not carry -- twice, once per pass -- before
+        // trying anything that would have worked.
+        val aetherLikely = !options.engineFailedHere &&
+            (known == AutoRoute.AETHER || (known == null && options.engineWorkedBefore))
 
         if (!options.wholeDevice || !options.chainAvailable) {
             return listOfNotNull(
@@ -275,22 +291,73 @@ object RouteMemory {
      */
     const val FORGET_AFTER_MS = 14L * 24 * 60 * 60 * 1_000
 
-    data class Entry(val route: AutoRoute, val atMs: Long)
+    /**
+     * How long the engine is left out of the lead after it failed here.
+     *
+     * Shorter than [FORGET_AFTER_MS] by a long way, and deliberately so: this
+     * is a negative, and a negative held for a fortnight would keep the fastest
+     * path out of the lead on a network that came good the same afternoon. Six
+     * hours is long enough to cover the session someone is actually having.
+     */
+    const val ENGINE_RETRY_AFTER_MS = 6L * 60 * 60 * 1_000
+
+    /**
+     * What is known about one network.
+     *
+     * [route] is null for a network where nothing has worked yet but the engine
+     * has already been tried and failed -- which is a thing worth remembering
+     * on its own, and the reason this is not simply a route.
+     */
+    data class Entry(val route: AutoRoute?, val atMs: Long, val engineFailedAtMs: Long = 0L)
 
     fun recall(stored: String?, network: String, nowMs: Long): AutoRoute? {
         val entry = decode(stored)[network] ?: return null
-        return entry.route.takeIf { nowMs - entry.atMs <= FORGET_AFTER_MS }
+        return entry.route?.takeIf { nowMs - entry.atMs <= FORGET_AFTER_MS }
+    }
+
+    /** Whether the engine went first here recently and did not connect. */
+    fun engineFailedRecently(stored: String?, network: String, nowMs: Long): Boolean {
+        val entry = decode(stored)[network] ?: return false
+        if (entry.engineFailedAtMs <= 0L) return false
+        return nowMs - entry.engineFailedAtMs <= ENGINE_RETRY_AFTER_MS
     }
 
     /** [stored] with [route] recorded for [network], keeping the most recent networks. */
     fun remember(stored: String?, network: String, route: AutoRoute, nowMs: Long): String {
-        val entries = decode(stored) + (network to Entry(route.remembersAs, nowMs))
+        val entries = decode(stored)
+        val before = entries[network]
+        // The engine winning is the answer to the engine having failed, so the
+        // mark goes when it does. Another carrier winning says nothing about
+        // the engine and leaves it alone.
+        val engineFailedAt = if (route.remembersAs == AutoRoute.AETHER) {
+            0L
+        } else {
+            before?.engineFailedAtMs ?: 0L
+        }
+        return encode(entries + (network to Entry(route.remembersAs, nowMs, engineFailedAt)))
+    }
+
+    /** [stored] with the engine noted as having failed on [network] just now. */
+    fun rememberEngineFailure(stored: String?, network: String, nowMs: Long): String {
+        val entries = decode(stored)
+        val before = entries[network]
+        return encode(
+            entries + (network to Entry(before?.route, before?.atMs ?: 0L, nowMs)),
+        )
+    }
+
+    private fun encode(entries: Map<String, Entry>): String {
         val json = JSONObject()
         entries.entries
-            .sortedByDescending { it.value.atMs }
+            // By whichever of the two is more recent, so a network known only
+            // for a failure is not the first one evicted.
+            .sortedByDescending { maxOf(it.value.atMs, it.value.engineFailedAtMs) }
             .take(MAX_NETWORKS)
             .forEach { (key, entry) ->
-                json.put(key, JSONObject().put("route", entry.route.wireName).put("at", entry.atMs))
+                val item = JSONObject().put("at", entry.atMs)
+                entry.route?.let { item.put("route", it.wireName) }
+                if (entry.engineFailedAtMs > 0L) item.put("engineFailedAt", entry.engineFailedAtMs)
+                json.put(key, item)
             }
         return json.toString()
     }
@@ -303,8 +370,11 @@ object RouteMemory {
                 val item = json.optJSONObject(key) ?: return@mapNotNull null
                 // A route this build no longer knows is dropped rather than
                 // guessed at; the next success writes a real one.
-                val route = AutoRoute.fromWire(item.optString("route")) ?: return@mapNotNull null
-                key to Entry(route, item.optLong("at"))
+                val route = AutoRoute.fromWire(item.optString("route"))
+                val engineFailedAt = item.optLong("engineFailedAt")
+                // Neither half means anything: not an entry.
+                if (route == null && engineFailedAt <= 0L) return@mapNotNull null
+                key to Entry(route, item.optLong("at"), engineFailedAt)
             }.toMap()
         }.getOrDefault(emptyMap())
     }

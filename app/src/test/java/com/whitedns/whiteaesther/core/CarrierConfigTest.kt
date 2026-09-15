@@ -132,6 +132,28 @@ class CarrierConfigTest {
     }
 
     @Test
+    fun onlyTheEnginesListenerTakesDatagrams() {
+        // The tunnel behind a carrier is not the question; the loopback SOCKS5
+        // listener it hands us is. Psiphon's network carries UDP and its
+        // listener refuses UDP ASSOCIATE outright, and declaring otherwise is
+        // how DNS and QUIC came to hang while TCP worked -- mihomo handing
+        // datagrams to a proxy that swallowed them instead of refusing them.
+        assertTrue(Carrier.AETHER.carriesUdp)
+        Carrier.entries.filter { it != Carrier.AETHER }.forEach { carrier ->
+            assertFalse(carrier.carriesUdp)
+        }
+    }
+
+    @Test
+    fun theConfigForACarrierFollowsWhatItSaysAboutUdp() {
+        Carrier.entries.filter { it.needsChain }.forEach { carrier ->
+            val config = ChainConfig.renderCarrier(off, socksPort = 41234, udp = carrier.carriesUdp)
+            assertEquals(carrier.carriesUdp, !config.contains("NETWORK,udp,REJECT"))
+            assertTrue(config.contains("udp: ${carrier.carriesUdp}"))
+        }
+    }
+
+    @Test
     fun carrierWireNamesAreStableAndDistinct() {
         // The wire name crosses a process boundary on an intent and is written
         // to preferences that outlive an upgrade. Renaming one silently sends a
