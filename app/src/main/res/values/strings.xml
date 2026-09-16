@@ -81,6 +81,7 @@
     <string name="quic_faster_where_udp_gets_through">QUIC. Faster where UDP gets through</string>
     <string name="tcp_survives_networks_that_block_udp">TCP. Survives networks that block UDP</string>
     <string name="udp_with_an_obfuscation_sweep_separate_identity">UDP, with an obfuscation sweep. Separate identity</string>
+    <string name="two_masque_hops_where_one_is_recognised">Two MASQUE hops. Slower, for a network that has learnt to spot one</string>
     <string name="nested_tunnel_slower_harder_to_classify">Nested tunnel. Slower, harder to classify</string>
     <string name="settings_transport_label_runs_over_udp_on">%1$s runs over UDP. On a network that blocks UDP outright it will not connect at all, and MASQUE H2 over TCP is the one to use there.</string>
     <string name="discovery_depth">Discovery depth</string>
@@ -342,6 +343,7 @@
     <string name="protocol_automatic">Automatic</string>
     <string name="protocol_masque_h3">MASQUE H3</string>
     <string name="protocol_masque_h2">MASQUE H2</string>
+    <string name="protocol_masque_in_masque">MASQUE in MASQUE</string>
     <string name="protocol_wireguard">WireGuard</string>
     <string name="protocol_warp_in_warp">WARP in WARP</string>
     <string name="scan_turbo">Turbo</string>

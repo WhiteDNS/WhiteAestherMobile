@@ -508,8 +508,8 @@ impl EmbeddedConfig {
     /// APIs, so they cannot share a file. Switching protocol keeps both.
     fn identity_path(&self) -> String {
         match self.protocol() {
-            Protocol::Masque => masque_config_path(&self.config_path),
-            _ => warp_config_path(&self.config_path),
+            Protocol::Masque | Protocol::MasqueInMasque => masque_config_path(&self.config_path),
+            Protocol::WireGuard | Protocol::WarpInWarp => warp_config_path(&self.config_path),
         }
     }
 
@@ -634,13 +634,18 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
     // nobody asked for, without saying so. Now the next protocol upstream adds
     // is a compile error here instead of a silent one.
     let identity = match config.protocol() {
-        Protocol::Masque => load_or_provision_masque(&config_path).await?,
-        Protocol::MasqueInMasque => return Err(embedded_mim_unsupported()),
+        Protocol::Masque | Protocol::MasqueInMasque => {
+            load_or_provision_masque(&config_path).await?
+        }
         Protocol::WireGuard | Protocol::WarpInWarp => load_or_provision_warp(&config_path).await?,
     };
+    // Nested, this is the outer edge. The inner ones are derived from it when
+    // the tunnel is built rather than chosen here, so preparing a nested tunnel
+    // costs exactly what preparing a single one does.
     let peer = match config.protocol() {
-        Protocol::Masque => select_embedded_peer(&identity, config, &config_path).await?,
-        Protocol::MasqueInMasque => return Err(embedded_mim_unsupported()),
+        Protocol::Masque | Protocol::MasqueInMasque => {
+            select_embedded_peer(&identity, config, &config_path).await?
+        }
         Protocol::WireGuard | Protocol::WarpInWarp => {
             select_embedded_wg_peer(&identity, config, &config_path)
                 .await?
@@ -654,6 +659,15 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
     // Nested, the interface is addressed for the inner account: that is the one
     // whose packets reach the internet, and addressing it as the outer would
     // give every connection the wrong source.
+    if config.protocol() == Protocol::MasqueInMasque {
+        let secondary = load_or_provision_masque(&config.secondary_identity_path()).await?;
+        return Ok(EmbeddedPrepared {
+            ipv4: secondary.ipv4,
+            ipv6: secondary.ipv6,
+            peer,
+        });
+    }
+
     if config.protocol() == Protocol::WarpInWarp {
         let secondary = load_or_provision_warp(&config.secondary_identity_path()).await?;
         return Ok(EmbeddedPrepared {
@@ -746,9 +760,6 @@ pub async fn scan_embedded(
     limit: usize,
     cancelled: &AtomicBool,
 ) -> Result<Vec<EmbeddedScanResult>> {
-    if config.protocol() == Protocol::MasqueInMasque {
-        return Err(embedded_mim_unsupported());
-    }
     let config_path = config.identity_path();
     if !matches!(config.protocol(), Protocol::Masque) {
         return scan_embedded_wg(config, &config_path, limit, cancelled).await;
@@ -775,9 +786,6 @@ pub async fn test_embedded_peer(config: &EmbeddedConfig) -> Result<EmbeddedScanR
     let peer = config
         .peer
         .ok_or_else(|| AetherError::Other("custom endpoint is required".into()))?;
-    if config.protocol() == Protocol::MasqueInMasque {
-        return Err(embedded_mim_unsupported());
-    }
     let config_path = config.identity_path();
     if !matches!(config.protocol(), Protocol::Masque) {
         let identity = load_or_provision_warp(&config_path).await?;
@@ -809,12 +817,12 @@ pub async fn run_embedded(
     let peer = config
         .peer
         .ok_or_else(|| AetherError::Other("embedded peer is required".into()))?;
-    if config.protocol() == Protocol::MasqueInMasque {
-        return Err(embedded_mim_unsupported());
-    }
     let config_path = config.identity_path();
 
-    if !matches!(config.protocol(), Protocol::Masque) {
+    if matches!(
+        config.protocol(),
+        Protocol::WireGuard | Protocol::WarpInWarp
+    ) {
         let identity = load_or_provision_warp(&config_path).await?;
         // Which profile reaches this endpoint is part of what the scan found,
         // and it is not recorded anywhere the caller could hand back -- so it is
@@ -850,25 +858,142 @@ pub async fn run_embedded(
 
     let identity = load_or_provision_masque(&config_path).await?;
     let ech = resolve_ech().await;
-    run_masque_tunnel_embedded(&identity, peer, ech, config.listen, endpoint, ready).await
+    let mut endpoint = Some(endpoint);
+    let mut ready = ready;
+
+    if config.protocol() == Protocol::MasqueInMasque {
+        // A second account, not the same one twice: the inner tunnel
+        // handshakes through the outer, and Cloudflare would otherwise see one
+        // device connecting to itself.
+        let secondary = load_or_provision_masque(&config.secondary_identity_path()).await?;
+        return run_masque_in_masque_embedded(
+            &identity,
+            &secondary,
+            peer,
+            ech,
+            config.listen,
+            &mut endpoint,
+            &mut ready,
+        )
+        .await;
+    }
+
+    // Translated here rather than inside, because the inner hop of a nested
+    // pair dials a local forwarder that must not be translated again.
+    let dial = if masque_h2::enabled() {
+        masque_h2::h2_peer(peer)
+    } else {
+        peer
+    };
+    run_masque_tunnel_embedded(
+        &identity,
+        dial,
+        ech,
+        MasqueShape::single(),
+        config.listen,
+        &mut endpoint,
+        &mut ready,
+    )
+    .await
 }
 
-/// Why the embedded engine refuses masque-in-masque.
+/// Two nested MASQUE hops behind the embedded endpoint abstraction.
 ///
-/// The tunnel itself exists and works -- `run_mim` builds it for the desktop
-/// binary, and 2.0.0 is where it arrived. What is missing is the embedded shape
-/// of it: every other protocol here has a `*_embedded` variant that hands its
-/// stack to an [`EmbeddedEndpoint`] instead of binding listeners of its own,
-/// and nesting two MASQUE hops needs a second peer chosen during prepare too.
+/// The shape of `run_warp_in_warp_embedded`, with MASQUE on both hops: the
+/// outer one keeps a userspace network stack because the forwarder needs
+/// somewhere to open a socket, and the inner one's packets are the user's, so
+/// they go to whatever the caller asked for.
 ///
-/// Refused rather than approximated. Falling through to the WireGuard path --
-/// which is what "anything that is not MASQUE" used to do here -- would build a
-/// tunnel the caller did not ask for and report success.
-fn embedded_mim_unsupported() -> AetherError {
-    AetherError::Other(
-        "masque-in-masque is not carried by the embedded engine yet; use masque, wireguard or          warp-in-warp"
-            .into(),
+/// For a network that has learnt to recognise a single MASQUE hop. The inner
+/// edges are derived from the outer one rather than scanned for -- the same
+/// list the desktop path uses -- so this costs no discovery beyond the outer
+/// peer that prepare already chose.
+async fn run_masque_in_masque_embedded(
+    primary: &account::Identity,
+    secondary: &account::Identity,
+    peer: SocketAddr,
+    ech: Option<Vec<u8>>,
+    listen: SocketAddr,
+    endpoint: &mut Option<EmbeddedEndpoint>,
+    ready: &mut Option<tokio::sync::oneshot::Sender<()>>,
+) -> Result<()> {
+    let h2 = masque_h2::enabled();
+    let outer_mtu = masque_tunnel_mtu();
+    let outer_dial = if h2 { masque_h2::h2_peer(peer) } else { peer };
+
+    log::info!("[*] establishing outer MASQUE tunnel to {peer}...");
+    let outer = establish_masque(
+        primary,
+        outer_dial,
+        ech,
+        h2,
+        outer_mtu,
+        quic::MAX_DATAGRAM_SIZE,
+        true,
+        masque_startup_timeout(),
+        "outer",
     )
+    .await?;
+
+    let candidates: Vec<SocketAddr> = inner_masque_candidates(peer, MIM_INNER_TRIES)
+        .into_iter()
+        .filter(|candidate| candidate.ip() != peer.ip())
+        .collect();
+    if candidates.is_empty() {
+        outer.exit.abort();
+        return Err(AetherError::Other(
+            "no second masque edge is known for the inner hop".into(),
+        ));
+    }
+
+    let mut last: Option<AetherError> = None;
+    for inner_peer in candidates {
+        let shape = MasqueShape::mim_inner(outer_mtu, inner_peer, h2);
+        if !h2 && shape.datagram + 28 > outer_mtu {
+            log::warn!(
+                "[-] the outer link carries {outer_mtu} bytes, too little for an inner quic \
+                 datagram; raise AETHER_MASQUE_MTU or use --h2 for both hops"
+            );
+        }
+
+        // Through the outer tunnel, so the inner handshake never touches the
+        // network directly -- which is the whole point of nesting them.
+        let (forwarder, _forwarder_guard) = if h2 {
+            spawn_tcp_forwarder(&outer.stack, inner_peer).await?
+        } else {
+            spawn_udp_forwarder(&outer.stack, inner_peer).await?
+        };
+        log::info!(
+            "[*] trying inner MASQUE edge {inner_peer} through the outer tunnel via {forwarder}"
+        );
+
+        let outcome =
+            run_masque_tunnel_embedded(secondary, forwarder, None, shape, listen, endpoint, ready)
+                .await;
+
+        match outcome {
+            Ok(()) => return Ok(()),
+            // It took the endpoint, so it was carrying the session: this is the
+            // session ending rather than a candidate refusing, and there is
+            // nothing left to offer the next one.
+            Err(error) if endpoint.is_none() => {
+                outer.exit.abort();
+                return Err(error);
+            }
+            Err(error) => {
+                log::info!(
+                    "[-] inner edge {inner_peer} does not serve masque from inside the tunnel: \
+                     {error}"
+                );
+                last = Some(error);
+            }
+        }
+    }
+
+    outer.exit.abort();
+    Err(last.unwrap_or_else(|| {
+        AetherError::Other("no inner masque edge answered from inside the outer tunnel".into())
+    }))
 }
 
 /// A WARP-in-WARP tunnel behind the embedded endpoint abstraction.
@@ -1186,13 +1311,64 @@ async fn select_embedded_peer(
     .await
 }
 
+/// How one MASQUE hop is sized, and what it may skip.
+///
+/// A single hop, and the outer hop of a nested pair, get the whole budget. The
+/// inner hop of a nested pair has to fit inside whatever the outer one carries,
+/// and does not repeat the version bait its outer hop has already sent -- that
+/// packet is for the network watching the outside of the tunnel, and inside
+/// there is nobody to fool.
+struct MasqueShape {
+    mtu: usize,
+    datagram: usize,
+    version_bait: bool,
+    startup: std::time::Duration,
+    label: &'static str,
+}
+
+impl MasqueShape {
+    /// One hop straight to the edge.
+    fn single() -> Self {
+        Self {
+            mtu: masque_tunnel_mtu(),
+            datagram: quic::MAX_DATAGRAM_SIZE,
+            version_bait: true,
+            startup: masque_startup_timeout(),
+            label: "masque",
+        }
+    }
+
+    /// The inner hop of masque-in-masque, sized to fit the outer one.
+    fn mim_inner(outer_mtu: usize, inner_peer: SocketAddr, h2: bool) -> Self {
+        let (datagram, mtu) = mim_inner_budget(outer_mtu, inner_peer, h2);
+        Self {
+            mtu,
+            datagram,
+            version_bait: false,
+            startup: mim_inner_startup(),
+            label: "inner",
+        }
+    }
+}
+
+/// One MASQUE hop behind the embedded endpoint abstraction.
+///
+/// \nparam peer already dialable: for HTTP/2 the caller translates the edge to
+///   its H2 port, exactly as the desktop path does, because the inner hop of a
+///   nested pair dials a local forwarder that must not be translated again.
+/// \nparam endpoint taken only once this hop is up. Nested, the caller tries
+///   inner edges until one answers, and an endpoint moved into a hop that
+///   failed could not be offered to the next one. `ready` follows it for the
+///   same reason, and because signalling it earlier would tell the app a route
+///   is open while an inner edge is still being chosen.
 async fn run_masque_tunnel_embedded(
     identity: &account::Identity,
     peer: SocketAddr,
     ech: Option<Vec<u8>>,
+    shape: MasqueShape,
     listen: SocketAddr,
-    endpoint: EmbeddedEndpoint,
-    ready: Option<tokio::sync::oneshot::Sender<()>>,
+    endpoint: &mut Option<EmbeddedEndpoint>,
+    ready: &mut Option<tokio::sync::oneshot::Sender<()>>,
 ) -> Result<()> {
     let (chans, internals) = quic::channels();
     let cfg = quic::TunnelConfig {
@@ -1206,11 +1382,11 @@ async fn run_masque_tunnel_embedded(
         noize: noize_config(),
         local_ipv4: parse_local_v4(&identity.ipv4),
         quiet: false,
-        max_datagram: quic::MAX_DATAGRAM_SIZE,
+        max_datagram: shape.datagram,
         // The QUIC v2 version-negotiation bait that goes out ahead of the real
-        // handshake, as on every other single MASQUE hop. Gated again at run
-        // time, so this is the setting rather than the decision.
-        version_bait: true,
+        // handshake. Gated again at run time, so this is the setting rather
+        // than the decision.
+        version_bait: shape.version_bait,
     };
 
     let quic::Channels {
@@ -1223,7 +1399,7 @@ async fn run_masque_tunnel_embedded(
 
     let mut tunnel_task = if masque_h2::enabled() {
         let h2cfg = masque_h2::H2TunnelConfig {
-            peer: masque_h2::h2_peer(peer),
+            peer,
             sni: consts::CONNECT_SNI.to_string(),
             authority: quic::default_authority().to_string(),
             path: quic::default_path().to_string(),
@@ -1244,20 +1420,29 @@ async fn run_masque_tunnel_embedded(
         tokio::spawn(quic::run(cfg, internals, Some(addr_tx), Some(ready_tx)))
     };
 
-    match tokio::time::timeout(masque_startup_timeout(), ready_rx).await {
+    let label = shape.label;
+    match tokio::time::timeout(shape.startup, ready_rx).await {
         Ok(Ok(())) => {}
         Ok(Err(_)) => {
-            return embedded_tunnel_result(tunnel_task.await, "tunnel exited before validation")
+            return embedded_tunnel_result(
+                tunnel_task.await,
+                &format!("[{label}] tunnel exited before validation"),
+            )
         }
         Err(_) => {
             tunnel_task.abort();
             let _ = tunnel_task.await;
-            return Err(AetherError::Other(
-                "embedded tunnel startup timed out".into(),
-            ));
+            return Err(AetherError::Other(format!(
+                "[{label}] embedded tunnel startup timed out"
+            )));
         }
     }
-    if let Some(ready) = ready {
+    // Taken only now. Everything above can fail and be retried against another
+    // edge; from here the endpoint belongs to this hop.
+    let endpoint = endpoint
+        .take()
+        .ok_or_else(|| AetherError::Other(format!("[{label}] has no endpoint to carry")))?;
+    if let Some(ready) = ready.take() {
         let _ = ready.send(());
     }
 
@@ -1266,11 +1451,12 @@ async fn run_masque_tunnel_embedded(
             // Sized by framing, as of 2.0.0: a MASQUE tunnel carried over
             // HTTP/2 is a TCP stream, where nothing has to fit inside one UDP
             // datagram, so the 1280 that keeps a QUIC datagram whole only buys
-            // the netstack more segments to cut.
+            // the netstack more segments to cut. Nested, this is smaller again,
+            // because the inner hop's packets travel inside the outer one's.
             let stack = netstack::spawn(
                 &identity.ipv4,
                 &identity.ipv6,
-                masque_tunnel_mtu(),
+                shape.mtu,
                 inbound_rx,
                 outbound_tx,
             )?;

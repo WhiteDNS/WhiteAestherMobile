@@ -146,13 +146,19 @@ message saying it is not carried yet.
 
 ## What is still owed
 
-**MASQUE-in-MASQUE on Android.** The tunnel works — `run_mim` builds it for the
-desktop binary — and it is a genuinely new way out for a network that has learnt
-to spot a single MASQUE hop. What is missing is the embedded shape: a
-`run_masque_in_masque_embedded` that hands its stack to an `EmbeddedEndpoint`
-rather than binding listeners, and a second peer chosen during `prepare`. Then a
-`TunnelProtocol.MASQUE_IN_MASQUE` in the app, its strings, and its endpoint
-family. It is the next capability worth adding, and it wants a device.
+**MASQUE-in-MASQUE on Android — done, and untested on a phone.**
+`run_masque_in_masque_embedded` carries it behind both endpoints, `prepare`
+chooses the outer edge and the inner ones are derived from it at run time, and
+it is a `TunnelProtocol` in the picker and the last lane of Automatic's engine
+race. It has never established a real nested tunnel on a device; that is the
+next thing it needs.
+
+One gap it inherits rather than causes: `export_identity` carries the WARP
+identity and its `secondary` sibling, not the MASQUE ones. Nested MASQUE adds a
+second MASQUE account, so a user who backs up, reinstalls and connects with it
+pays one more Cloudflare registration than the backup was meant to save them.
+Fixing that means a new `IDENTITY_EXPORT_VERSION` and a migration, which is its
+own change.
 
 **The toolchain moved.** `native/rust-toolchain.toml` and
 `.github/actions/android-toolchain/action.yml` both go from 1.88.0 to 1.98.0,

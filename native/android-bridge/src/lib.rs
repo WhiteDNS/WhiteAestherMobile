@@ -191,8 +191,16 @@ impl BridgeConfig {
         {
             return Err("logLevel must be error, warn, info, debug or trace".into());
         }
-        if !matches!(config.transport.as_str(), "h3" | "h2" | "wg" | "wiw") {
-            return Err("transport must be h3, h2, wg or wiw".into());
+        // "auto" never arrives: the service resolves it to a real framing
+        // before it builds this config, so a rung of the ladder is what reaches
+        // here. Keep this list and the one in embedded() together -- one
+        // naming a transport the other does not is how a control the app offers
+        // becomes a tunnel the engine will not build.
+        if !matches!(
+            config.transport.as_str(),
+            "h3" | "h2" | "wg" | "wiw" | "mim"
+        ) {
+            return Err("transport must be h3, h2, wg, wiw or mim".into());
         }
         if let Some(peer) = config.peer.as_deref() {
             let address = peer
@@ -236,12 +244,28 @@ impl BridgeConfig {
             scan_mode: self.scan_mode.clone(),
             ip_scan: self.ip_scan.clone(),
             // h2 and h3 are two framings of one protocol, chosen by an
-            // environment variable; wg is a different tunnel entirely, with its
-            // own account, its own endpoints and its own prober.
+            // environment variable; the rest are different tunnels entirely,
+            // each with its own account, endpoints and prober.
+            //
+            // Named one by one rather than falling through to MASQUE. A
+            // catch-all here is how a protocol the engine gained arrives as a
+            // single MASQUE hop with nothing to show it did: the app offers a
+            // control, the user picks it, the engine builds something else, and
+            // every layer reports success. parse() has already rejected
+            // anything not in this list, so the last arm is unreachable -- it is
+            // here so that adding a transport to one list and not the other
+            // fails loudly instead of silently.
             protocol: match self.transport.as_str() {
+                "h2" | "h3" => "masque".into(),
                 "wg" => "wireguard".into(),
                 "wiw" => "warp-in-warp".into(),
-                _ => "masque".into(),
+                "mim" => "masque-in-masque".into(),
+                other => {
+                    return Err(format!(
+                        "this build accepts the transport '{other}' but does not know \
+                         which tunnel it means"
+                    ))
+                }
             },
         })
     }
@@ -1003,6 +1027,36 @@ mod tests {
             r#"{"mode":"proxy","configPath":"aether.toml","peerFallback":true}"#
         )
         .is_err());
+    }
+
+    /// The transport the app chose is the tunnel the engine builds.
+    ///
+    /// This used to end in a catch-all that turned anything unrecognised into
+    /// MASQUE. A protocol the engine gained -- masque-in-masque is the first --
+    /// would then have arrived as a single MASQUE hop while the picker said
+    /// otherwise, and every layer would have reported success. A user who tried
+    /// the nested tunnel and saw no improvement would have been right that it
+    /// did not help and wrong about what they tried.
+    #[test]
+    fn every_transport_names_the_tunnel_it_builds() {
+        let embedded = |transport: &str| {
+            BridgeConfig::parse(&format!(
+                r#"{{"mode":"proxy","configPath":"aether.toml","transport":"{transport}"}}"#
+            ))
+            .and_then(|config| config.embedded(None))
+            .map(|embedded| embedded.protocol)
+        };
+
+        // The two MASQUE framings are one tunnel; the rest are their own.
+        assert_eq!(embedded("h2").unwrap(), "masque");
+        assert_eq!(embedded("h3").unwrap(), "masque");
+        assert_eq!(embedded("wg").unwrap(), "wireguard");
+        assert_eq!(embedded("wiw").unwrap(), "warp-in-warp");
+        assert_eq!(embedded("mim").unwrap(), "masque-in-masque");
+
+        // Refused, not quietly turned into something else.
+        let refused = embedded("quantum-tunnel").unwrap_err();
+        assert!(refused.contains("transport must be"), "{refused}");
     }
 
     #[test]
