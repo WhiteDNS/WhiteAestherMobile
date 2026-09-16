@@ -39,6 +39,15 @@ enum class AutoRoute(
     AETHER_H3_FULL("aether-h3-full", Carrier.AETHER, engineTransport = "h3", fullSearch = true),
     AETHER_H2_FULL("aether-h2-full", Carrier.AETHER, engineTransport = "h2", fullSearch = true),
 
+    /**
+     * Two nested MASQUE hops, for a network that has learnt to recognise one.
+     *
+     * A quick search for the outer edge rather than a deep one: the outer hop
+     * dials the same addresses every other MASQUE lane does, and what this
+     * route costs is the inner handshakes through it, not the search.
+     */
+    AETHER_MIM("aether-mim", Carrier.AETHER, engineTransport = "mim"),
+
     /** The engine racing on a transport the user fixed -- WireGuard, say -- searched as they set it. */
     AETHER_AS_SET("aether-as-set", Carrier.AETHER, fullSearch = true),
 
@@ -221,10 +230,28 @@ object AutoPlanner {
             "h2" -> false
             else -> !options.onMobileData
         }
+        // Nested MASQUE last, always. It is the slowest thing the engine can
+        // do -- an outer tunnel plus up to six inner handshakes through it --
+        // and on most networks one of the framings above gets out first. But it
+        // is in the lane rather than only in the picker, because the network it
+        // is for is one where every single-hop lane above has already failed,
+        // and nobody reaches into Advanced to find it.
         return if (h3First) {
-            listOf(AutoRoute.AETHER_H3_QUICK, AutoRoute.AETHER_H2_QUICK, AutoRoute.AETHER_H3_FULL, AutoRoute.AETHER_H2_FULL)
+            listOf(
+                AutoRoute.AETHER_H3_QUICK,
+                AutoRoute.AETHER_H2_QUICK,
+                AutoRoute.AETHER_H3_FULL,
+                AutoRoute.AETHER_H2_FULL,
+                AutoRoute.AETHER_MIM,
+            )
         } else {
-            listOf(AutoRoute.AETHER_H2_QUICK, AutoRoute.AETHER_H3_QUICK, AutoRoute.AETHER_H2_FULL, AutoRoute.AETHER_H3_FULL)
+            listOf(
+                AutoRoute.AETHER_H2_QUICK,
+                AutoRoute.AETHER_H3_QUICK,
+                AutoRoute.AETHER_H2_FULL,
+                AutoRoute.AETHER_H3_FULL,
+                AutoRoute.AETHER_MIM,
+            )
         }
     }
 
@@ -264,6 +291,10 @@ object AutoPlanner {
         AutoRoute.AETHER -> ENGINE_QUICK_MS
         AutoRoute.AETHER_H3_QUICK, AutoRoute.AETHER_H2_QUICK -> 75_000L
         AutoRoute.AETHER_H3_FULL, AutoRoute.AETHER_H2_FULL -> 180_000L
+        // An outer tunnel, then up to six inner handshakes at twelve seconds
+        // each. The search for the outer edge is the quick one, so this is
+        // mostly the inner tries.
+        AutoRoute.AETHER_MIM -> 180_000L
         AutoRoute.AETHER_AS_SET -> 300_000L
         AutoRoute.PSIPHON -> 330_000L
         AutoRoute.TOR_CUSTOM, AutoRoute.TOR_SNOWFLAKE -> 180_000L

@@ -728,6 +728,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 TunnelProtocol.AUTO -> TunnelProtocol.H3
                 TunnelProtocol.H3 -> TunnelProtocol.H2
                 TunnelProtocol.H2 -> TunnelProtocol.H3
+                // Nested MASQUE probes over QUIC, like H3, because its hops
+                // are H3 unless the whole profile is H2. So the sweep worth
+                // making after it is the TCP one, over the same edges.
+                TunnelProtocol.MASQUE_IN_MASQUE -> TunnelProtocol.H2
                 // Neither WireGuard nor its nested form has another framing to
                 // sweep. Their endpoints are their own, so falling back to
                 // MASQUE would list addresses the chosen protocol cannot use.

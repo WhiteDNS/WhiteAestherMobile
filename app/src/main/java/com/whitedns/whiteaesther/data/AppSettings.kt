@@ -35,6 +35,16 @@ enum class TunnelProtocol(val wireName: String, @StringRes val label: Int) {
     H2("h2", R.string.protocol_masque_h2),
     WIREGUARD("wg", R.string.protocol_wireguard),
     WARP_IN_WARP("wiw", R.string.protocol_warp_in_warp),
+
+    /**
+     * Two MASQUE hops, the inner handshaking through the outer.
+     *
+     * For a network that has learnt to recognise a single MASQUE session. It
+     * costs a second account and a second handshake, so it is slower than one
+     * hop and is not where a connect should start -- but where one hop is
+     * classified, it is the only MASQUE that gets out.
+     */
+    MASQUE_IN_MASQUE("mim", R.string.protocol_masque_in_masque),
     ;
 
     /** True when a failed attempt can be retried on the other framing. */
@@ -65,7 +75,10 @@ enum class TunnelProtocol(val wireName: String, @StringRes val label: Int) {
         get() = when (this) {
             // Automatic only ever resolves to a MASQUE framing, so it shares
             // their endpoints.
-            AUTO, H3, H2 -> EndpointFamily.MASQUE
+            // Nested MASQUE dials an ordinary MASQUE edge for its outer hop
+            // and derives the inner one from it, so it searches the same
+            // addresses a single hop does.
+            AUTO, H3, H2, MASQUE_IN_MASQUE -> EndpointFamily.MASQUE
             WIREGUARD, WARP_IN_WARP -> EndpointFamily.WARP
         }
 }

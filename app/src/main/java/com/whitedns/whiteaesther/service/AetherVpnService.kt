@@ -2434,6 +2434,11 @@ class AetherVpnService : VpnService() {
         // dropped, which reads as a connection that works until you open a
         // website.
         "wiw" -> WARP_IN_WARP_MTU
+        // The same trap as "wiw", and for the same reason: the app's packets
+        // enter the inner hop, which is sized for what fits inside the outer
+        // one. Grouping it with plain MASQUE would advertise 1280 into a tunnel
+        // carrying 1162.
+        "mim" -> MASQUE_IN_MASQUE_MTU
         else -> MASQUE_MTU
     }
 
@@ -2666,6 +2671,23 @@ class AetherVpnService : VpnService() {
          * between them is silently dropped packets.
          */
         private const val WARP_IN_WARP_MTU = 1200
+
+        /**
+         * The inner hop of nested MASQUE, at its smallest.
+         *
+         * The engine derives this per connection: the outer link carries
+         * MASQUE_MTU, an inner QUIC datagram costs 28 bytes of IPv4 header or
+         * 48 of IPv6, and MASQUE framing takes 70 more. The interface is
+         * declared once, before any of that is known, so it takes the worst
+         * case -- (1280 - 48) - 70 -- and an IPv4 inner edge simply leaves 20
+         * bytes unused.
+         *
+         * Only the H3 figure. A profile on H2 gets a larger inner MTU, but
+         * nested MASQUE runs H3 on both hops unless the whole profile is H2,
+         * and advertising more than the tunnel carries is the failure this
+         * constant exists to avoid.
+         */
+        private const val MASQUE_IN_MASQUE_MTU = 1162
 
         /**
          * IPv6's own floor, and Android enforces it.

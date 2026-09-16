@@ -8,11 +8,12 @@ import org.junit.Test
 class TunnelProtocolTest {
     @Test
     fun wireNamesAreWhatTheEngineParses() {
-        // The bridge validates against these exact strings, and the engine maps
-        // "wg" onto a different tunnel entirely. Renaming one here without the
-        // Rust side is a silent downgrade to MASQUE, not a compile error.
+        // The bridge validates against these exact strings, and maps each onto
+        // a tunnel. Renaming one here without the Rust side is a refused
+        // connect; adding one without it used to be a silent downgrade to
+        // MASQUE, which is why the bridge no longer has a catch-all.
         assertEquals(
-            listOf("auto", "h3", "h2", "wg", "wiw"),
+            listOf("auto", "h3", "h2", "wg", "wiw", "mim"),
             TunnelProtocol.entries.map(TunnelProtocol::wireName),
         )
     }

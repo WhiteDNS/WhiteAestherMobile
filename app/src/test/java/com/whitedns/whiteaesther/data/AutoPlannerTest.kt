@@ -34,6 +34,33 @@ class AutoPlannerTest {
     }
 
     @Test
+    fun nestedMasqueIsRacedLastRatherThanOnlyOffered() {
+        // The network it is for is one where every single-hop lane has already
+        // failed, and nobody opens Advanced to find it -- so being in the
+        // picker alone would mean the people who need it never reach it. Last,
+        // because it is the slowest thing the engine can do.
+        listOf(everything, everything.copy(onMobileData = true)).forEach { options ->
+            val lane = AutoPlanner.aetherLane(options)
+
+            assertEquals(AutoRoute.AETHER_MIM, lane.last())
+            assertEquals(1, lane.count { it == AutoRoute.AETHER_MIM })
+        }
+
+        // And it is a route Automatic knows about at all.
+        assertTrue(AutoRoute.AETHER_MIM in AutoPlanner.offeredRoutes(everything))
+    }
+
+    @Test
+    fun nestedMasqueGetsTimeForItsInnerHandshakes() {
+        // An outer tunnel plus up to six inner handshakes through it. A budget
+        // sized like a quick lane would cut it off mid-search every time.
+        assertTrue(
+            AutoPlanner.budgetMs(AutoRoute.AETHER_MIM) >=
+                AutoPlanner.budgetMs(AutoRoute.AETHER_H3_QUICK) * 2,
+        )
+    }
+
+    @Test
     fun theEngineStopsLeadingOnANetworkWhereItJustFailed() {
         val knownGood = everything.copy(engineWorkedBefore = true)
         // Connected somewhere once, so without this the engine leads every
@@ -71,6 +98,7 @@ class AutoPlannerTest {
                 AutoRoute.AETHER_H2_QUICK,
                 AutoRoute.AETHER_H3_FULL,
                 AutoRoute.AETHER_H2_FULL,
+                AutoRoute.AETHER_MIM,
             ),
             AutoPlanner.aetherLane(everything),
         )

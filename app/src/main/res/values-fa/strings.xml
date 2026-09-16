@@ -79,6 +79,7 @@
     <string name="quic_faster_where_udp_gets_through">پروتکل QUIC. جایی که UDP عبور کند سریع‌تر است</string>
     <string name="tcp_survives_networks_that_block_udp">پروتکل TCP. در شبکه‌هایی که UDP را می‌بندند دوام می‌آورد</string>
     <string name="udp_with_an_obfuscation_sweep_separate_identity">پروتکل UDP، همراه با پویش مبهم‌سازی. هویت جداگانه</string>
+    <string name="two_masque_hops_where_one_is_recognised">دو پرش ماسک. کندتر؛ برای شبکه‌ای که یکی را می‌شناسد</string>
     <string name="nested_tunnel_slower_harder_to_classify">تونل تودرتو. کندتر، ولی سخت‌تر شناسایی می‌شود</string>
     <string name="settings_transport_label_runs_over_udp_on">%1$s روی UDP کار می‌کند. در شبکه‌ای که UDP را کاملاً می‌بندد اصلاً وصل نمی‌شود و آنجا باید از MASQUE H2 روی TCP استفاده کرد.</string>
     <string name="discovery_depth">عمق کشف</string>
@@ -336,6 +337,7 @@
     <string name="protocol_automatic">خودکار</string>
     <string name="protocol_masque_h3">MASQUE H3</string>
     <string name="protocol_masque_h2">MASQUE H2</string>
+    <string name="protocol_masque_in_masque">ماسک در ماسک</string>
     <string name="protocol_wireguard">WireGuard</string>
     <string name="protocol_warp_in_warp">WARP in WARP</string>
     <string name="scan_turbo">توربو</string>

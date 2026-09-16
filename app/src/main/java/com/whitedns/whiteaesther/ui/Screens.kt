@@ -1250,6 +1250,10 @@ fun RoutesScreen(
                                 // through the outer, so what an observer sees is
                                 // one session carrying opaque UDP.
                                 TunnelProtocol.WARP_IN_WARP -> stringResource(R.string.nested_tunnel_slower_harder_to_classify)
+                                // Two MASQUE hops rather than two WARP ones, so
+                                // it looks like ordinary HTTPS from outside
+                                // while a single MASQUE session no longer does.
+                                TunnelProtocol.MASQUE_IN_MASQUE -> stringResource(R.string.two_masque_hops_where_one_is_recognised)
                             },
                             selected = settings.transport == transport,
                             onClick = { onSettingsChange(settings.copy(transport = transport)) },
