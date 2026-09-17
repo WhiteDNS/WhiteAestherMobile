@@ -1406,7 +1406,37 @@ class AetherVpnService : VpnService() {
         }
         autoPasses += 1
         EngineLog.record(LogLevel.WARN, "auto", "pass $autoPasses of $MAX_AUTO_PASSES found no way out")
-        if (autoPasses >= MAX_AUTO_PASSES) {
+        // Room for a pass to *finish*, not room to start one. Asking whether
+        // the ceiling has already been passed is the wrong question: the
+        // longest pass this plan can make is under the ceiling by itself, so
+        // that test never fires and the second pass runs to its own end --
+        // twenty-seven minutes, which is the thing being prevented.
+        //
+        // A pass that failed quickly leaves room for another, and gets one.
+        // The first pass is never cut short: Psiphon's own establish window is
+        // five and a half minutes and it is the carrier most likely to get out
+        // where nothing else does, so truncating it would trade a long wait for
+        // a failed connect.
+        val spent = System.currentTimeMillis() - autoSearchStartedAt
+        val another = AutoPlanner.longestPassMs(
+            RouteMemory.recall(
+                preferences.getString(AUTO_ROUTES, null),
+                autoNetworkKey,
+                System.currentTimeMillis(),
+            ),
+            autoOptions(mode),
+        )
+        val outOfTime = autoSearchStartedAt > 0L &&
+            !AutoPlanner.hasRoomForAnotherPass(spent, another, MAX_AUTO_SEARCH_MS)
+        if (outOfTime) {
+            EngineLog.record(
+                LogLevel.WARN,
+                "auto",
+                "stopping after ${spent / 1_000}s; another pass needs ${another / 1_000}s and " +
+                    "this search is allowed ${MAX_AUTO_SEARCH_MS / 1_000}s",
+            )
+        }
+        if (autoPasses >= MAX_AUTO_PASSES || outOfTime) {
             // Lockdown is the one cause worth naming here: it fails every
             // carrier at once and nothing in their own logs says so.
             val told = listOfNotNull(sayNow(R.string.err_auto_nothing_worked), lockdownHint())
@@ -2870,6 +2900,20 @@ class AetherVpnService : VpnService() {
          * mostly be spent on a network that is simply down.
          */
         private const val MAX_AUTO_PASSES = 2
+
+        /**
+         * The whole search, end to end, however many passes fit inside it.
+         *
+         * A ceiling on what the person waiting experiences rather than on the
+         * number of attempts, which is a proxy for it and drifts every time a
+         * rung is added. Checked between passes only: a pass that has started
+         * runs to its end, because the lanes inside it have their own windows
+         * and cutting one in half is how a carrier that was about to connect
+         * gets thrown away.
+         *
+         * Sized so one full pass always fits. AutoPlannerTest holds it there.
+         */
+        private const val MAX_AUTO_SEARCH_MS = 15 * 60 * 1_000L
         private const val AUTO_RETRY_GAP_MS = 2_000L
         private const val AUTO_STEP_GAP_MS = 1_000L
         private const val AUTO_PASS_GAP_MS = 10_000L

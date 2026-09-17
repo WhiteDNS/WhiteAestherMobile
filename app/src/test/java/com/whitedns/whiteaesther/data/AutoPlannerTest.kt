@@ -111,6 +111,128 @@ class AutoPlannerTest {
         assertTrue("the lane grew to ${total / 1000}s", total <= 690_000L)
     }
 
+    /**
+     * One pass fits inside the ceiling the service holds the search to.
+     *
+     * The two numbers live apart -- the plan is here, the ceiling is in the
+     * service -- and the failure if they drift is silent and bad: a pass cut in
+     * half throws away a carrier that was about to connect. Psiphon's own
+     * establish window alone is five and a half minutes.
+     *
+     * Kept as an assertion rather than a shared constant on purpose. The
+     * service's ceiling is about a person waiting; this is about what a pass
+     * costs. They should agree, and each should be able to say why it is what
+     * it is.
+     */
+    @Test
+    fun onePassFitsInsideTheSearchCeiling() {
+        val ceiling = 15 * 60 * 1_000L
+        for (remembered in listOf(null, AutoRoute.AETHER, AutoRoute.PSIPHON)) {
+            val pass = AutoPlanner.longestPassMs(remembered, everything)
+            assertTrue(
+                "a pass remembering $remembered takes ${pass / 1000}s, " +
+                    "which does not fit in ${ceiling / 1000}s",
+                pass <= ceiling,
+            )
+        }
+    }
+
+    /**
+     * A full pass leaves no room for a second one.
+     *
+     * The predicate that enforces this asks whether another pass would *finish*
+     * inside the ceiling, not whether the ceiling has already been passed --
+     * and the difference is the whole point. The longest pass is under the
+     * ceiling by itself, so the second question never fires and two full passes
+     * run: twenty-seven minutes, which is what this exists to prevent.
+     *
+     * Stated here as arithmetic rather than by driving the service, because the
+     * service needs an Android runtime and this needs only the numbers.
+     */
+    @Test
+    fun aFullPassLeavesNoRoomForASecond() {
+        val ceiling = 15 * 60 * 1_000L
+        val worst = listOf(null, AutoRoute.AETHER, AutoRoute.PSIPHON)
+            .maxOf { AutoPlanner.longestPassMs(it, everything) }
+
+        assertTrue("one pass must fit: ${worst / 1000}s", worst <= ceiling)
+        assertTrue(
+            "a second full pass fits inside ${ceiling / 1000}s, so the ceiling never bites",
+            worst + worst > ceiling,
+        )
+    }
+
+    /**
+     * The rule the service applies, held to directly.
+     *
+     * Asking whether the ceiling has already been passed looks equivalent and
+     * is not. The longest pass fits under the ceiling on its own, so that
+     * question never fires and a second full pass runs -- twice what the search
+     * was allowed. This is the difference, stated as the rule rather than as
+     * arithmetic about it, so a version that asks the wrong question fails
+     * here.
+     */
+    @Test
+    fun anotherPassNeedsRoomToFinishNotJustRoomToStart() {
+        val ceiling = 15 * 60 * 1_000L
+        val pass = AutoPlanner.longestPassMs(null, everything)
+
+        // A pass has just used its whole window. Nothing has "passed the
+        // ceiling" -- and there is still no room, which is the point.
+        assertTrue(pass < ceiling)
+        assertFalse(AutoPlanner.hasRoomForAnotherPass(pass, pass, ceiling))
+
+        // A pass that failed in seconds leaves room, and gets one.
+        assertTrue(AutoPlanner.hasRoomForAnotherPass(30_000L, pass, ceiling))
+
+        // Exactly filling it is still room; a millisecond over is not.
+        assertTrue(AutoPlanner.hasRoomForAnotherPass(ceiling - pass, pass, ceiling))
+        assertFalse(AutoPlanner.hasRoomForAnotherPass(ceiling - pass + 1, pass, ceiling))
+    }
+
+    /**
+     * A pass that failed quickly does leave room for another.
+     *
+     * Which is the reason the ceiling is a wall clock rather than a pass count:
+     * every route refusing in a few seconds is a different situation from every
+     * route using its whole window, and only one of them is worth a retry.
+     */
+    @Test
+    fun aQuickFailureStillEarnsASecondPass() {
+        val ceiling = 15 * 60 * 1_000L
+        val another = AutoPlanner.longestPassMs(null, everything)
+        val spentFailingFast = 30_000L
+
+        assertTrue(
+            "a pass that failed in ${spentFailingFast / 1000}s should leave room",
+            spentFailingFast + another <= ceiling,
+        )
+    }
+
+    /**
+     * A pass is as long as its slowest lane, not as long as all of them.
+     *
+     * The lanes run beside each other. Adding them up would price a pass at
+     * something nobody ever waits, and a ceiling set from that number would
+     * never bite.
+     */
+    @Test
+    fun aPassIsAsLongAsItsSlowestLane() {
+        val everythingAddedUp = AutoPlanner.plan(null, everything).sumOf { step ->
+            when (step) {
+                is AutoStep.Engine -> step.budgetMs
+                is AutoStep.Race -> step.lanes.sumOf { lane ->
+                    lane.startAfterMs + lane.routes.sumOf { AutoPlanner.budgetMs(it) }
+                }
+            }
+        }
+        val slowestLane = AutoPlanner.longestPassMs(null, everything)
+        assertTrue(
+            "the pass was priced as the sum of its lanes",
+            slowestLane < everythingAddedUp,
+        )
+    }
+
     @Test
     fun aNewPhoneRacesEverythingFromTheTap() {
         val plan = AutoPlanner.plan(null, everything)

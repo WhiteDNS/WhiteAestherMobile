@@ -213,6 +213,40 @@ object AutoPlanner {
     /** How long Tor waits for the lanes ahead of it before it joins them. */
     const val SECOND_LANE_AFTER_MS = 45_000L
 
+    /**
+     * The longest one pass of [plan] can take.
+     *
+     * Lanes run beside each other, so a pass lasts as long as its slowest lane
+     * and not as long as all of them added up. Computed rather than written
+     * down, because a number written down drifts the moment a rung is added and
+     * the thing it guards is how long a person is asked to wait.
+     */
+    /**
+     * Whether another pass can *finish* inside what this search is allowed.
+     *
+     * Not whether the ceiling has already been passed, which is the question
+     * that looks equivalent and is not: the longest pass this plan can make is
+     * under the ceiling by itself, so that test never fires and a second full
+     * pass runs to its own end. The search then takes twice what it was
+     * allowed, which is the thing the ceiling exists to prevent.
+     *
+     * A pass that failed quickly does leave room, and gets one -- every route
+     * refusing in seconds is a different situation from every route using its
+     * whole window, and only one of them is worth trying again.
+     */
+    fun hasRoomForAnotherPass(spentMs: Long, passMs: Long, ceilingMs: Long): Boolean =
+        spentMs + passMs <= ceilingMs
+
+    fun longestPassMs(remembered: AutoRoute?, options: AutoOptions): Long =
+        plan(remembered, options).sumOf { step ->
+            when (step) {
+                is AutoStep.Engine -> step.budgetMs
+                is AutoStep.Race -> step.lanes.maxOfOrNull { lane ->
+                    lane.startAfterMs + lane.routes.sumOf { budgetMs(it) }
+                } ?: 0L
+            }
+        }
+
     fun plan(remembered: AutoRoute?, options: AutoOptions): List<AutoStep> {
         val offered = offeredRoutes(options)
         // A route remembered from a build or a setup that can no longer offer
