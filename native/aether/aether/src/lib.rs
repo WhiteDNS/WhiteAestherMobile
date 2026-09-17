@@ -16,6 +16,7 @@ pub mod error;
 // engine, so carrying it would mean carrying a build failure for an interface
 // we do not ship.
 pub mod fragment;
+pub mod identity;
 pub mod lastconn;
 pub mod masque;
 pub mod masque_h2;
