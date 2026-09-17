@@ -254,6 +254,19 @@ impl Store {
         Some(device)
     }
 
+    /// The device filling `slot` and its id, if one does and it is usable there.
+    ///
+    /// Owned, because every caller needs the store back afterwards to record
+    /// what it did with what it found.
+    pub fn take_usable(&self, slot: Slot) -> Option<(String, Device)> {
+        let id = self.slots.get(&slot)?;
+        let device = self.devices.get(id)?;
+        if slot.family() == Family::Wireguard && !device.wireguard_is_trustworthy() {
+            return None;
+        }
+        Some((id.clone(), device.clone()))
+    }
+
     /// Points `slot` at `id`, which must already be a device here.
     pub fn assign(&mut self, slot: Slot, id: &str) -> Result<()> {
         if !self.devices.contains_key(id) {
@@ -518,6 +531,54 @@ pub fn migrate_from_legacy(legacy: &[(Slot, String)]) -> Store {
     store
 }
 
+/// Adopts what the identity files say wherever they disagree with the store.
+///
+/// The store answers for reads, but for one release the older files are written
+/// beside it so that going back to an earlier build still works. Going back and
+/// then forward again is what this exists for: the earlier build provisioned
+/// into a file, knowing nothing about the store, which would otherwise still be
+/// naming the device from before it. Whoever wrote last is right.
+///
+/// Runs before [`Store::repair`], never instead of it — a device an earlier
+/// build adopted is checked against the invariants like any other, rather than
+/// smuggled past them by the file it arrived in.
+fn reconcile_with_legacy(store: &mut Store, legacy: &[(Slot, String)]) -> Vec<Slot> {
+    let mut adopted = Vec::new();
+
+    for (slot, path) in legacy {
+        let Some(identity) = config::peek(path) else {
+            continue;
+        };
+        if store
+            .slots
+            .get(slot)
+            .is_some_and(|held| *held == identity.device_id)
+        {
+            continue;
+        }
+
+        let id = identity.device_id.clone();
+        let incoming = device_from(&identity, 0);
+        match store.devices.get_mut(&id) {
+            Some(existing) => {
+                // Only ever towards knowing more. A file that shows an enrolment
+                // the store had not recorded is news; one that does not is
+                // silence, and silence is not evidence that a key came back.
+                if incoming.tunnel_type == TunnelType::Masque {
+                    existing.tunnel_type = TunnelType::Masque;
+                }
+            }
+            None => {
+                store.devices.insert(id.clone(), incoming);
+            }
+        }
+        store.slots.insert(*slot, id);
+        adopted.push(*slot);
+    }
+
+    adopted
+}
+
 /// Reads the store, building it from the older files the first time.
 ///
 /// A store that will not parse is set aside rather than trusted, and the older
@@ -546,6 +607,20 @@ pub fn load(store_path: &str, legacy: &[(Slot, String)]) -> Result<Loaded> {
         None => migrate_from_legacy(legacy),
     };
 
+    // Migration has just read these files; only a store that was already here
+    // can have fallen behind them.
+    let adopted = if migrated {
+        Vec::new()
+    } else {
+        reconcile_with_legacy(&mut store, legacy)
+    };
+    for slot in &adopted {
+        log::info!(
+            "[+] the {} slot was filled by another build; taking its device into the store",
+            slot.key()
+        );
+    }
+
     let repairs = store.repair();
     if !repairs.is_empty() {
         for slot in &repairs.revoked {
@@ -570,7 +645,7 @@ pub fn load(store_path: &str, legacy: &[(Slot, String)]) -> Result<Loaded> {
         }
     }
 
-    if migrated || !repairs.is_empty() {
+    if migrated || !repairs.is_empty() || !adopted.is_empty() {
         // Written, then read back before anything is built on it. A migration
         // that does not survive its own file is discarded and the older files
         // go on being used, so failing here costs nothing -- and because
@@ -978,6 +1053,72 @@ mod tests {
         assert!(
             dir.join("identities.toml.corrupt").exists(),
             "the damaged store should be kept aside, not deleted",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A build that knows nothing about the store provisioned into the file.
+    ///
+    /// Which is what going back to 1.8.1 and forward again looks like. The
+    /// store would otherwise still be naming the device from before, and the
+    /// registration the earlier build bought would be abandoned.
+    #[test]
+    fn a_store_that_fell_behind_the_files_adopts_what_they_say() {
+        let dir = scratch("reconcile");
+        let warp = dir.join("aether.toml");
+        let store_path = dir.join("identities.toml");
+        let legacy = vec![(Slot::Wireguard, warp.to_str().unwrap().to_string())];
+
+        config::save(warp.to_str().unwrap(), &legacy_identity("dev-first", false)).unwrap();
+        let first = load(store_path.to_str().unwrap(), &legacy).unwrap();
+        assert_eq!(Some("dev-first"), first.store.device_id(Slot::Wireguard));
+
+        config::save(
+            warp.to_str().unwrap(),
+            &legacy_identity("dev-second", false),
+        )
+        .unwrap();
+        let second = load(store_path.to_str().unwrap(), &legacy).unwrap();
+
+        assert!(!second.migrated, "the store was still there to be read");
+        assert_eq!(
+            Some("dev-second"),
+            second.store.device_id(Slot::Wireguard),
+            "whoever wrote the file last is the one holding the registration",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Adopting a file does not put its device beyond the invariants.
+    ///
+    /// 1.8.1 marks a WireGuard file whose device was enrolled by writing the
+    /// certificate into it. Reconciliation has to take that mark as news and
+    /// then still leave the slot empty -- adopting first and checking second is
+    /// the order that matters.
+    #[test]
+    fn reconciliation_does_not_smuggle_a_revoked_device_past_the_invariants() {
+        let dir = scratch("reconcile-revoked");
+        let warp = dir.join("aether.toml");
+        let store_path = dir.join("identities.toml");
+        let legacy = vec![(Slot::Wireguard, warp.to_str().unwrap().to_string())];
+
+        config::save(warp.to_str().unwrap(), &legacy_identity("dev-a", false)).unwrap();
+        load(store_path.to_str().unwrap(), &legacy).unwrap();
+
+        config::save(warp.to_str().unwrap(), &legacy_identity("dev-b", true)).unwrap();
+        let loaded = load(store_path.to_str().unwrap(), &legacy).unwrap();
+
+        assert_eq!(
+            TunnelType::Masque,
+            loaded.store.device("dev-b").unwrap().tunnel_type,
+            "the mark in the file is what says the key was overwritten",
+        );
+        assert_eq!(
+            None,
+            loaded.store.device_id(Slot::Wireguard),
+            "a device with no wireguard key left cannot fill a wireguard slot",
         );
 
         let _ = std::fs::remove_dir_all(&dir);

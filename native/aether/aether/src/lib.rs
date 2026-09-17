@@ -213,8 +213,9 @@ pub async fn run_with(args: Vec<String>) -> Result<()> {
     match protocol {
         Protocol::Masque => {
             select_masque_transport().await;
-            let config_path = masque_config_path(&base_config);
-            let identity = load_or_provision_masque(&config_path).await?;
+            let site = identity_site(&base_config, identity::Slot::Masque);
+            let config_path = site.path.clone();
+            let identity = load_or_provision_masque(&site).await?;
             log::info!(
                 "[+] identity ready: device={} ipv4={} ipv6={}",
                 identity.device_id,
@@ -226,8 +227,9 @@ pub async fn run_with(args: Vec<String>) -> Result<()> {
             run_masque(identity, ech, listen, lastconn_path).await
         }
         Protocol::WireGuard => {
-            let config_path = warp_config_path(&base_config);
-            let identity = load_or_provision_warp(&config_path).await?;
+            let site = identity_site(&base_config, identity::Slot::Wireguard);
+            let config_path = site.path.clone();
+            let identity = load_or_provision_warp(&site).await?;
             log::info!(
                 "[+] identity ready: device={} ipv4={} ipv6={}",
                 identity.device_id,
@@ -239,10 +241,14 @@ pub async fn run_with(args: Vec<String>) -> Result<()> {
             run_wireguard(identity, listen, lastconn_path).await
         }
         Protocol::WarpInWarp => {
-            let primary_path = warp_config_path(&base_config);
-            let secondary_path = derive_sibling_path(&primary_path, "secondary");
-            let primary = load_or_provision_warp(&primary_path).await?;
-            let secondary = load_or_provision_warp(&secondary_path).await?;
+            let primary =
+                load_or_provision_warp(&identity_site(&base_config, identity::Slot::Wireguard))
+                    .await?;
+            let secondary = load_or_provision_warp(&identity_site(
+                &base_config,
+                identity::Slot::WireguardInner,
+            ))
+            .await?;
             log::info!(
                 "[+] outer device={} ipv4={} | inner device={} ipv4={}",
                 primary.device_id,
@@ -254,10 +260,12 @@ pub async fn run_with(args: Vec<String>) -> Result<()> {
         }
         Protocol::MasqueInMasque => {
             select_masque_transport().await;
-            let primary_path = masque_config_path(&base_config);
-            let secondary_path = derive_sibling_path(&primary_path, "secondary");
-            let primary = load_or_provision_masque(&primary_path).await?;
-            let secondary = load_or_provision_masque(&secondary_path).await?;
+            let primary =
+                load_or_provision_masque(&identity_site(&base_config, identity::Slot::Masque))
+                    .await?;
+            let secondary =
+                load_or_provision_masque(&identity_site(&base_config, identity::Slot::MasqueInner))
+                    .await?;
             log::info!(
                 "[+] outer device={} ipv4={} | inner device={} ipv4={}",
                 primary.device_id,
@@ -521,6 +529,28 @@ impl EmbeddedConfig {
     fn secondary_identity_path(&self) -> String {
         derive_sibling_path(&self.identity_path(), "secondary")
     }
+
+    /// The outer account's slot, and where this install keeps it.
+    fn identity_site(&self) -> IdentitySite {
+        identity_site(
+            &self.config_path,
+            match self.protocol() {
+                Protocol::Masque | Protocol::MasqueInMasque => identity::Slot::Masque,
+                Protocol::WireGuard | Protocol::WarpInWarp => identity::Slot::Wireguard,
+            },
+        )
+    }
+
+    /// The inner account's slot, for a nested tunnel.
+    fn secondary_identity_site(&self) -> IdentitySite {
+        identity_site(
+            &self.config_path,
+            match self.protocol() {
+                Protocol::Masque | Protocol::MasqueInMasque => identity::Slot::MasqueInner,
+                Protocol::WireGuard | Protocol::WarpInWarp => identity::Slot::WireguardInner,
+            },
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -555,23 +585,110 @@ pub enum EmbeddedEndpoint {
 /// Both are read; 2 is written.
 const IDENTITY_EXPORT_VERSION: u32 = 2;
 
-/// Every identity file an install can hold, named as the backup names them.
+/// Every identity file an install can hold, and the slot each one fills.
 ///
-/// The names are the format's, so `identity` stays what format 1 called the
-/// WireGuard account rather than being tidied into something better -- a file
-/// somebody exported last month has to keep importing.
-fn identity_slots(base_config: &str) -> [(&'static str, String); 4] {
+/// One definition of where these live, used by the backup, by the migration
+/// into the identity store, and by the file each slot is still written to
+/// while both exist.
+fn identity_slots(base_config: &str) -> [(identity::Slot, String); 4] {
     let warp = warp_config_path(base_config);
     let masque = masque_config_path(base_config);
     [
-        ("identity", warp.clone()),
-        ("secondary", derive_sibling_path(&warp, "secondary")),
-        ("masque", masque.clone()),
+        (identity::Slot::Wireguard, warp.clone()),
         (
-            "masque_secondary",
+            identity::Slot::WireguardInner,
+            derive_sibling_path(&warp, "secondary"),
+        ),
+        (identity::Slot::Masque, masque.clone()),
+        (
+            identity::Slot::MasqueInner,
             derive_sibling_path(&masque, "secondary"),
         ),
     ]
+}
+
+/// What the backup format calls each slot.
+///
+/// The format's names, not the store's: `identity` stays what format 1 called
+/// the WireGuard account rather than being tidied into something better,
+/// because a file somebody exported last month has to keep importing.
+fn export_key(slot: identity::Slot) -> &'static str {
+    match slot {
+        identity::Slot::Wireguard => "identity",
+        identity::Slot::WireguardInner => "secondary",
+        identity::Slot::Masque => "masque",
+        identity::Slot::MasqueInner => "masque_secondary",
+    }
+}
+
+/// Where this install keeps the store, beside the files it supersedes.
+fn store_path(base_config: &str) -> String {
+    derive_sibling_path(&warp_config_path(base_config), "store")
+}
+
+/// Everything the provisioning path needs for one identity.
+///
+/// Which role it fills, the store that answers for it, and the file that role
+/// is still written to -- plus every other file, because the store is built
+/// from them the first time it is read.
+#[derive(Debug, Clone)]
+struct IdentitySite {
+    slot: identity::Slot,
+    /// The file this slot still gets written to, for one release.
+    path: String,
+    store_path: String,
+    legacy: Vec<(identity::Slot, String)>,
+}
+
+fn identity_site(base_config: &str, slot: identity::Slot) -> IdentitySite {
+    let legacy = identity_slots(base_config).to_vec();
+    let path = legacy
+        .iter()
+        .find(|(candidate, _)| *candidate == slot)
+        .map(|(_, path)| path.clone())
+        .unwrap_or_else(|| warp_config_path(base_config));
+    IdentitySite {
+        slot,
+        path,
+        store_path: store_path(base_config),
+        legacy,
+    }
+}
+
+/// Records an identity as the device filling this slot.
+///
+/// In the store, which is what this build reads, *and* in the file an earlier
+/// build reads. Both for one release: writing only the store would cost a user
+/// who goes back to 1.8.1 their registration, and writing only the file is what
+/// the store exists to stop.
+fn record(
+    store: &mut identity::Store,
+    site: &IdentitySite,
+    identity: &account::Identity,
+) -> Result<()> {
+    let id = identity.device_id.clone();
+    let mut device = identity::device_from(identity, account::now_unix());
+
+    if let Some(existing) = store.device(&id) {
+        // When the device was first registered is a fact about the device, not
+        // about this write.
+        if existing.registered_at != 0 {
+            device.registered_at = existing.registered_at;
+        }
+        device.refused_at = existing.refused_at;
+        // A certificate that has arrived is the answer to the enrolment that
+        // was in flight. One that has not leaves the question standing.
+        device.enrolment_pending_since = if device.has_certificate() {
+            0
+        } else {
+            existing.enrolment_pending_since
+        };
+    }
+
+    store.put(&id, device);
+    store.assign(site.slot, &id)?;
+    identity::save(&site.store_path, store)?;
+    config::save(&site.path, identity)
 }
 
 /// Packages this install's identities so they survive a reinstall.
@@ -595,9 +712,9 @@ fn identity_slots(base_config: &str) -> [(&'static str, String); 4] {
 /// set aside a file it could not parse. Refusing to back up the rest because
 /// one slot is damaged is the wrong way round.
 pub fn export_identity(base_config: &str) -> Result<String> {
-    let held: Vec<(&'static str, account::Identity)> = identity_slots(base_config)
+    let held: Vec<(identity::Slot, account::Identity)> = identity_slots(base_config)
         .into_iter()
-        .filter_map(|(name, path)| config::peek(&path).map(|identity| (name, identity)))
+        .filter_map(|(slot, path)| config::peek(&path).map(|identity| (slot, identity)))
         .collect();
 
     let Some((_, first)) = held.first() else {
@@ -609,8 +726,8 @@ pub fn export_identity(base_config: &str) -> Result<String> {
     let mut out = String::new();
     out.push_str(&format!("version = {IDENTITY_EXPORT_VERSION}\n"));
     out.push_str(&format!("device_id = {:?}\n", first.device_id));
-    for (name, identity) in &held {
-        out.push_str(&format!("\n[{name}]\n"));
+    for (slot, identity) in &held {
+        out.push_str(&format!("\n[{}]\n", export_key(*slot)));
         out.push_str(&config::to_text(identity)?);
     }
     Ok(out)
@@ -647,10 +764,14 @@ pub fn import_identity(base_config: &str, payload: &str) -> Result<()> {
         envelope.masque_secondary,
     ];
     let mut ready: Vec<(String, account::Identity)> = Vec::new();
-    for ((name, path), value) in identity_slots(base_config).into_iter().zip(carried) {
+    for ((slot, path), value) in identity_slots(base_config).into_iter().zip(carried) {
         let Some(value) = value else { continue };
-        let text = toml::to_string(&value)
-            .map_err(|e| AetherError::Other(format!("the {name} identity is malformed: {e}")))?;
+        let text = toml::to_string(&value).map_err(|e| {
+            AetherError::Other(format!(
+                "the {} identity is malformed: {e}",
+                export_key(slot)
+            ))
+        })?;
         ready.push((path, config::parse(&text)?));
     }
 
@@ -704,9 +825,11 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
     // is a compile error here instead of a silent one.
     let identity = match config.protocol() {
         Protocol::Masque | Protocol::MasqueInMasque => {
-            load_or_provision_masque(&config_path).await?
+            load_or_provision_masque(&config.identity_site()).await?
         }
-        Protocol::WireGuard | Protocol::WarpInWarp => load_or_provision_warp(&config_path).await?,
+        Protocol::WireGuard | Protocol::WarpInWarp => {
+            load_or_provision_warp(&config.identity_site()).await?
+        }
     };
     // Nested, this is the outer edge. The inner ones are derived from it when
     // the tunnel is built rather than chosen here, so preparing a nested tunnel
@@ -726,7 +849,7 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
     // whose packets reach the internet, and addressing it as the outer would
     // give every connection the wrong source.
     if config.protocol() == Protocol::MasqueInMasque {
-        let secondary = load_or_provision_masque(&config.secondary_identity_path()).await?;
+        let secondary = load_or_provision_masque(&config.secondary_identity_site()).await?;
         return Ok(EmbeddedPrepared {
             ipv4: secondary.ipv4,
             ipv6: secondary.ipv6,
@@ -735,7 +858,7 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
     }
 
     if config.protocol() == Protocol::WarpInWarp {
-        let secondary = load_or_provision_warp(&config.secondary_identity_path()).await?;
+        let secondary = load_or_provision_warp(&config.secondary_identity_site()).await?;
         return Ok(EmbeddedPrepared {
             ipv4: secondary.ipv4,
             ipv6: secondary.ipv6,
@@ -828,11 +951,10 @@ pub async fn scan_embedded(
     limit: usize,
     cancelled: &AtomicBool,
 ) -> Result<Vec<EmbeddedScanResult>> {
-    let config_path = config.identity_path();
     if !matches!(config.protocol(), Protocol::Masque) {
-        return scan_embedded_wg(config, &config_path, limit, cancelled).await;
+        return scan_embedded_wg(config, limit, cancelled).await;
     }
-    let identity = load_or_provision_masque(&config_path).await?;
+    let identity = load_or_provision_masque(&config.identity_site()).await?;
     let probe = masque_probe(&identity, prober::IpScan::parse(&config.ip_scan)).await;
     let results = prober::scan_gateways(
         &probe,
@@ -854,9 +976,8 @@ pub async fn test_embedded_peer(config: &EmbeddedConfig) -> Result<EmbeddedScanR
     let peer = config
         .peer
         .ok_or_else(|| AetherError::Other("custom endpoint is required".into()))?;
-    let config_path = config.identity_path();
     if !matches!(config.protocol(), Protocol::Masque) {
-        let identity = load_or_provision_warp(&config_path).await?;
+        let identity = load_or_provision_warp(&config.identity_site()).await?;
         // Every profile, because an endpoint that refuses one may answer
         // another, and reporting the first refusal as "dead" would be wrong.
         let mut last = AetherError::NoCleanEndpoint;
@@ -868,7 +989,7 @@ pub async fn test_embedded_peer(config: &EmbeddedConfig) -> Result<EmbeddedScanR
         }
         return Err(last);
     }
-    let identity = load_or_provision_masque(&config_path).await?;
+    let identity = load_or_provision_masque(&config.identity_site()).await?;
     let rtt = verify_masque_peer(&identity, peer).await?;
     Ok(EmbeddedScanResult { peer, rtt })
 }
@@ -891,7 +1012,7 @@ pub async fn run_embedded(
         config.protocol(),
         Protocol::WireGuard | Protocol::WarpInWarp
     ) {
-        let identity = load_or_provision_warp(&config_path).await?;
+        let identity = load_or_provision_warp(&config.identity_site()).await?;
         // Which profile reaches this endpoint is part of what the scan found,
         // and it is not recorded anywhere the caller could hand back -- so it is
         // established again here rather than guessed.
@@ -909,7 +1030,7 @@ pub async fn run_embedded(
         );
 
         if config.protocol() == Protocol::WarpInWarp {
-            let secondary = load_or_provision_warp(&config.secondary_identity_path()).await?;
+            let secondary = load_or_provision_warp(&config.secondary_identity_site()).await?;
             return run_warp_in_warp_embedded(
                 &identity,
                 &secondary,
@@ -932,7 +1053,7 @@ pub async fn run_embedded(
         .await;
     }
 
-    let identity = load_or_provision_masque(&config_path).await?;
+    let identity = load_or_provision_masque(&config.identity_site()).await?;
     let ech = attempt_ech().await;
     let mut endpoint = Some(endpoint);
     // The endpoint is remembered when the tunnel confirms it carries data, not
@@ -949,7 +1070,7 @@ pub async fn run_embedded(
         // A second account, not the same one twice: the inner tunnel
         // handshakes through the outer, and Cloudflare would otherwise see one
         // device connecting to itself.
-        let secondary = load_or_provision_masque(&config.secondary_identity_path()).await?;
+        let secondary = load_or_provision_masque(&config.secondary_identity_site()).await?;
         return run_masque_in_masque_embedded(
             &identity,
             &secondary,
@@ -1206,11 +1327,10 @@ async fn run_warp_in_warp_embedded(
 /// The same endpoint scan as [`scan_embedded`], for WireGuard.
 async fn scan_embedded_wg(
     config: &EmbeddedConfig,
-    config_path: &str,
     limit: usize,
     cancelled: &AtomicBool,
 ) -> Result<Vec<EmbeddedScanResult>> {
-    let identity = load_or_provision_warp(config_path).await?;
+    let identity = load_or_provision_warp(&config.identity_site()).await?;
     let private_key = identity.private_key_bytes()?;
     let peer_public = identity.peer_public_key_bytes()?;
 
@@ -2104,14 +2224,6 @@ fn masque_config_path(base: &str) -> String {
     derive_sibling_path(&warp_config_path(base), "masque")
 }
 
-/// The file the two protocols briefly shared, given MASQUE's own path.
-///
-/// Read only when MASQUE's own file is absent, so an install that already paid
-/// for a registration keeps it instead of buying another.
-fn shared_config_path(masque_path: &str) -> Option<String> {
-    strip_sibling_path(masque_path, "masque")
-}
-
 /// The inverse of [`derive_sibling_path`]: the file a sibling was derived from.
 ///
 /// `None` when the path is not a sibling of that kind, which is what an
@@ -2272,49 +2384,35 @@ fn record_enrolment_beside(config_path: &str, identity: &account::Identity) {
     }
 }
 
-async fn load_or_provision_warp(config_path: &str) -> Result<account::Identity> {
+async fn load_or_provision_warp(site: &IdentitySite) -> Result<account::Identity> {
     let _provisioning = provisioning_lock().lock().await;
+    let mut loaded = identity::load(&site.store_path, &site.legacy)?;
 
-    if let Some(identity) = config::load(config_path)? {
-        // A certificate means a MASQUE key was enrolled onto this same
-        // Cloudflare device, which replaced its WireGuard public key. Nothing
-        // recognises the key on disk any more, so every endpoint would meet it
-        // with silence and the search would blame the network.
-        //
-        // Asked two ways, because the fact can be recorded in two places. On
-        // this file, from the release where both protocols shared one. And on
-        // another file holding the same device -- which is what an install that
-        // only ever ran WireGuard looks like after MASQUE adopted its identity
-        // and enrolled the copy. That second case is the one that shipped, and
-        // it left this file looking perfectly healthy.
-        let enrolled_here = !identity.cert_pem.is_empty();
-        let enrolled_elsewhere = device_enrolled_elsewhere(config_path, &identity.device_id);
-
-        if enrolled_here || enrolled_elsewhere.is_some() {
-            match &enrolled_elsewhere {
-                Some(other) => log::info!(
-                    "[!] the device in {config_path} was enrolled for MASQUE in {other}, which \
-                     revoked its WireGuard key; provisioning a separate wireguard account"
-                ),
-                None => log::info!(
-                    "[!] the identity in {config_path} was enrolled for MASQUE, which revoked its \
-                     WireGuard key; provisioning a separate wireguard account"
-                ),
+    if let Some((id, device)) = loaded.store.take_usable(site.slot) {
+        // A second opinion, from the file rather than the store. The store's
+        // invariants and the reconciliation that feeds them should already have
+        // caught a device Cloudflare no longer holds a WireGuard key for -- but
+        // the cost of being wrong here is not an error, it is a three-minute
+        // endpoint search that finds nothing and reports the network as dead.
+        // A directory read is cheap next to that.
+        match device_enrolled_elsewhere(&site.path, &id) {
+            Some(other) => log::info!(
+                "[!] the store offered device {id} for the {} slot, but {other} shows it was                  enrolled for MASQUE; provisioning an account of its own",
+                site.slot.key()
+            ),
+            None => {
+                log::info!("[+] loaded existing warp identity for device {id}");
+                let identity = identity::identity_from(&id, &device)?;
+                let identity = adopt_team_profile(identity).await;
+                record(&mut loaded.store, site, &identity)?;
+                return Ok(identity);
             }
-            if enrolled_here {
-                // Hand it to MASQUE before overwriting it. The certificate on it
-                // is valid and was paid for with a registration; losing it here
-                // would cost the user another one for no reason.
-                preserve_masque_identity(config_path, &identity)?;
-            }
-        } else {
-            log::info!("[+] loaded existing warp identity from {config_path}");
-            let identity = adopt_team_profile(identity).await;
-            config::save(config_path, &identity)?;
-            return Ok(identity);
         }
     } else {
-        log::info!("[+] no warp identity found; provisioning dedicated wireguard account");
+        log::info!(
+            "[+] no usable warp identity for the {} slot; provisioning a dedicated wireguard account",
+            site.slot.key()
+        );
     }
 
     let identity = provision_account().await?;
@@ -2322,94 +2420,34 @@ async fn load_or_provision_warp(config_path: &str) -> Result<account::Identity> 
     // already counted this registration against the address whether or not the
     // rest of the connect succeeds, so the one thing that must not happen is
     // reaching the next await without it on disk.
-    config::save(config_path, &identity)?;
+    record(&mut loaded.store, site, &identity)?;
     let identity = adopt_team_profile(identity).await;
-    config::save(config_path, &identity)?;
-    log::info!("[+] provisioned and saved new warp identity to {config_path}");
+    record(&mut loaded.store, site, &identity)?;
+    log::info!(
+        "[+] provisioned and saved a new warp identity for device {}",
+        identity.device_id
+    );
     Ok(identity)
 }
 
-/// Copies a shared-file identity to MASQUE's own file before WireGuard
-/// replaces it.
+/// Enrols a MASQUE key onto `identity`, recording the attempt before it is made.
 ///
-/// Only when MASQUE has nothing of its own yet, so a later WireGuard
-/// re-provision cannot overwrite a MASQUE identity that has moved on.
-fn preserve_masque_identity(config_path: &str, identity: &account::Identity) -> Result<()> {
-    let masque = masque_config_path(config_path);
-    if masque == config_path || config::load(&masque)?.is_some() {
-        return Ok(());
+/// The marker is written and flushed first, and cleared by the write that
+/// stores the certificate. Without that order there is a third outcome nothing
+/// can see: Cloudflare accepted the PATCH, the answer never reached disk, and
+/// the device is a MASQUE device that every file here still describes as a
+/// WireGuard one. A file cannot record a change that was never written, so the
+/// record has to come before the change.
+async fn enrol_and_record(
+    store: &mut identity::Store,
+    site: &IdentitySite,
+    identity: account::Identity,
+) -> Result<account::Identity> {
+    if let Some(device) = store.device_mut(&identity.device_id) {
+        device.enrolment_pending_since = account::now_unix();
     }
-    // A certificate with no private key beside it is a mark rather than a
-    // credential -- what record_enrolment_beside writes on a file whose device
-    // was enrolled somewhere else. Handing that to MASQUE would give it an
-    // identity it cannot present and a re-enrolment to pay for.
-    if identity.key_pem.is_empty() {
-        return Ok(());
-    }
-    log::info!("[+] keeping the enrolled identity for MASQUE at {masque}");
-    config::save(&masque, identity)
-}
+    identity::save(&site.store_path, store)?;
 
-async fn load_or_provision_masque(config_path: &str) -> Result<account::Identity> {
-    let _provisioning = provisioning_lock().lock().await;
-
-    adopt_legacy_masque_identity(config_path)?;
-    if let Some(identity) = config::load(config_path)? {
-        log::info!("[+] loaded existing masque identity from {config_path}");
-        let refused = if identity.has_masque_credentials() {
-            // An install that was enrolled by a build which did not record it
-            // is repaired here, on the first MASQUE connect after updating,
-            // without the user being asked to do anything. Cheap to repeat: it
-            // writes only where the mark is missing.
-            record_enrolment_beside(config_path, &identity);
-            let identity = adopt_team_profile(identity).await;
-            if !identity.refused {
-                config::save(config_path, &identity)?;
-                return Ok(identity);
-            }
-            identity
-        } else {
-            log::info!("[+] masque identity needs a certificate; enrolling masque key");
-            match account::ensure_masque_enrolled(&identity).await {
-                Ok(enrollment) => {
-                    let identity = account::Identity {
-                        cert_pem: enrollment.cert_pem,
-                        key_pem: enrollment.key_pem,
-                        cert_issued_at: enrollment.issued_at,
-                        ..identity
-                    };
-                    config::save(config_path, &identity)?;
-                    record_enrolment_beside(config_path, &identity);
-                    return Ok(identity);
-                }
-                Err(AetherError::IdentityRefused(reason)) => {
-                    log::warn!("[-] the saved masque identity was refused: {reason}");
-                    account::Identity {
-                        refused: true,
-                        ..identity
-                    }
-                }
-                Err(error) => return Err(error),
-            }
-        };
-
-        if !keep_saved_identity() {
-            return Ok(refused);
-        }
-        log::warn!("[*] registering a fresh masque account to replace the refused identity");
-    }
-
-    log::info!("[+] no masque identity found; provisioning dedicated masque account");
-    let identity = provision_account().await?;
-    // Written before the enrolment, which is a second network call and the
-    // longer of the two. Registration is the expensive half -- Cloudflare
-    // counts it against this address the moment it answers -- and enrolling is
-    // resumable: the branch above picks up a saved identity with no certificate
-    // and enrols it. Without this line, an enrolment that failed or was
-    // cancelled threw the registration away and the next attempt bought
-    // another, which is how an address spends its allowance without ever
-    // keeping an identity.
-    config::save(config_path, &identity)?;
     let enrollment = account::ensure_masque_enrolled(&identity).await?;
     let identity = account::Identity {
         cert_pem: enrollment.cert_pem,
@@ -2418,9 +2456,80 @@ async fn load_or_provision_masque(config_path: &str) -> Result<account::Identity
         ..identity
     };
     let identity = adopt_team_profile(identity).await;
-    config::save(config_path, &identity)?;
-    record_enrolment_beside(config_path, &identity);
-    log::info!("[+] provisioned and saved new masque identity to {config_path}");
+    record(store, site, &identity)?;
+    // The file an earlier build reads has no store to tell it any of this, and
+    // it decides by sweeping for a sibling holding the same device. Nothing
+    // here shares a device across families any more, so this is almost always a
+    // no-op -- almost being the reason it still runs.
+    record_enrolment_beside(&site.path, &identity);
+    Ok(identity)
+}
+
+async fn load_or_provision_masque(site: &IdentitySite) -> Result<account::Identity> {
+    let _provisioning = provisioning_lock().lock().await;
+    let mut loaded = identity::load(&site.store_path, &site.legacy)?;
+
+    if let Some((id, device)) = loaded.store.take_usable(site.slot) {
+        let identity = identity::identity_from(&id, &device)?;
+
+        if identity.has_masque_credentials() {
+            log::info!("[+] loaded existing masque identity for device {id}");
+            let identity = adopt_team_profile(identity).await;
+            if !identity.refused {
+                record(&mut loaded.store, site, &identity)?;
+                return Ok(identity);
+            }
+            if !keep_saved_identity() {
+                return Ok(identity);
+            }
+            if let Some(device) = loaded.store.device_mut(&id) {
+                device.refused_at = account::now_unix();
+            }
+            log::warn!("[*] registering a fresh masque account to replace the refused identity");
+        } else {
+            // Resumed rather than restarted. This is where a registration whose
+            // enrolment failed or was cancelled is picked up, which is what
+            // stops the next attempt buying another one.
+            log::info!("[+] the masque identity for device {id} needs a certificate; enrolling");
+            match enrol_and_record(&mut loaded.store, site, identity.clone()).await {
+                Ok(identity) => return Ok(identity),
+                Err(AetherError::IdentityRefused(reason)) => {
+                    log::warn!("[-] the saved masque identity was refused: {reason}");
+                    if !keep_saved_identity() {
+                        return Ok(account::Identity {
+                            refused: true,
+                            ..identity
+                        });
+                    }
+                    if let Some(device) = loaded.store.device_mut(&id) {
+                        device.refused_at = account::now_unix();
+                    }
+                    log::warn!(
+                        "[*] registering a fresh masque account to replace the refused identity"
+                    );
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    } else {
+        log::info!(
+            "[+] no usable masque identity for the {} slot; provisioning a dedicated masque account",
+            site.slot.key()
+        );
+    }
+
+    let identity = provision_account().await?;
+    // Before the enrolment, which is a second network call and the longer of
+    // the two. Registration is the expensive half -- Cloudflare counts it
+    // against this address the moment it answers -- and the branch above
+    // resumes from here, so an enrolment that fails costs a round trip rather
+    // than a registration.
+    record(&mut loaded.store, site, &identity)?;
+    let identity = enrol_and_record(&mut loaded.store, site, identity).await?;
+    log::info!(
+        "[+] provisioned and saved a new masque identity for device {}",
+        identity.device_id
+    );
     Ok(identity)
 }
 
@@ -2801,27 +2910,6 @@ async fn masque_probe(identity: &account::Identity, ip: prober::IpScan) -> probe
 /// re-scans on the first connect after updating.
 fn lastconn_path(config_path: &str) -> String {
     derive_sibling_path(config_path, "lastconn")
-}
-
-/// Takes over the identity from the release where both protocols shared a file.
-///
-/// That identity is a perfectly good MASQUE one -- it is the WireGuard half of
-/// it that enrolment destroyed -- so it is copied here rather than thrown away,
-/// and MASQUE keeps working without spending another registration. WireGuard
-/// gets a fresh account of its own; see [`load_or_provision_warp`].
-fn adopt_legacy_masque_identity(config_path: &str) -> Result<()> {
-    if config::load(config_path)?.is_some() {
-        return Ok(());
-    }
-    let Some(shared) = shared_config_path(config_path) else {
-        return Ok(());
-    };
-    let Some(identity) = config::load(&shared)? else {
-        return Ok(());
-    };
-    log::info!("[+] adopting the existing identity from {shared}; no new registration needed");
-    config::save(config_path, &identity)?;
-    Ok(())
 }
 
 async fn quick_verify_masque_peer(identity: &account::Identity, peer: SocketAddr) -> bool {
@@ -5091,90 +5179,86 @@ mod identity_tests {
         assert!(lastconn_path(&warp_config_path(base)).ends_with("aether-lastconn.toml"));
     }
 
-    #[test]
-    fn masque_adopts_the_identity_from_the_release_that_shared_one_file() {
+    /// The store answers, and the older build's file is kept current.
+    ///
+    /// No network reaches this test, which is the point twice over: a usable
+    /// device in the store is the whole answer, and the dual write beside it is
+    /// what stops a user who goes back to 1.8.1 paying for a registration they
+    /// already own.
+    #[tokio::test]
+    async fn a_device_in_the_store_is_used_without_asking_cloudflare() {
         isolated();
-        let dir = std::env::temp_dir().join(format!("aether-adopt-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch("store-answers");
         let base = dir.join("aether.toml");
         let base = base.to_str().unwrap();
 
-        // What an install of the release that shared one file looks like: a
-        // single identity, carrying the MASQUE certificate that was enrolled
-        // onto it.
         let identity = account::Identity {
-            // Upstream now records whether Cloudflare has refused this identity.
-            refused: false,
-            device_id: "device-from-the-shared-release".into(),
-            access_token: "token".into(),
-            cert_pem: b"-----BEGIN CERTIFICATE-----".to_vec(),
-            key_pem: b"-----BEGIN PRIVATE KEY-----".to_vec(),
-            cert_issued_at: 1,
-            ipv4: "172.16.0.2".into(),
-            ipv6: "2606:4700:110::1".into(),
-            wg_private_key: [7u8; 32],
-            wg_peer_public_key: [9u8; 32],
-            client_id: [1, 2, 3],
-            organization: String::new(),
-            gateway_proxy: String::new(),
-            assigned_endpoint: String::new(),
-        };
-        config::save(base, &identity).unwrap();
-
-        let masque = masque_config_path(base);
-        assert_ne!(masque, base, "the two protocols must not share a file");
-        adopt_legacy_masque_identity(&masque).unwrap();
-
-        // The certificate on it is valid and cost a registration. Only the
-        // WireGuard half died, so MASQUE keeps the account rather than the user
-        // paying for another against a per-IP rate limit.
-        let adopted = config::load(&masque)
-            .unwrap()
-            .expect("identity was not adopted");
-        assert_eq!("device-from-the-shared-release", adopted.device_id);
-    }
-
-    #[test]
-    fn adoption_never_overwrites_an_identity_already_in_place() {
-        isolated();
-        let dir = std::env::temp_dir().join(format!("aether-keep-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let base = dir.join("aether.toml");
-        let base = base.to_str().unwrap();
-
-        let current = account::Identity {
-            // Upstream now records whether Cloudflare has refused this identity.
-            refused: false,
-            device_id: "current".into(),
-            access_token: "token".into(),
             cert_pem: Vec::new(),
             key_pem: Vec::new(),
             cert_issued_at: 0,
-            ipv4: "172.16.0.2".into(),
-            ipv6: "2606:4700:110::1".into(),
-            wg_private_key: [1u8; 32],
-            wg_peer_public_key: [2u8; 32],
-            client_id: [4, 5, 6],
-            organization: String::new(),
-            gateway_proxy: String::new(),
-            assigned_endpoint: String::new(),
+            ..sample_identity("dev-wg")
         };
-        let stale = account::Identity {
-            device_id: "stale".into(),
-            ..current.clone()
+        let mut store = identity::Store::default();
+        store.put("dev-wg", identity::device_from(&identity, 1_789_000_000));
+        store.assign(identity::Slot::Wireguard, "dev-wg").unwrap();
+        identity::save(&store_path(base), &store).unwrap();
+
+        let site = identity_site(base, identity::Slot::Wireguard);
+        let found = load_or_provision_warp(&site).await.unwrap();
+
+        assert_eq!("dev-wg", found.device_id);
+        assert_eq!(
+            "dev-wg",
+            config::peek(&site.path)
+                .expect("the file an earlier build reads was not written")
+                .device_id,
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Adoption is gone, and its absence is the point.
+    ///
+    /// Filling MASQUE's file by copying WireGuard's saved a registration and
+    /// cost the WireGuard key, because enrolling the copy revoked it on the
+    /// device both files described. The identity store cannot express that --
+    /// one device, one record, and no slot may hold another family's device --
+    /// so each family registers its own account. The cost is the same as 1.8.1
+    /// paid anyway: one extra registration, once, since there the WireGuard
+    /// side re-provisioned instead.
+    ///
+    /// `identity::tests::migrating_an_install_broken_by_an_earlier_build_repairs_it`
+    /// covers what happens to an install that was already adopted.
+    #[test]
+    fn nothing_adopts_another_protocols_identity_any_more() {
+        isolated();
+        let dir = scratch("no-adoption");
+        let base = dir.join("aether.toml");
+        let base = base.to_str().unwrap();
+        // No certificate: an install that has only ever run WireGuard, which is
+        // precisely what adoption used to reach for.
+        let identity = account::Identity {
+            cert_pem: Vec::new(),
+            key_pem: Vec::new(),
+            cert_issued_at: 0,
+            ..sample_identity("wireguard-only")
         };
-        let masque = masque_config_path(base);
-        config::save(&masque, &current).unwrap();
-        config::save(base, &stale).unwrap();
+        config::save(base, &identity).unwrap();
 
-        adopt_legacy_masque_identity(&masque).unwrap();
+        let legacy = identity_slots(base).to_vec();
+        let loaded = identity::load(&store_path(base), &legacy).unwrap();
 
-        // A leftover file from before the migration must never displace the
-        // identity in use: that would swap the device mid-life and strand the
-        // certificate enrolled against it.
-        assert_eq!("current", config::load(&masque).unwrap().unwrap().device_id);
+        assert_eq!(
+            Some("wireguard-only"),
+            loaded.store.device_id(identity::Slot::Wireguard),
+        );
+        assert_eq!(
+            None,
+            loaded.store.device_id(identity::Slot::Masque),
+            "masque took over the wireguard device, which is what revokes its key",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The bug that shipped, in the form the code can check.
@@ -5337,25 +5421,6 @@ mod identity_tests {
         assert!(cache.exists(), "the cache was quarantined by a sweep");
 
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn the_shared_file_is_recovered_from_masques_own_path() {
-        // The migration reads the old shared file given only MASQUE's path, so
-        // the derivation has to be reversible or nothing is ever adopted and
-        // every upgrading install pays for a second registration.
-        for base in ["/data/aether.toml", "/data/aether", "C:\\x\\aether.toml"] {
-            let masque = masque_config_path(base);
-            assert_eq!(
-                Some(warp_config_path(base)),
-                shared_config_path(&masque),
-                "could not get back to the shared file from {masque}",
-            );
-        }
-
-        // A deliberate override is not a derived sibling and nothing should be
-        // migrated into it.
-        assert_eq!(None, shared_config_path("/data/somewhere-else.toml"));
     }
 }
 
