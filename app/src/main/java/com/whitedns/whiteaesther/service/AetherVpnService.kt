@@ -2189,6 +2189,11 @@ class AetherVpnService : VpnService() {
      */
     private fun isConclusive(reason: String): Boolean =
         isIdentityRefusal(reason) ||
+            // The engine is holding a wait of its own -- minutes to an hour,
+            // kept across restarts because Cloudflare counts a registration
+            // against the address whether or not we keep the answer. Retrying
+            // three seconds into that is the behaviour the wait exists to stop.
+            reason.contains("registration is on hold", ignoreCase = true) ||
             reason.contains("no WireGuard endpoint answered", ignoreCase = true)
 
     /**

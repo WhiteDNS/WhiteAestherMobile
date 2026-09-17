@@ -712,9 +712,23 @@ fn record(
 /// set aside a file it could not parse. Refusing to back up the rest because
 /// one slot is damaged is the wrong way round.
 pub fn export_identity(base_config: &str) -> Result<String> {
-    let held: Vec<(identity::Slot, account::Identity)> = identity_slots(base_config)
+    let site = identity_site(base_config, identity::Slot::Wireguard);
+    let loaded = identity::load(&site.store_path, &site.legacy)?;
+
+    // From the store, which is what this build dials with -- so what leaves the
+    // device is what it would have used, rather than what the files beside it
+    // happen to say. A slot the invariants cleared is a slot with nothing worth
+    // carrying: restoring a device whose key Cloudflare overwrote would hand
+    // the next install the same three-minute search that found nothing.
+    let held: Vec<(identity::Slot, account::Identity)> = identity::Slot::ALL
         .into_iter()
-        .filter_map(|(slot, path)| config::peek(&path).map(|identity| (slot, identity)))
+        .filter_map(|slot| {
+            let id = loaded.store.device_id(slot)?;
+            let device = loaded.store.device(id)?;
+            identity::identity_from(id, device)
+                .ok()
+                .map(|identity| (slot, identity))
+        })
         .collect();
 
     let Some((_, first)) = held.first() else {
@@ -763,7 +777,7 @@ pub fn import_identity(base_config: &str, payload: &str) -> Result<()> {
         envelope.masque,
         envelope.masque_secondary,
     ];
-    let mut ready: Vec<(String, account::Identity)> = Vec::new();
+    let mut ready: Vec<(identity::Slot, String, account::Identity)> = Vec::new();
     for ((slot, path), value) in identity_slots(base_config).into_iter().zip(carried) {
         let Some(value) = value else { continue };
         let text = toml::to_string(&value).map_err(|e| {
@@ -772,7 +786,7 @@ pub fn import_identity(base_config: &str, payload: &str) -> Result<()> {
                 export_key(slot)
             ))
         })?;
-        ready.push((path, config::parse(&text)?));
+        ready.push((slot, path, config::parse(&text)?));
     }
 
     if ready.is_empty() {
@@ -781,15 +795,62 @@ pub fn import_identity(base_config: &str, payload: &str) -> Result<()> {
         ));
     }
 
-    for (path, identity) in &ready {
-        config::write_identity(path, identity)?;
+    let site = identity_site(base_config, identity::Slot::Wireguard);
+    let mut loaded = identity::load(&site.store_path, &site.legacy)?;
+    for (slot, _, identity) in &ready {
+        let incoming = identity::device_from(identity, account::now_unix());
+        // The same device can arrive twice, once per slot -- which is exactly
+        // what a backup of an install 1.8.0 had broken looks like. Whichever
+        // copy shows an enrolment is the one that knows what Cloudflare holds;
+        // a copy that does not is silence, and silence is not evidence that a
+        // key came back. Merged rather than overwritten so the answer does not
+        // depend on which section the file happened to list first.
+        let merged = match loaded.store.device(&identity.device_id) {
+            Some(existing)
+                if existing.tunnel_type == identity::TunnelType::Masque
+                    && !incoming.has_certificate() =>
+            {
+                identity::Device {
+                    tunnel_type: identity::TunnelType::Masque,
+                    cert_pem: existing.cert_pem.clone(),
+                    key_pem: existing.key_pem.clone(),
+                    cert_issued_at: existing.cert_issued_at,
+                    ..incoming
+                }
+            }
+            _ => incoming,
+        };
+        loaded.store.put(&identity.device_id, merged);
+        loaded.store.assign(*slot, &identity.device_id)?;
     }
+
+    // Checked like anything else. A backup taken from an install that 1.8.0
+    // had already broken carries one device in two slots, and restoring that
+    // faithfully would restore the breakage with it.
+    let repairs = loaded.store.repair();
+    identity::save(&site.store_path, &loaded.store)?;
+
+    let mut restored = 0usize;
+    for (slot, path, identity) in &ready {
+        if loaded.store.device_id(*slot) != Some(identity.device_id.as_str()) {
+            log::warn!(
+                "[-] the {} identity in this backup was not restored: its device is not one                  Cloudflare still holds a key for",
+                export_key(*slot)
+            );
+            continue;
+        }
+        config::write_identity(path, identity)?;
+        restored += 1;
+    }
+
     log::info!(
-        "[+] imported {} identit{}, the first for device {}",
-        ready.len(),
-        if ready.len() == 1 { "y" } else { "ies" },
-        ready[0].1.device_id
+        "[+] imported {restored} identit{}, the first for device {}",
+        if restored == 1 { "y" } else { "ies" },
+        ready[0].2.device_id
     );
+    if !repairs.is_empty() {
+        log::info!("[!] some of the backup was set aside: {repairs:?}");
+    }
     Ok(())
 }
 
@@ -2384,6 +2445,47 @@ fn record_enrolment_beside(config_path: &str, identity: &account::Identity) {
     }
 }
 
+/// Registers an account, unless this address still has a wait to serve.
+///
+/// The budget lives in the store because a wait a restart forgets is not a
+/// wait: the failure it exists to stop is a phone asking again every few
+/// seconds against an address Cloudflare has already refused, which is how an
+/// allowance goes from spent to spent for a very long time.
+///
+/// Recorded whichever way it goes, and saved on the failing path too -- writing
+/// down what it cost is the whole point of having asked.
+async fn provision_within_budget(
+    store: &mut identity::Store,
+    site: &IdentitySite,
+) -> Result<account::Identity> {
+    if let Err(wait) = store.registration.may_attempt(account::now_unix()) {
+        log::warn!(
+            "[-] not registering: {wait}s of the wait from the last attempt is still to run ({})",
+            store.registration.last_reason
+        );
+        return Err(AetherError::RegistrationOnHold {
+            reason: store.registration.last_reason.clone(),
+            wait,
+        });
+    }
+
+    match provision_account().await {
+        Ok(identity) => {
+            store.registration.succeeded(account::now_unix());
+            Ok(identity)
+        }
+        Err(error) => {
+            store
+                .registration
+                .failed(account::now_unix(), &error.to_string(), error.retry_after());
+            if let Err(write) = identity::save(&site.store_path, store) {
+                log::warn!("[-] could not record what the registration attempt cost: {write}");
+            }
+            Err(error)
+        }
+    }
+}
+
 async fn load_or_provision_warp(site: &IdentitySite) -> Result<account::Identity> {
     let _provisioning = provisioning_lock().lock().await;
     let mut loaded = identity::load(&site.store_path, &site.legacy)?;
@@ -2415,7 +2517,7 @@ async fn load_or_provision_warp(site: &IdentitySite) -> Result<account::Identity
         );
     }
 
-    let identity = provision_account().await?;
+    let identity = provision_within_budget(&mut loaded.store, site).await?;
     // Written before anything else is asked of the network. Cloudflare has
     // already counted this registration against the address whether or not the
     // rest of the connect succeeds, so the one thing that must not happen is
@@ -2518,7 +2620,7 @@ async fn load_or_provision_masque(site: &IdentitySite) -> Result<account::Identi
         );
     }
 
-    let identity = provision_account().await?;
+    let identity = provision_within_budget(&mut loaded.store, site).await?;
     // Before the enrolment, which is a second network call and the longer of
     // the two. Registration is the expensive half -- Cloudflare counts it
     // against this address the moment it answers -- and the branch above
@@ -4829,6 +4931,19 @@ mod identity_tests {
         }
     }
 
+    /// A device that has never been enrolled, which is what a WireGuard slot
+    /// holds. A certificate on one of those is a contradiction now: it is the
+    /// mark of an enrolment, and an enrolment is what takes the WireGuard key
+    /// away.
+    fn wireguard_identity(device: &str) -> account::Identity {
+        account::Identity {
+            cert_pem: Vec::new(),
+            key_pem: Vec::new(),
+            cert_issued_at: 0,
+            ..sample_identity(device)
+        }
+    }
+
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("aether-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -4842,7 +4957,7 @@ mod identity_tests {
         let dir = scratch("export");
         let base = dir.join("aether.toml");
         let base = base.to_str().unwrap();
-        config::save(base, &sample_identity("device-one")).unwrap();
+        config::save(base, &wireguard_identity("device-one")).unwrap();
 
         let payload = export_identity(base).unwrap();
 
@@ -4855,7 +4970,7 @@ mod identity_tests {
         let identity = config::load(restored).unwrap().unwrap();
         assert_eq!("device-one", identity.device_id);
         assert_eq!([3u8; 32], identity.wg_private_key);
-        assert_eq!(b"-----BEGIN PRIVATE KEY-----".to_vec(), identity.key_pem);
+        assert_eq!([5u8; 32], identity.wg_peer_public_key);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -4866,10 +4981,10 @@ mod identity_tests {
         let dir = scratch("export-two");
         let base = dir.join("aether.toml");
         let base = base.to_str().unwrap();
-        config::save(base, &sample_identity("outer")).unwrap();
+        config::save(base, &wireguard_identity("outer")).unwrap();
         config::save(
             &derive_sibling_path(base, "secondary"),
-            &sample_identity("inner"),
+            &wireguard_identity("inner"),
         )
         .unwrap();
 
@@ -4934,10 +5049,10 @@ mod identity_tests {
         let base = base.to_str().unwrap();
         let masque = masque_config_path(base);
 
-        config::save(base, &sample_identity("warp-outer")).unwrap();
+        config::save(base, &wireguard_identity("warp-outer")).unwrap();
         config::save(
             &derive_sibling_path(base, "secondary"),
-            &sample_identity("warp-inner"),
+            &wireguard_identity("warp-inner"),
         )
         .unwrap();
         config::save(&masque, &sample_identity("masque-outer")).unwrap();
@@ -4988,7 +5103,7 @@ mod identity_tests {
         let target = target.to_str().unwrap();
 
         let mut payload = String::from("version = 1\ndevice_id = \"old-backup\"\n\n[identity]\n");
-        payload.push_str(&config::to_text(&sample_identity("old-backup")).unwrap());
+        payload.push_str(&config::to_text(&wireguard_identity("old-backup")).unwrap());
 
         import_identity(target, &payload).expect("a format 1 backup must still import");
         assert_eq!(
@@ -5039,7 +5154,7 @@ mod identity_tests {
         let dir = scratch("import-future");
         let base = dir.join("aether.toml");
         let base = base.to_str().unwrap();
-        config::save(base, &sample_identity("current")).unwrap();
+        config::save(base, &wireguard_identity("current")).unwrap();
 
         let payload = export_identity(base).unwrap().replace(
             &format!("version = {IDENTITY_EXPORT_VERSION}"),
@@ -5179,6 +5294,117 @@ mod identity_tests {
         assert!(lastconn_path(&warp_config_path(base)).ends_with("aether-lastconn.toml"));
     }
 
+    /// A wait that has not run out is served here, not spent at Cloudflare.
+    ///
+    /// The attempt is what costs the allowance, so an attempt made while the
+    /// last one's wait is still running spends it to learn something already
+    /// on disk. No network is reached in this test, which is the point.
+    #[tokio::test]
+    async fn a_registration_is_refused_here_while_the_wait_runs() {
+        isolated();
+        let dir = scratch("budget");
+        let base = dir.join("aether.toml");
+        let base = base.to_str().unwrap();
+
+        let mut store = identity::Store::default();
+        store.registration.failed(
+            account::now_unix(),
+            "registration: too many registrations from this address",
+            Some(1_800),
+        );
+        identity::save(&store_path(base), &store).unwrap();
+
+        let site = identity_site(base, identity::Slot::Wireguard);
+        let error = load_or_provision_warp(&site).await.unwrap_err();
+
+        assert!(
+            matches!(error, AetherError::RegistrationOnHold { .. }),
+            "expected the wait to be served here, got {error}",
+        );
+        assert!(
+            error.to_string().contains("too many registrations"),
+            "the reason Cloudflare gave has to survive: {error}",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A backup of an install 1.8.0 had already broken must not restore the break.
+    ///
+    /// One device in both halves, with the certificate on the MASQUE one: the
+    /// WireGuard key it also carries was overwritten when that certificate was
+    /// enrolled. Restoring it faithfully would hand the next install a key
+    /// nothing answers, and the three-minute search that goes with it.
+    #[test]
+    fn a_backup_holding_one_device_in_both_families_is_repaired_on_the_way_in() {
+        isolated();
+        let dir = scratch("import-broken");
+        let target = dir.join("aether.toml");
+        let target = target.to_str().unwrap();
+
+        let mut payload = format!(
+            "version = {IDENTITY_EXPORT_VERSION}
+device_id = \"dev-shared\"
+
+[identity]
+"
+        );
+        payload.push_str(&config::to_text(&wireguard_identity("dev-shared")).unwrap());
+        payload.push_str(
+            "
+[masque]
+",
+        );
+        payload.push_str(&config::to_text(&sample_identity("dev-shared")).unwrap());
+
+        import_identity(target, &payload).unwrap();
+
+        let site = identity_site(target, identity::Slot::Wireguard);
+        let loaded = identity::load(&site.store_path, &site.legacy).unwrap();
+
+        assert_eq!(
+            Some("dev-shared"),
+            loaded.store.device_id(identity::Slot::Masque),
+            "the certificate is real and cost a registration; it is worth keeping",
+        );
+        assert_eq!(
+            None,
+            loaded.store.device_id(identity::Slot::Wireguard),
+            "the wireguard half of that device is a key Cloudflare no longer holds",
+        );
+        assert!(
+            config::peek(target).is_none(),
+            "and it must not be written to the file an earlier build reads either",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The backup is taken from the store, not from the files beside it.
+    #[test]
+    fn the_backup_carries_what_the_engine_would_actually_dial_with() {
+        isolated();
+        let dir = scratch("export-from-store");
+        let base = dir.join("aether.toml");
+        let base = base.to_str().unwrap();
+
+        let identity = wireguard_identity("dev-in-store");
+        let mut store = identity::Store::default();
+        store.put(
+            "dev-in-store",
+            identity::device_from(&identity, 1_789_000_000),
+        );
+        store
+            .assign(identity::Slot::Wireguard, "dev-in-store")
+            .unwrap();
+        identity::save(&store_path(base), &store).unwrap();
+
+        let payload = export_identity(base).expect("the store holds an identity");
+        assert!(payload.contains("dev-in-store"), "{payload}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The store answers, and the older build's file is kept current.
     ///
     /// No network reaches this test, which is the point twice over: a usable
@@ -5192,12 +5418,7 @@ mod identity_tests {
         let base = dir.join("aether.toml");
         let base = base.to_str().unwrap();
 
-        let identity = account::Identity {
-            cert_pem: Vec::new(),
-            key_pem: Vec::new(),
-            cert_issued_at: 0,
-            ..sample_identity("dev-wg")
-        };
+        let identity = wireguard_identity("dev-wg");
         let mut store = identity::Store::default();
         store.put("dev-wg", identity::device_from(&identity, 1_789_000_000));
         store.assign(identity::Slot::Wireguard, "dev-wg").unwrap();
@@ -5235,15 +5456,9 @@ mod identity_tests {
         let dir = scratch("no-adoption");
         let base = dir.join("aether.toml");
         let base = base.to_str().unwrap();
-        // No certificate: an install that has only ever run WireGuard, which is
-        // precisely what adoption used to reach for.
-        let identity = account::Identity {
-            cert_pem: Vec::new(),
-            key_pem: Vec::new(),
-            cert_issued_at: 0,
-            ..sample_identity("wireguard-only")
-        };
-        config::save(base, &identity).unwrap();
+        // An install that has only ever run WireGuard, which is precisely what
+        // adoption used to reach for.
+        config::save(base, &wireguard_identity("wireguard-only")).unwrap();
 
         let legacy = identity_slots(base).to_vec();
         let loaded = identity::load(&store_path(base), &legacy).unwrap();
