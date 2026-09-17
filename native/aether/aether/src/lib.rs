@@ -5674,3 +5674,108 @@ mod tests {
         assert_eq!(chosen.inner, Some("162.159.195.1:2408".parse().unwrap()));
     }
 }
+
+/// Why a MASQUE probe fails, made visible.
+///
+/// The prober turns every failure into `None` at trace level, and the Android
+/// logger is capped at info -- so several thousand probes failing for one
+/// common reason and several thousand failing because the network is hostile
+/// look identical from outside: `no clean endpoint found`. This asks a handful
+/// of documented gateways directly and prints what actually came back, with the
+/// certificate pins on and then off.
+///
+///     AETHER_LIVE_PROBE_TEST=1 cargo test -p aether why_masque -- --ignored --nocapture
+#[cfg(test)]
+mod masque_reachability_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    #[ignore = "probes the live cloudflare edge from this network"]
+    async fn why_masque_probes_fail_here() {
+        if std::env::var("AETHER_LIVE_PROBE_TEST").is_err() {
+            eprintln!("set AETHER_LIVE_PROBE_TEST=1 to run this");
+            return;
+        }
+        for name in [
+            "AETHER_MASQUE_CONFIG",
+            "AETHER_WG_CONFIG",
+            "AETHER_TEAM",
+            "CF_TEAM",
+        ] {
+            std::env::remove_var(name);
+        }
+
+        let dir = std::env::temp_dir().join(format!("aether-probe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("aether.toml");
+        let base = base.to_str().unwrap();
+
+        std::env::set_var("AETHER_MASQUE_HTTP2", "1");
+        let identity = load_or_provision_masque(&masque_config_path(base))
+            .await
+            .expect("a masque identity");
+        eprintln!("[test] identity device {}", identity.device_id);
+        // The enrolment reaches the edge in something under a minute, so a
+        // probe made straight afterwards can be refused for a reason that has
+        // nothing to do with the endpoint.
+        eprintln!("[test] waiting 90s for the enrolment to reach the edge");
+        tokio::time::sleep(Duration::from_secs(90)).await;
+
+        let targets = [
+            "162.159.192.1:443",
+            "162.159.193.1:443",
+            "162.159.195.1:443",
+            "162.159.196.1:443",
+            "162.159.204.1:443",
+        ];
+
+        for pinned in [true, false] {
+            eprintln!("\n[test] ---- pin_endpoint = {pinned} ----");
+            for target in targets {
+                let cfg = masque_h2::H2TunnelConfig {
+                    peer: target.parse().unwrap(),
+                    sni: consts::CONNECT_SNI.to_string(),
+                    authority: quic::default_authority().to_string(),
+                    path: quic::default_path().to_string(),
+                    cert_pem: identity.cert_pem.clone(),
+                    key_pem: identity.key_pem.clone(),
+                    local_ipv4: parse_local_v4(&identity.ipv4),
+                    quiet: true,
+                    pin_endpoint: pinned,
+                    expected_pins: consts::MASQUE_PINS.iter().map(|p| p.to_vec()).collect(),
+                };
+                match masque_h2::verify_h2(&cfg, Duration::from_secs(6)).await {
+                    Ok(rtt) => eprintln!("[test] {target} OK rtt={rtt:?}"),
+                    Err(error) => eprintln!("[test] {target} FAILED {error}"),
+                }
+            }
+        }
+
+        eprintln!(
+            "
+[test] ---- h3 / quic ----"
+        );
+        for target in targets {
+            let vp = quic::VerifyParams {
+                peer: target.parse().unwrap(),
+                sni: consts::CONNECT_SNI.to_string(),
+                authority: quic::default_authority().to_string(),
+                path: quic::default_path().to_string(),
+                cert_pem: identity.cert_pem.clone(),
+                key_pem: identity.key_pem.clone(),
+                ech_config_list: None,
+                noize: noize_config(),
+                timeout: Duration::from_secs(6),
+                local_ipv4: parse_local_v4(&identity.ipv4),
+            };
+            match quic::verify_masque(&vp).await {
+                Ok(rtt) => eprintln!("[test] {target} OK rtt={rtt:?}"),
+                Err(error) => eprintln!("[test] {target} FAILED {error}"),
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
