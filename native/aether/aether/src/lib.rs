@@ -1576,6 +1576,9 @@ async fn run_masque_tunnel_embedded(
         inbound_rx,
         ctrl_tx,
     } = chans;
+    // Reachable from outside for as long as this tunnel runs, so a phone that
+    // changes network can move it rather than rebuild it.
+    let _control = hold_tunnel_control(&ctrl_tx);
     let (addr_tx, mut addr_rx) = tokio::sync::mpsc::channel::<quic::AssignedAddr>(8);
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -2689,6 +2692,60 @@ fn record_on_ready(
         }
     });
     Some(tx)
+}
+
+/// The control channel of the QUIC tunnel that is running, if one is.
+///
+/// A migration has to be asked for from outside: the phone is what notices it
+/// has changed network, and the tunnel is several layers below anything that
+/// hears about it. quiche has done the work -- probe the new path, move the
+/// source -- and nothing has ever called it on Android, so a roam costs a
+/// reconnect and the endpoint search that comes with it.
+///
+/// Only the QUIC path has one. H2 rides TCP and a moved interface closes the
+/// connection outright; WireGuard rebinds by its own route.
+fn tunnel_control() -> &'static parking_lot::Mutex<Option<tokio::sync::mpsc::Sender<quic::Control>>>
+{
+    static CONTROL: std::sync::OnceLock<
+        parking_lot::Mutex<Option<tokio::sync::mpsc::Sender<quic::Control>>>,
+    > = std::sync::OnceLock::new();
+    CONTROL.get_or_init(|| parking_lot::Mutex::new(None))
+}
+
+/// Holds the channel for as long as the tunnel that owns it runs.
+struct TunnelControlGuard;
+
+impl Drop for TunnelControlGuard {
+    fn drop(&mut self) {
+        *tunnel_control().lock() = None;
+    }
+}
+
+fn hold_tunnel_control(ctrl_tx: &tokio::sync::mpsc::Sender<quic::Control>) -> TunnelControlGuard {
+    *tunnel_control().lock() = Some(ctrl_tx.clone());
+    TunnelControlGuard
+}
+
+/// Moves the running tunnel to a socket on the network the phone is on now.
+///
+/// Answers whether there was anything to ask. A reconnect is the fallback and
+/// the caller decides that; this only reports that no QUIC tunnel is running,
+/// which is the ordinary case for H2 and WireGuard.
+pub fn migrate_running_tunnel() -> bool {
+    let held = tunnel_control().lock().clone();
+    match held {
+        Some(ctrl) => match ctrl.try_send(quic::Control::Migrate) {
+            Ok(()) => {
+                log::info!("[+] asking the tunnel to move to the network this phone is on now");
+                true
+            }
+            Err(error) => {
+                log::debug!("[-] could not ask the tunnel to migrate: {error}");
+                false
+            }
+        },
+        None => false,
+    }
 }
 
 async fn resolve_ech() -> Option<Vec<u8>> {
@@ -6231,5 +6288,55 @@ mod masque_reachability_tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Moving a running tunnel instead of rebuilding it.
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    /// With nothing running, the answer is no rather than a failure.
+    ///
+    /// The caller reconnects on a no, which is what it always did -- so this
+    /// being the ordinary answer for H2 and WireGuard has to cost nothing and
+    /// say nothing alarming.
+    #[test]
+    fn asking_an_idle_engine_to_move_says_no() {
+        *tunnel_control().lock() = None;
+        assert!(!migrate_running_tunnel());
+    }
+
+    /// A running QUIC tunnel is asked, and hears it.
+    #[tokio::test]
+    async fn a_running_tunnel_is_asked_to_move() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<quic::Control>(4);
+        let guard = hold_tunnel_control(&tx);
+
+        assert!(migrate_running_tunnel());
+        assert!(
+            matches!(rx.try_recv(), Ok(quic::Control::Migrate)),
+            "the tunnel was told something other than to migrate",
+        );
+
+        // And when the tunnel ends, nothing is left pointing at it: a later
+        // roam must not be answered by a channel whose far end is gone.
+        drop(guard);
+        assert!(!migrate_running_tunnel());
+    }
+
+    /// A tunnel that has stopped reading is not mistaken for one that moved.
+    ///
+    /// try_send rather than send, because this runs on the phone's network
+    /// callback and blocking there would hold up everything else. A full queue
+    /// means the tunnel is not keeping up, and reconnecting is the better
+    /// answer than waiting for room.
+    #[tokio::test]
+    async fn a_tunnel_that_is_not_listening_reports_no() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<quic::Control>(1);
+        let _guard = hold_tunnel_control(&tx);
+        drop(rx);
+
+        assert!(!migrate_running_tunnel());
     }
 }
