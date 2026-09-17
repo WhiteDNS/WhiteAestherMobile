@@ -14,6 +14,225 @@ class AutoPlannerTest {
         engineCanSearchDeeper = true,
     )
 
+    /**
+     * The lane varies the handshake, not only the framing.
+     *
+     * Every rung used to differ in framing or search depth. Depth buys a larger
+     * share of an address pool, and since the engine started trying the endpoint
+     * Cloudflare assigns before searching, that pool is rarely where the answer
+     * is. What was never tried was the handshake -- and the settings that change
+     * it sat in Advanced waiting for a user to guess, which is the decision
+     * Automatic exists to take away.
+     */
+    @Test
+    fun theEngineLaneTriesTacticsAndNotOnlyFramings() {
+        val lane = AutoPlanner.aetherLane(everything)
+
+        assertTrue(
+            "no rung carries fragmentation: $lane",
+            lane.any { it.fragmentTls == true },
+        )
+        assertTrue(
+            "no rung carries ECH: $lane",
+            lane.any { it.encryptedHello == true },
+        )
+        // Plain first: a network that needs nothing should not pay for a tactic.
+        assertEquals(null, lane[0].fragmentTls)
+        assertEquals(null, lane[0].encryptedHello)
+        // And the nested tunnel stays last, being the slowest thing here.
+        assertEquals(AutoRoute.AETHER_MIM, lane.last())
+    }
+
+    /**
+     * A rung that carries no tactic leaves the user's own setting alone.
+     *
+     * Someone who turned fragmentation on by hand has said something, and a
+     * planner that overwrote it on every rung would be answering a question
+     * they had already answered.
+     */
+    @Test
+    fun aRungWithoutATacticDoesNotOverrideTheUsersChoice() {
+        val lane = AutoPlanner.aetherLane(everything)
+        val plain = lane.first()
+        assertEquals(null, plain.fragmentTls)
+        assertEquals(null, plain.encryptedHello)
+    }
+
+    /**
+     * A failure that names its own remedy moves that rung to the front.
+     *
+     * A gateway demanding an Encrypted Client Hello says so -- TLS alert 121,
+     * which the engine now names instead of reporting a stop with no reason.
+     * Without acting on it, the rung that would have worked sits fourth behind
+     * three budgets.
+     */
+    @Test
+    fun aGatewayAskingForEchIsAnsweredWithTheEchRung() {
+        val blind = AutoPlanner.aetherLane(everything)
+        assertTrue(blind.first() != AutoRoute.AETHER_H3_ECH)
+
+        val told = AutoPlanner.aetherLane(
+            everything.copy(
+                lastEngineFailure =
+                    "ech: the gateway requires an ECH configuration and refused the one sent",
+            ),
+        )
+        assertEquals(AutoRoute.AETHER_H3_ECH, told.first())
+        // Reordered, not rewritten: nothing is lost from the lane.
+        assertEquals(blind.toSet(), told.toSet())
+        assertEquals(blind.size, told.size)
+    }
+
+    /**
+     * A failure that names nothing changes nothing.
+     *
+     * Guessing from a message is how a planner acquires rules nobody can
+     * predict, so only the failures that name a remedy move anything.
+     */
+    @Test
+    fun anOrdinaryFailureLeavesTheLaneAlone() {
+        val plain = AutoPlanner.aetherLane(everything)
+        val after = AutoPlanner.aetherLane(
+            everything.copy(lastEngineFailure = "prober: no clean endpoint found"),
+        )
+        assertEquals(plain, after)
+    }
+
+    /**
+     * Adding tactics did not make the worst case worse.
+     *
+     * A tactic rung is a different handshake, not a deeper search, so it is
+     * priced like a quick one -- and it replaced a second full search rather
+     * than being added beside it.
+     */
+    @Test
+    fun theEngineLaneCostsNoMoreThanItUsedTo() {
+        val total = AutoPlanner.aetherLane(everything).sumOf { AutoPlanner.budgetMs(it) }
+        assertTrue("the lane grew to ${total / 1000}s", total <= 690_000L)
+    }
+
+    /**
+     * One pass fits inside the ceiling the service holds the search to.
+     *
+     * The two numbers live apart -- the plan is here, the ceiling is in the
+     * service -- and the failure if they drift is silent and bad: a pass cut in
+     * half throws away a carrier that was about to connect. Psiphon's own
+     * establish window alone is five and a half minutes.
+     *
+     * Kept as an assertion rather than a shared constant on purpose. The
+     * service's ceiling is about a person waiting; this is about what a pass
+     * costs. They should agree, and each should be able to say why it is what
+     * it is.
+     */
+    @Test
+    fun onePassFitsInsideTheSearchCeiling() {
+        val ceiling = 15 * 60 * 1_000L
+        for (remembered in listOf(null, AutoRoute.AETHER, AutoRoute.PSIPHON)) {
+            val pass = AutoPlanner.longestPassMs(remembered, everything)
+            assertTrue(
+                "a pass remembering $remembered takes ${pass / 1000}s, " +
+                    "which does not fit in ${ceiling / 1000}s",
+                pass <= ceiling,
+            )
+        }
+    }
+
+    /**
+     * A full pass leaves no room for a second one.
+     *
+     * The predicate that enforces this asks whether another pass would *finish*
+     * inside the ceiling, not whether the ceiling has already been passed --
+     * and the difference is the whole point. The longest pass is under the
+     * ceiling by itself, so the second question never fires and two full passes
+     * run: twenty-seven minutes, which is what this exists to prevent.
+     *
+     * Stated here as arithmetic rather than by driving the service, because the
+     * service needs an Android runtime and this needs only the numbers.
+     */
+    @Test
+    fun aFullPassLeavesNoRoomForASecond() {
+        val ceiling = 15 * 60 * 1_000L
+        val worst = listOf(null, AutoRoute.AETHER, AutoRoute.PSIPHON)
+            .maxOf { AutoPlanner.longestPassMs(it, everything) }
+
+        assertTrue("one pass must fit: ${worst / 1000}s", worst <= ceiling)
+        assertTrue(
+            "a second full pass fits inside ${ceiling / 1000}s, so the ceiling never bites",
+            worst + worst > ceiling,
+        )
+    }
+
+    /**
+     * The rule the service applies, held to directly.
+     *
+     * Asking whether the ceiling has already been passed looks equivalent and
+     * is not. The longest pass fits under the ceiling on its own, so that
+     * question never fires and a second full pass runs -- twice what the search
+     * was allowed. This is the difference, stated as the rule rather than as
+     * arithmetic about it, so a version that asks the wrong question fails
+     * here.
+     */
+    @Test
+    fun anotherPassNeedsRoomToFinishNotJustRoomToStart() {
+        val ceiling = 15 * 60 * 1_000L
+        val pass = AutoPlanner.longestPassMs(null, everything)
+
+        // A pass has just used its whole window. Nothing has "passed the
+        // ceiling" -- and there is still no room, which is the point.
+        assertTrue(pass < ceiling)
+        assertFalse(AutoPlanner.hasRoomForAnotherPass(pass, pass, ceiling))
+
+        // A pass that failed in seconds leaves room, and gets one.
+        assertTrue(AutoPlanner.hasRoomForAnotherPass(30_000L, pass, ceiling))
+
+        // Exactly filling it is still room; a millisecond over is not.
+        assertTrue(AutoPlanner.hasRoomForAnotherPass(ceiling - pass, pass, ceiling))
+        assertFalse(AutoPlanner.hasRoomForAnotherPass(ceiling - pass + 1, pass, ceiling))
+    }
+
+    /**
+     * A pass that failed quickly does leave room for another.
+     *
+     * Which is the reason the ceiling is a wall clock rather than a pass count:
+     * every route refusing in a few seconds is a different situation from every
+     * route using its whole window, and only one of them is worth a retry.
+     */
+    @Test
+    fun aQuickFailureStillEarnsASecondPass() {
+        val ceiling = 15 * 60 * 1_000L
+        val another = AutoPlanner.longestPassMs(null, everything)
+        val spentFailingFast = 30_000L
+
+        assertTrue(
+            "a pass that failed in ${spentFailingFast / 1000}s should leave room",
+            spentFailingFast + another <= ceiling,
+        )
+    }
+
+    /**
+     * A pass is as long as its slowest lane, not as long as all of them.
+     *
+     * The lanes run beside each other. Adding them up would price a pass at
+     * something nobody ever waits, and a ceiling set from that number would
+     * never bite.
+     */
+    @Test
+    fun aPassIsAsLongAsItsSlowestLane() {
+        val everythingAddedUp = AutoPlanner.plan(null, everything).sumOf { step ->
+            when (step) {
+                is AutoStep.Engine -> step.budgetMs
+                is AutoStep.Race -> step.lanes.sumOf { lane ->
+                    lane.startAfterMs + lane.routes.sumOf { AutoPlanner.budgetMs(it) }
+                }
+            }
+        }
+        val slowestLane = AutoPlanner.longestPassMs(null, everything)
+        assertTrue(
+            "the pass was priced as the sum of its lanes",
+            slowestLane < everythingAddedUp,
+        )
+    }
+
     @Test
     fun aNewPhoneRacesEverythingFromTheTap() {
         val plan = AutoPlanner.plan(null, everything)
@@ -92,11 +311,18 @@ class AutoPlannerTest {
     fun aetherRacesInBothFramingsQuickFirst() {
         // The log that prompted this: a Wi-Fi network that carried QUIC and
         // not TCP, where 1.6.0 tried only H2 before giving up on Aether.
+        //
+        // Both framings plain first, then the tactic each framing has, then one
+        // deep search, then the nested tunnel. The second pass at greater depth
+        // became a pass at a different handshake: since the engine tries the
+        // endpoint Cloudflare assigns before searching, depth is rarely where
+        // the answer is and the handshake was never varied at all.
         assertEquals(
             listOf(
                 AutoRoute.AETHER_H3_QUICK,
                 AutoRoute.AETHER_H2_QUICK,
-                AutoRoute.AETHER_H3_FULL,
+                AutoRoute.AETHER_H3_ECH,
+                AutoRoute.AETHER_H2_FRAGMENT,
                 AutoRoute.AETHER_H2_FULL,
                 AutoRoute.AETHER_MIM,
             ),
@@ -246,7 +472,7 @@ class AutoPlannerTest {
         // and the connect after. 1.6.0 cut a 300 s thorough search off at
         // 180 s, so its last step could never find anything.
         assertTrue(AutoPlanner.budgetMs(AutoRoute.AETHER_H3_QUICK) >= 60_000L)
-        assertTrue(AutoPlanner.budgetMs(AutoRoute.AETHER_H3_FULL) >= 150_000L)
+        assertTrue(AutoPlanner.budgetMs(AutoRoute.AETHER_H2_FULL) >= 150_000L)
         assertTrue(AutoPlanner.ENGINE_REMEMBERED_MS >= 150_000L)
         // tunnel-core's own window, which a cold Psiphon needs.
         assertTrue(AutoPlanner.budgetMs(AutoRoute.PSIPHON) >= 300_000L)

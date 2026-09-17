@@ -220,7 +220,7 @@ pub async fn run_with(args: Vec<String>) -> Result<()> {
                 identity.ipv4,
                 identity.ipv6
             );
-            let ech = resolve_ech().await;
+            let ech = attempt_ech().await;
             let lastconn_path = lastconn_path(&config_path);
             run_masque(identity, ech, listen, lastconn_path).await
         }
@@ -264,7 +264,7 @@ pub async fn run_with(args: Vec<String>) -> Result<()> {
                 secondary.device_id,
                 secondary.ipv4
             );
-            let ech = resolve_ech().await;
+            let ech = attempt_ech().await;
             run_mim(primary, secondary, ech, listen).await
         }
     }
@@ -687,6 +687,14 @@ struct ExportEnvelope {
 }
 
 pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepared> {
+    // Before anything is registered or searched for: a promise that cannot be
+    // kept should be refused at the start, not discovered at the handshake.
+    if matches!(
+        config.protocol(),
+        Protocol::Masque | Protocol::MasqueInMasque
+    ) {
+        ech_policy_satisfied().await?;
+    }
     let config_path = config.identity_path();
     // Matched exhaustively rather than "MASQUE, otherwise WireGuard". 2.0.0
     // added a fourth protocol, and under the old shape it would have gone down
@@ -712,9 +720,6 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
                 .0
         }
     };
-
-    let profile = std::env::var("AETHER_NOIZE").unwrap_or_else(|_| "firewall".to_string());
-    lastconn::save(&lastconn_path(&config_path), &peer.to_string(), &profile);
 
     // Nested, the interface is addressed for the inner account: that is the one
     // whose packets reach the internet, and addressing it as the outer would
@@ -772,11 +777,13 @@ async fn select_embedded_wg_peer(
     }
 
     if let Some(cached) = lastconn::load(&lastconn_path(config_path)) {
-        if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
-            let profile = aethernoize::from_profile(&cached.profile);
-            if verify_wg_peer(identity, peer, &profile).await.is_ok() {
-                log::info!("[+] cached WireGuard endpoint {peer} still works");
-                return Ok((peer, profile, cached.profile.clone()));
+        if cached.applies_to(&attempt_proof("wg")) {
+            if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
+                let profile = aethernoize::from_profile(&cached.profile);
+                if verify_wg_peer(identity, peer, &profile).await.is_ok() {
+                    log::info!("[+] cached WireGuard endpoint {peer} still works");
+                    return Ok((peer, profile, cached.profile.clone()));
+                }
             }
         }
     }
@@ -825,7 +832,7 @@ pub async fn scan_embedded(
         return scan_embedded_wg(config, &config_path, limit, cancelled).await;
     }
     let identity = load_or_provision_masque(&config_path).await?;
-    let probe = masque_probe(&identity, prober::IpScan::parse(&config.ip_scan));
+    let probe = masque_probe(&identity, prober::IpScan::parse(&config.ip_scan)).await;
     let results = prober::scan_gateways(
         &probe,
         prober::ScanMode::parse(&config.scan_mode),
@@ -868,7 +875,7 @@ pub async fn test_embedded_peer(config: &EmbeddedConfig) -> Result<EmbeddedScanR
 pub async fn run_embedded(
     config: EmbeddedConfig,
     endpoint: EmbeddedEndpoint,
-    ready: Option<tokio::sync::oneshot::Sender<()>>,
+    mut ready: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> Result<()> {
     // Before any listener is bound. Every tunnel below reaches socks::serve by
     // its own path, and none of them carries this.
@@ -890,7 +897,15 @@ pub async fn run_embedded(
         let (peer, profile, name) =
             select_embedded_wg_peer(&identity, &config.clone_with_peer(peer), &config_path).await?;
         log::info!("[+] WireGuard endpoint {peer} using aethernoize profile '{name}'");
-        lastconn::save(&lastconn_path(&config_path), &peer.to_string(), &name);
+        let ready = record_on_ready(
+            lastconn_path(&config_path),
+            peer,
+            lastconn::Proof {
+                profile: name.clone(),
+                ..attempt_proof("wg")
+            },
+            &mut ready,
+        );
 
         if config.protocol() == Protocol::WarpInWarp {
             let secondary = load_or_provision_warp(&config.secondary_identity_path()).await?;
@@ -917,9 +932,17 @@ pub async fn run_embedded(
     }
 
     let identity = load_or_provision_masque(&config_path).await?;
-    let ech = resolve_ech().await;
+    let ech = attempt_ech().await;
     let mut endpoint = Some(endpoint);
-    let mut ready = ready;
+    // The endpoint is remembered when the tunnel confirms it carries data, not
+    // when it is chosen. Nested, this is the outer edge -- the one that came
+    // out of the pool and is worth leading with next time.
+    let mut ready = record_on_ready(
+        lastconn_path(&config_path),
+        peer,
+        attempt_proof(masque_framing()),
+        &mut ready,
+    );
 
     if config.protocol() == Protocol::MasqueInMasque {
         // A second account, not the same one twice: the inner tunnel
@@ -1356,10 +1379,20 @@ async fn select_embedded_peer(
     }
 
     if let Some(cached) = lastconn::load(&lastconn_path(config_path)) {
-        if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
-            if quick_verify_masque_peer(identity, peer).await {
-                return Ok(peer);
+        // Only when it was earned by the attempt being made now. A gateway that
+        // answered over TCP says nothing about a QUIC attempt, and leading with
+        // it costs a check at the front of every connect.
+        if cached.applies_to(&attempt_proof(masque_framing())) {
+            if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
+                if quick_verify_masque_peer(identity, peer).await {
+                    return Ok(peer);
+                }
             }
+        } else {
+            log::debug!(
+                "[*] the remembered endpoint was proven over {}, not this attempt's shape",
+                cached.proof.transport
+            );
         }
     }
 
@@ -2421,7 +2454,7 @@ async fn select_peer(identity: &account::Identity, protocol: Protocol) -> Result
                 path: quic::default_path().to_string(),
                 cert_pem: std::sync::Arc::from(identity.cert_pem.clone()),
                 key_pem: std::sync::Arc::from(identity.key_pem.clone()),
-                ech_config_list: None,
+                ech_config_list: attempt_ech().await.map(std::sync::Arc::from),
                 noize: noize_config(),
                 ports: prober::MASQUE_PORTS.to_vec(),
                 ip,
@@ -2522,31 +2555,171 @@ async fn select_wg_peers(
         .collect())
 }
 
+/// The ECHConfigList this attempt uses, resolved once and shared.
+///
+/// Everything that validates an endpoint and the thing that finally dials it
+/// have to agree. They did not: the scanner, the endpoint hunt and every quick
+/// verification passed `None`, while the connection resolved ECH and used it.
+/// So the scanner blessed gateways the connection could not use, and the
+/// failure arrived long after the check that was supposed to prevent it -- on
+/// exactly the networks where ECH is the tactic that gets through.
+///
+/// Resolved once because it is a DNS lookup, and held briefly so that probe and
+/// connect cannot disagree merely because the lookup succeeded once and failed
+/// once. Short enough that a rotated configuration is picked up on the next
+/// connect rather than the next launch.
+///
+/// Nothing on the HTTP/2 framing: that transport carries no ECH, so fetching
+/// one there is a DNS round trip spent on something nothing reads.
+pub async fn attempt_ech() -> Option<Vec<u8>> {
+    if masque_h2::enabled() {
+        return None;
+    }
+
+    let mut held = ech_cache().lock().await;
+
+    if let Some((at, value)) = held.as_ref() {
+        if at.elapsed() < ECH_CACHE_FOR {
+            return value.clone();
+        }
+    }
+
+    let resolved = resolve_ech().await;
+    *held = Some((std::time::Instant::now(), resolved.clone()));
+    resolved
+}
+
+/// How long one resolved ECHConfigList is reused across probes and the connect.
+const ECH_CACHE_FOR: std::time::Duration = std::time::Duration::from_secs(600);
+
+type EchCache = tokio::sync::Mutex<Option<(std::time::Instant, Option<Vec<u8>>)>>;
+
+fn ech_cache() -> &'static EchCache {
+    static CACHED: std::sync::OnceLock<EchCache> = std::sync::OnceLock::new();
+    CACHED.get_or_init(|| tokio::sync::Mutex::new(None))
+}
+
+/// Forgets the resolved ECHConfigList, so a test can set the policy and ask again.
+#[cfg(test)]
+async fn forget_ech() {
+    *ech_cache().lock().await = None;
+}
+
+/// Whether ECH is a requirement rather than a preference.
+///
+/// `off` (or unset) never asks for one; `auto` asks and carries on without when
+/// the answer does not come; `require` refuses to connect instead. The third is
+/// the only one that keeps a promise: without it a resolver that quietly fails
+/// downgrades a user who asked for their SNI to be hidden, and tells them
+/// nothing.
+fn ech_required() -> bool {
+    matches!(
+        std::env::var("AETHER_ECH").as_deref(),
+        Ok(v) if v.eq_ignore_ascii_case("require")
+    )
+}
+
+/// Fails when ECH was required and could not be had.
+///
+/// Checked once, where a connect begins, rather than at each of the places that
+/// would otherwise carry on regardless.
+pub async fn ech_policy_satisfied() -> Result<()> {
+    if !ech_required() || attempt_ech().await.is_some() {
+        return Ok(());
+    }
+    Err(AetherError::Ech(if masque_h2::enabled() {
+        "ECH was required, and the HTTP/2 framing does not carry it; choose H3 or set          AETHER_ECH=auto"
+            .into()
+    } else {
+        "ECH was required and no ECHConfigList could be resolved; refusing to send the SNI in          cleartext"
+            .into()
+    }))
+}
+
+/// The shape this attempt is being made with.
+///
+/// Built from what the engine is actually about to do, so a remembered endpoint
+/// can be judged against it rather than offered to every attempt regardless.
+fn attempt_proof(transport: &str) -> lastconn::Proof {
+    lastconn::Proof {
+        transport: transport.to_string(),
+        profile: std::env::var("AETHER_NOIZE").unwrap_or_else(|_| "firewall".to_string()),
+        fragment_tls: std::env::var("AETHER_MASQUE_H2_FRAGMENT").is_ok(),
+        ech: !matches!(
+            std::env::var("AETHER_ECH").as_deref(),
+            Err(_) | Ok("") | Ok("off")
+        ),
+    }
+}
+
+/// The framing a MASQUE attempt is using, as the cache names it.
+fn masque_framing() -> &'static str {
+    if masque_h2::enabled() {
+        "h2"
+    } else {
+        "h3"
+    }
+}
+
+/// Forwards a readiness signal, and records the endpoint that earned it.
+///
+/// The cache used to be written the moment an endpoint was *chosen*, which is
+/// before anything has gone through it -- so an address that passed every check
+/// and then failed to build a session was stored as the last good one, and the
+/// next connect led with it. This fires instead when the tunnel has confirmed
+/// end-to-end data, which is the only moment the word "good" is earned.
+fn record_on_ready(
+    path: String,
+    peer: SocketAddr,
+    proof: lastconn::Proof,
+    onward: &mut Option<tokio::sync::oneshot::Sender<()>>,
+) -> Option<tokio::sync::oneshot::Sender<()>> {
+    let forward = onward.take();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        // Dropped without firing means the tunnel never carried anything, and
+        // there is nothing to remember.
+        if rx.await.is_err() {
+            return;
+        }
+        lastconn::save(&path, &peer.to_string(), &proof);
+        log::debug!("[+] remembered {peer} as an endpoint that carried traffic");
+        if let Some(tx) = forward {
+            let _ = tx.send(());
+        }
+    });
+    Some(tx)
+}
+
 async fn resolve_ech() -> Option<Vec<u8>> {
     match std::env::var("AETHER_ECH") {
-        Ok(v) if v.eq_ignore_ascii_case("auto") => match dns::fetch_ech_config().await {
-            Ok(raw) => {
-                log::info!(
-                    "[+] fetched ECHConfigList automatically ({} bytes)",
-                    raw.len()
-                );
-                Some(raw)
+        Ok(v) if v.eq_ignore_ascii_case("auto") || v.eq_ignore_ascii_case("require") => {
+            match dns::fetch_ech_config().await {
+                Ok(raw) => {
+                    log::info!(
+                        "[+] fetched ECHConfigList automatically ({} bytes)",
+                        raw.len()
+                    );
+                    Some(raw)
+                }
+                Err(e) => {
+                    log::warn!("[-] ECH auto-fetch failed ({e}); continuing without ECH");
+                    None
+                }
             }
-            Err(e) => {
-                log::warn!("[-] ECH auto-fetch failed ({e}); continuing without ECH");
-                None
+        }
+        Ok(b64) if !b64.is_empty() && !b64.eq_ignore_ascii_case("off") => {
+            match tls::decode_ech_config_list(&b64) {
+                Ok(v) => {
+                    log::info!("[+] using ECHConfigList from AETHER_ECH");
+                    Some(v)
+                }
+                Err(e) => {
+                    log::warn!("[-] bad AETHER_ECH: {e}; continuing without ECH");
+                    None
+                }
             }
-        },
-        Ok(b64) if !b64.is_empty() => match tls::decode_ech_config_list(&b64) {
-            Ok(v) => {
-                log::info!("[+] using ECHConfigList from AETHER_ECH");
-                Some(v)
-            }
-            Err(e) => {
-                log::warn!("[-] bad AETHER_ECH: {e}; continuing without ECH");
-                None
-            }
-        },
+        }
         _ => {
             log::info!("[+] ECH disabled (warp masque endpoint does not accept ECH); SNI sent in cleartext");
             None
@@ -2583,7 +2756,7 @@ async fn hunt_masque_peer(
         "[*] hunting for a working MASQUE gateway (deep connect-ip + data-plane verification)"
     );
     let mode = prober::ScanMode::parse(mode_str);
-    let probe = masque_probe(identity, ip);
+    let probe = masque_probe(identity, ip).await;
 
     let best = prober::hunt_best_gateway(&probe, mode).await?;
     log::info!(
@@ -2595,14 +2768,14 @@ async fn hunt_masque_peer(
     Ok(SocketAddr::new(best.ip, best.port))
 }
 
-fn masque_probe(identity: &account::Identity, ip: prober::IpScan) -> prober::MasqueProbe {
+async fn masque_probe(identity: &account::Identity, ip: prober::IpScan) -> prober::MasqueProbe {
     prober::MasqueProbe {
         sni: consts::CONNECT_SNI.to_string(),
         authority: quic::default_authority().to_string(),
         path: quic::default_path().to_string(),
         cert_pem: std::sync::Arc::from(identity.cert_pem.clone()),
         key_pem: std::sync::Arc::from(identity.key_pem.clone()),
-        ech_config_list: None,
+        ech_config_list: attempt_ech().await.map(std::sync::Arc::from),
         noize: noize_config(),
         ports: prober::MASQUE_PORTS.to_vec(),
         ip,
@@ -2654,6 +2827,26 @@ async fn quick_verify_masque_peer(identity: &account::Identity, peer: SocketAddr
     verify_masque_peer(identity, peer).await.is_ok()
 }
 
+/// The parameters [`verify_masque_peer`] would dial with, without dialling.
+#[cfg(test)]
+async fn verify_params_for_test(
+    identity: &account::Identity,
+    peer: SocketAddr,
+) -> quic::VerifyParams {
+    quic::VerifyParams {
+        peer,
+        sni: consts::CONNECT_SNI.to_string(),
+        authority: quic::default_authority().to_string(),
+        path: quic::default_path().to_string(),
+        cert_pem: identity.cert_pem.clone(),
+        key_pem: identity.key_pem.clone(),
+        ech_config_list: attempt_ech().await,
+        noize: noize_config(),
+        timeout: std::time::Duration::from_secs(5),
+        local_ipv4: parse_local_v4(&identity.ipv4),
+    }
+}
+
 async fn verify_masque_peer(
     identity: &account::Identity,
     peer: SocketAddr,
@@ -2665,7 +2858,7 @@ async fn verify_masque_peer(
         path: quic::default_path().to_string(),
         cert_pem: identity.cert_pem.clone(),
         key_pem: identity.key_pem.clone(),
-        ech_config_list: None,
+        ech_config_list: attempt_ech().await,
         noize: noize_config(),
         timeout: std::time::Duration::from_secs(5),
         local_ipv4: parse_local_v4(&identity.ipv4),
@@ -2810,15 +3003,22 @@ async fn run_masque(
 
         log::info!("[+] using cloudflare edge {peer}");
 
-        if forced.is_none() {
-            let profile = std::env::var("AETHER_NOIZE").unwrap_or_else(|_| "firewall".to_string());
-            lastconn::save(&lastconn_path, &peer.to_string(), &profile);
-        }
-
         last_good_peer = Some(peer);
 
+        // Recorded after the session, not before it. A tunnel that closes
+        // having carried traffic returns Ok; one that never established
+        // returns an error naming why, which is not a memory worth keeping.
         match run_masque_tunnel(&identity, peer, ech.clone(), listen).await {
-            Ok(()) => log::warn!("[-] MASQUE tunnel closed; reconnecting"),
+            Ok(()) => {
+                if forced.is_none() {
+                    lastconn::save(
+                        &lastconn_path,
+                        &peer.to_string(),
+                        &attempt_proof(masque_framing()),
+                    );
+                }
+                log::warn!("[-] MASQUE tunnel closed; reconnecting");
+            }
             Err(e) => log::warn!("[-] MASQUE tunnel ended: {e}; reconnecting"),
         }
 
@@ -3868,18 +4068,25 @@ async fn run_wireguard(
 
         log::info!("[+] using cloudflare edge {peer}");
 
-        if forced.is_none() {
-            lastconn::save(&lastconn_path, &peer.to_string(), &profile_name);
-        }
-
         let is_same_peer_as_before = last_good.as_ref().map(|(p, _, _)| *p) == Some(peer);
         if !is_same_peer_as_before {
             consecutive_fails_on_peer = 0;
         }
+        let remembered_profile = profile_name.clone();
         last_good = Some((peer, profile.clone(), profile_name));
 
         match run_wireguard_tunnel(identity.clone(), peer, profile, listen).await {
             Ok(()) => {
+                if forced.is_none() {
+                    lastconn::save(
+                        &lastconn_path,
+                        &peer.to_string(),
+                        &lastconn::Proof {
+                            profile: remembered_profile,
+                            ..attempt_proof("wg")
+                        },
+                    );
+                }
                 log::warn!("[-] WireGuard tunnel closed; reconnecting");
                 consecutive_fails_on_peer += 1;
             }
@@ -5761,6 +5968,121 @@ mod tests {
         .expect("the inner hop stays where it was put");
         assert_eq!(chosen.outer, Some("162.159.192.1:2408".parse().unwrap()));
         assert_eq!(chosen.inner, Some("162.159.195.1:2408".parse().unwrap()));
+    }
+}
+
+/// What the checks and the connection agree about, and what the policy allows.
+#[cfg(test)]
+mod ech_tests {
+    use super::*;
+
+    /// Serialised: these set process-wide variables and share one cache.
+    fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    async fn with_policy(value: Option<&str>, h2: bool) {
+        forget_ech().await;
+        match value {
+            Some(v) => std::env::set_var("AETHER_ECH", v),
+            None => std::env::remove_var("AETHER_ECH"),
+        }
+        if h2 {
+            std::env::set_var("AETHER_MASQUE_HTTP2", "1");
+        } else {
+            std::env::remove_var("AETHER_MASQUE_HTTP2");
+        }
+    }
+
+    /// The framing that cannot carry ECH does not go looking for one.
+    ///
+    /// It was fetched regardless, which is a DNS round trip on the way to a
+    /// connect, spent on something no part of the H2 path reads.
+    #[tokio::test]
+    async fn the_http2_framing_does_not_fetch_a_configuration_it_cannot_use() {
+        let _serial = one_at_a_time();
+        with_policy(Some("auto"), true).await;
+        assert!(attempt_ech().await.is_none());
+        with_policy(None, false).await;
+    }
+
+    /// Off is the default, and off means nothing is resolved.
+    #[tokio::test]
+    async fn ech_is_off_unless_it_is_asked_for() {
+        let _serial = one_at_a_time();
+        with_policy(None, false).await;
+        assert!(attempt_ech().await.is_none());
+        with_policy(Some("off"), false).await;
+        assert!(attempt_ech().await.is_none());
+        assert!(ech_policy_satisfied().await.is_ok());
+    }
+
+    /// Required means refused, not quietly downgraded.
+    ///
+    /// Someone who asks for their SNI to be hidden and is silently given a
+    /// connection that sends it in the clear has been told nothing, which is the
+    /// one outcome worse than failing.
+    #[tokio::test]
+    async fn requiring_ech_on_a_framing_that_has_none_is_refused_by_name() {
+        let _serial = one_at_a_time();
+        with_policy(Some("require"), true).await;
+
+        let refused = ech_policy_satisfied().await.unwrap_err().to_string();
+        assert!(refused.contains("HTTP/2"), "{refused}");
+
+        with_policy(None, false).await;
+    }
+
+    /// The checks and the connection read the same value.
+    ///
+    /// The defect this exists for: the scanner, the endpoint hunt and every
+    /// quick verification passed `None` while the connection resolved ECH and
+    /// used it -- so an endpoint could pass validation and then fail to carry a
+    /// session, and the failure arrived nowhere near the check meant to prevent
+    /// it. One resolver, held for the attempt, is what makes them agree.
+    #[tokio::test]
+    async fn every_path_reads_one_resolved_value() {
+        let _serial = one_at_a_time();
+        // A configuration given directly, so the value is real and no lookup is
+        // needed: with ECH off everything is None and this test would pass
+        // against the defect it exists to catch.
+        with_policy(Some("q83vAAAA"), false).await;
+
+        let first = attempt_ech().await;
+        assert!(first.is_some(), "the test needs a value to compare");
+        let second = attempt_ech().await;
+        assert_eq!(first, second);
+
+        let identity = account::Identity {
+            device_id: "d".into(),
+            access_token: "t".into(),
+            cert_pem: b"c".to_vec(),
+            key_pem: b"k".to_vec(),
+            cert_issued_at: 0,
+            ipv4: "172.16.0.2".into(),
+            ipv6: "2606:4700:110::1".into(),
+            wg_private_key: [1u8; 32],
+            wg_peer_public_key: [2u8; 32],
+            client_id: [0, 0, 0],
+            organization: String::new(),
+            gateway_proxy: String::new(),
+            assigned_endpoint: String::new(),
+            refused: false,
+        };
+        let probe = masque_probe(&identity, prober::IpScan::V4).await;
+        assert_eq!(
+            first.clone().map(std::sync::Arc::from),
+            probe.ech_config_list,
+            "the scanner has to probe with what the connection will dial with",
+        );
+
+        // And the quick check every assigned endpoint, cached endpoint and
+        // custom endpoint goes through reads it too.
+        let checked = verify_params_for_test(&identity, "162.159.198.2:443".parse().unwrap()).await;
+        assert_eq!(first, checked.ech_config_list);
+
+        with_policy(None, false).await;
     }
 }
 

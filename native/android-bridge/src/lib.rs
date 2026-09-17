@@ -343,6 +343,7 @@ impl BridgeConfig {
         set_or_clear("AETHER_ROUTE_BLOCK", &self.route_block);
         set_or_clear("AETHER_ROUTE_DIRECT", &self.route_direct);
         set_or_clear("AETHER_LOG_LEVEL", &self.log_level);
+        apply_log_level(&self.log_level);
 
         // Both default to on in the engine and are switched off by the literal
         // "0", so the variable is only worth setting to turn one off.
@@ -413,8 +414,14 @@ impl log::Log for TeeLogger {
 fn install_logger() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
+        // Trace on the sink, Info on the global filter. The sink's own ceiling
+        // is fixed for the life of the process; the global one can be raised
+        // later, and that is what makes the app's log-level setting mean
+        // something. Pinning both at Info is why it did not: every probe
+        // failure is logged at trace, so `no clean endpoint found` was the only
+        // thing that ever came out, whatever the user chose.
         let config = android_logger::Config::default()
-            .with_max_level(log::LevelFilter::Info)
+            .with_max_level(log::LevelFilter::Trace)
             .with_tag("aether");
         let logger = TeeLogger(android_logger::AndroidLogger::new(config));
         if log::set_boxed_logger(Box::new(logger)).is_ok() {
@@ -422,6 +429,26 @@ fn install_logger() {
         }
         log::info!("aether bridge logging installed");
     });
+}
+
+/// Raises or lowers what actually reaches the log, at any time.
+///
+/// Called whenever a configuration is applied, so changing the setting takes
+/// effect on the next connect rather than the next launch. Unknown or empty
+/// leaves the default alone -- a typo should not silence the engine.
+fn apply_log_level(level: &str) {
+    let filter = match level.trim().to_ascii_lowercase().as_str() {
+        "error" => log::LevelFilter::Error,
+        "warn" => log::LevelFilter::Warn,
+        "info" => log::LevelFilter::Info,
+        "debug" => log::LevelFilter::Debug,
+        "trace" => log::LevelFilter::Trace,
+        _ => return,
+    };
+    if log::max_level() != filter {
+        log::set_max_level(filter);
+        log::info!("engine log level is now {filter}");
+    }
 }
 
 /// Packages this install's identity so it survives a reinstall.
