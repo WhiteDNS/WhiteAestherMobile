@@ -4,6 +4,10 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -33,6 +37,8 @@ import com.whitedns.whiteaesther.data.AutoStep
 import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.Lane
 import com.whitedns.whiteaesther.data.NetworkKey
+import com.whitedns.whiteaesther.data.RoamAction
+import com.whitedns.whiteaesther.data.Roaming
 import com.whitedns.whiteaesther.data.RouteMemory
 import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.data.ChainSettings
@@ -167,6 +173,9 @@ class AetherVpnService : VpnService() {
      */
     private var lastEngineFailure: String? = null
 
+    /** Registered for the life of the service; see [watchTheNetworkUnderneath]. */
+    private var networkWatch: ConnectivityManager.NetworkCallback? = null
+
     /**
      * The watchers of the current attempt's hops.
      *
@@ -281,6 +290,91 @@ class AetherVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         AetherNotification.createChannel(this)
+        watchTheNetworkUnderneath()
+    }
+
+    /**
+     * Notices when the phone changes the network the tunnel is riding on.
+     *
+     * Nothing was watching. The network is read once per search and then held,
+     * so a phone that moved from Wi-Fi to mobile data went on planning against
+     * the network it had left -- leading with an endpoint proven somewhere else
+     * and writing what it learned against the wrong key -- for as long as the
+     * search lasted, which can be minutes.
+     *
+     * Not the default network: while a session is up the default is this app's
+     * own interface, which says nothing about what is underneath it. This asks
+     * for networks that offer the internet and are not a VPN, the same ones
+     * [NetworkIdentity] looks at.
+     */
+    private fun watchTheNetworkUnderneath() {
+        val connectivity = getSystemService(ConnectivityManager::class.java) ?: return
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            .build()
+        val watch = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = networkMayHaveChanged()
+            override fun onLost(network: Network) = networkMayHaveChanged()
+            override fun onCapabilitiesChanged(
+                network: Network,
+                capabilities: NetworkCapabilities,
+            ) = networkMayHaveChanged()
+        }
+        runCatching { connectivity.registerNetworkCallback(request, watch) }
+            .onSuccess { networkWatch = watch }
+            .onFailure {
+                EngineLog.record(
+                    LogLevel.WARN,
+                    "auto",
+                    "could not watch for network changes: ${it.message}",
+                )
+            }
+    }
+
+    /**
+     * Called for every capability change, so it has to be cheap and sure.
+     *
+     * Only a different network counts. Android reports a great deal that is not
+     * a move -- signal strength, metering, validation -- and acting on those
+     * would restart a search for nothing.
+     *
+     * A session that is carrying traffic is left alone. A tunnel often survives
+     * a roam, and tearing down a working one to re-plan would cost the user the
+     * connection they have to fix a plan they are not using. What is corrected
+     * immediately is the key everything is recorded against, and the plan of a
+     * search still in progress -- which is being made against a network the
+     * phone has left.
+     */
+    private fun networkMayHaveChanged() {
+        val now = NetworkIdentity.current(this).key ?: return
+        if (now == autoNetworkKey) return
+
+        serviceScope.launch {
+            commandMutex.withLock {
+                val was = autoNetworkKey
+                val action = Roaming.actionFor(
+                    was = was,
+                    now = now,
+                    connected = autoConnected,
+                    searching = autoSteps.isNotEmpty(),
+                )
+                if (action == RoamAction.Ignore) return@withLock
+
+                autoNetworkKey = now
+                EngineLog.record(LogLevel.INFO, "auto", "the network changed from $was to $now")
+                if (action != RoamAction.Replan) return@withLock
+
+                EngineLog.record(
+                    LogLevel.INFO,
+                    "auto",
+                    "replanning for $now; the search so far was for $was",
+                )
+                autoSteps = emptyList()
+                autoStepIndex = 0
+                lastEngineFailure = null
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -402,6 +496,12 @@ class AetherVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        networkWatch?.let { watch ->
+            runCatching {
+                getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(watch)
+            }
+        }
+        networkWatch = null
         dropBlackhole()
         generation += 1
         runCatching { chain.stop() }
