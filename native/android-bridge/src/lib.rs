@@ -343,6 +343,7 @@ impl BridgeConfig {
         set_or_clear("AETHER_ROUTE_BLOCK", &self.route_block);
         set_or_clear("AETHER_ROUTE_DIRECT", &self.route_direct);
         set_or_clear("AETHER_LOG_LEVEL", &self.log_level);
+        apply_log_level(&self.log_level);
 
         // Both default to on in the engine and are switched off by the literal
         // "0", so the variable is only worth setting to turn one off.
@@ -413,8 +414,14 @@ impl log::Log for TeeLogger {
 fn install_logger() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
+        // Trace on the sink, Info on the global filter. The sink's own ceiling
+        // is fixed for the life of the process; the global one can be raised
+        // later, and that is what makes the app's log-level setting mean
+        // something. Pinning both at Info is why it did not: every probe
+        // failure is logged at trace, so `no clean endpoint found` was the only
+        // thing that ever came out, whatever the user chose.
         let config = android_logger::Config::default()
-            .with_max_level(log::LevelFilter::Info)
+            .with_max_level(log::LevelFilter::Trace)
             .with_tag("aether");
         let logger = TeeLogger(android_logger::AndroidLogger::new(config));
         if log::set_boxed_logger(Box::new(logger)).is_ok() {
@@ -422,6 +429,26 @@ fn install_logger() {
         }
         log::info!("aether bridge logging installed");
     });
+}
+
+/// Raises or lowers what actually reaches the log, at any time.
+///
+/// Called whenever a configuration is applied, so changing the setting takes
+/// effect on the next connect rather than the next launch. Unknown or empty
+/// leaves the default alone -- a typo should not silence the engine.
+fn apply_log_level(level: &str) {
+    let filter = match level.trim().to_ascii_lowercase().as_str() {
+        "error" => log::LevelFilter::Error,
+        "warn" => log::LevelFilter::Warn,
+        "info" => log::LevelFilter::Info,
+        "debug" => log::LevelFilter::Debug,
+        "trace" => log::LevelFilter::Trace,
+        _ => return,
+    };
+    if log::max_level() != filter {
+        log::set_max_level(filter);
+        log::info!("engine log level is now {filter}");
+    }
 }
 
 /// Packages this install's identity so it survives a reinstall.
@@ -643,6 +670,61 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
                     "peer": prepared.peer.to_string(),
                 }),
             ))
+        })()
+        .unwrap_or_else(error_response);
+        java_string(env, &result)
+    }))
+    .unwrap_or(std::ptr::null_mut())
+}
+
+/// Buys the engine's identity without building anything with it.
+///
+/// For the moment some other carrier is already carrying traffic. On a network
+/// where `api.cloudflareclient.com` cannot be reached in any direction, that
+/// carrier's SOCKS listener is the only route a registration can leave by --
+/// and an identity bought once there makes every later connect the engine's own
+/// direct one. The config carries the proxy; the engine sends everything
+/// through it.
+///
+/// Shares preparation's flag, so the two cannot run at once and the same cancel
+/// ends either. Refused while the engine is running, because an engine that is
+/// running has whatever identity it needed.
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeProvision(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    config: JString<'_>,
+) -> jstring {
+    install_logger();
+    catch_unwind(AssertUnwindSafe(|| {
+        let result = (|| -> Result<String, String> {
+            if STOP_SENDER.lock().is_some() {
+                return Err("engine is already running".into());
+            }
+            if SCAN_RUNNING.load(Ordering::SeqCst) {
+                return Err("endpoint scan is already running".into());
+            }
+            if PREPARE_RUNNING.swap(true, Ordering::SeqCst) {
+                return Err("route preparation is already running".into());
+            }
+            let _guard = PrepareRunningGuard;
+            PREPARE_CANCELLED.store(false, Ordering::SeqCst);
+            let raw = read_java_string(&mut env, &config)?;
+            let config = BridgeConfig::parse(&raw)?;
+            config.apply_environment();
+            let embedded = config.embedded(None)?;
+            let devices = runtime()?.block_on(async {
+                tokio::select! {
+                    biased;
+                    _ = until_cancelled(&PREPARE_CANCELLED) => {
+                        Err("provisioning was cancelled".to_string())
+                    }
+                    result = aether::provision_embedded(&embedded) => {
+                        result.map_err(|error| error.to_string())
+                    }
+                }
+            })?;
+            Ok(response(true, serde_json::json!({ "devices": devices })))
         })()
         .unwrap_or_else(error_response);
         java_string(env, &result)

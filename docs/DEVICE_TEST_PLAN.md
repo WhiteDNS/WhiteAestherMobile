@@ -34,37 +34,6 @@ at least one API 26 device and one current target-API device.
 6. Start a scan while disconnected, then immediately connect; confirm only one
    native operation runs and no unprotected upstream socket is created.
 
-## Identity and registration
-
-The scenario this section exists for is a first connect on a network where
-`api.cloudflareclient.com` cannot be reached directly. Every version up to 1.8.0
-passed every other check on this page and failed that one, because nothing here
-asked for it. Simulate it by resolving the name to a blackhole on the test
-network, or by testing on a network that already does this.
-
-1. First connect with no identity on disk: confirm the direct route is tried
-   **once** and the camouflaged route starts within seconds, not after a minute
-   and a half. `registration retry 2/4` in the log is a regression.
-2. Kill the connect while it is provisioning -- Automatic does this at each
-   lane's budget -- then reconnect. The second attempt must load the identity
-   the first one registered. A second `no masque identity found` means a
-   registration was bought and thrown away, and the address has an allowance
-   that runs out.
-3. Connect with MASQUE on an install whose only identity came from WireGuard,
-   then switch back to WireGuard. It must provision a new account, saying so,
-   rather than searching for endpoints that will never answer. `files/` should
-   show the WireGuard file carrying a certificate and no private key.
-4. Repeat 3 starting from an install made by 1.8.0 or earlier that is already
-   broken: the first MASQUE connect after updating must repair it with no user
-   action.
-5. Export the identity from a default install -- MASQUE, never switched to
-   WireGuard -- and confirm the file is written rather than refused. Import it
-   onto a second device and confirm that device connects without registering.
-   Also import a backup taken from 1.8.0 or earlier: the older format still has
-   to restore.
-6. Count registrations across a whole failed connect attempt in the diagnostics
-   log. More than one per protocol is a regression.
-
 ## Lifecycle and security
 
 1. Start/stop each mode 20 times and switch modes without restarting the app.

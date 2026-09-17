@@ -193,7 +193,12 @@ pub fn peek(path: &str) -> Option<Identity> {
     Identity::try_from(persisted).ok()
 }
 
-fn write_private(path: &str, contents: &str) -> Result<()> {
+/// Writes a private file the way an identity has to be written: owner-only,
+/// atomically, and durably enough that a registration survives a power cut.
+///
+/// Shared with the identity store, which holds the same secrets under the same
+/// rules -- and whose whole purpose is that what it wrote is still there.
+pub(crate) fn write_private(path: &str, contents: &str) -> Result<()> {
     let target = Path::new(path);
     let directory = target.parent().filter(|p| !p.as_os_str().is_empty());
     if let Some(dir) = directory {

@@ -4,6 +4,10 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -33,6 +37,8 @@ import com.whitedns.whiteaesther.data.AutoStep
 import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.Lane
 import com.whitedns.whiteaesther.data.NetworkKey
+import com.whitedns.whiteaesther.data.RoamAction
+import com.whitedns.whiteaesther.data.Roaming
 import com.whitedns.whiteaesther.data.RouteMemory
 import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.data.ChainSettings
@@ -158,6 +164,29 @@ class AetherVpnService : VpnService() {
     private var hopAttempt: Long = 0
 
     /**
+     * What the engine said the last time it failed during this session.
+     *
+     * Kept so the next lane can lead with the rung that answers it. The engine
+     * now names a gateway demanding an Encrypted Client Hello rather than
+     * reporting a stop with no reason, and that name is only worth having if
+     * something acts on it.
+     */
+    private var lastEngineFailure: String? = null
+
+    /** Registered for the life of the service; see [watchTheNetworkUnderneath]. */
+    private var networkWatch: ConnectivityManager.NetworkCallback? = null
+
+    /**
+     * Whether this session has already bought the engine an identity over a
+     * carrier that was working.
+     *
+     * Once is the whole idea. It costs a Cloudflare registration, the engine
+     * keeps what it buys, and a second attempt in the same session would be
+     * spending an allowance to learn something already on disk.
+     */
+    private var boughtIdentityBehindCarrier = false
+
+    /**
      * The watchers of the current attempt's hops.
      *
      * Cancelled when the next attempt begins. Without that they accumulate one
@@ -271,6 +300,91 @@ class AetherVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         AetherNotification.createChannel(this)
+        watchTheNetworkUnderneath()
+    }
+
+    /**
+     * Notices when the phone changes the network the tunnel is riding on.
+     *
+     * Nothing was watching. The network is read once per search and then held,
+     * so a phone that moved from Wi-Fi to mobile data went on planning against
+     * the network it had left -- leading with an endpoint proven somewhere else
+     * and writing what it learned against the wrong key -- for as long as the
+     * search lasted, which can be minutes.
+     *
+     * Not the default network: while a session is up the default is this app's
+     * own interface, which says nothing about what is underneath it. This asks
+     * for networks that offer the internet and are not a VPN, the same ones
+     * [NetworkIdentity] looks at.
+     */
+    private fun watchTheNetworkUnderneath() {
+        val connectivity = getSystemService(ConnectivityManager::class.java) ?: return
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            .build()
+        val watch = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = networkMayHaveChanged()
+            override fun onLost(network: Network) = networkMayHaveChanged()
+            override fun onCapabilitiesChanged(
+                network: Network,
+                capabilities: NetworkCapabilities,
+            ) = networkMayHaveChanged()
+        }
+        runCatching { connectivity.registerNetworkCallback(request, watch) }
+            .onSuccess { networkWatch = watch }
+            .onFailure {
+                EngineLog.record(
+                    LogLevel.WARN,
+                    "auto",
+                    "could not watch for network changes: ${it.message}",
+                )
+            }
+    }
+
+    /**
+     * Called for every capability change, so it has to be cheap and sure.
+     *
+     * Only a different network counts. Android reports a great deal that is not
+     * a move -- signal strength, metering, validation -- and acting on those
+     * would restart a search for nothing.
+     *
+     * A session that is carrying traffic is left alone. A tunnel often survives
+     * a roam, and tearing down a working one to re-plan would cost the user the
+     * connection they have to fix a plan they are not using. What is corrected
+     * immediately is the key everything is recorded against, and the plan of a
+     * search still in progress -- which is being made against a network the
+     * phone has left.
+     */
+    private fun networkMayHaveChanged() {
+        val now = NetworkIdentity.current(this).key ?: return
+        if (now == autoNetworkKey) return
+
+        serviceScope.launch {
+            commandMutex.withLock {
+                val was = autoNetworkKey
+                val action = Roaming.actionFor(
+                    was = was,
+                    now = now,
+                    connected = autoConnected,
+                    searching = autoSteps.isNotEmpty(),
+                )
+                if (action == RoamAction.Ignore) return@withLock
+
+                autoNetworkKey = now
+                EngineLog.record(LogLevel.INFO, "auto", "the network changed from $was to $now")
+                if (action != RoamAction.Replan) return@withLock
+
+                EngineLog.record(
+                    LogLevel.INFO,
+                    "auto",
+                    "replanning for $now; the search so far was for $was",
+                )
+                autoSteps = emptyList()
+                autoStepIndex = 0
+                lastEngineFailure = null
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -392,6 +506,12 @@ class AetherVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        networkWatch?.let { watch ->
+            runCatching {
+                getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(watch)
+            }
+        }
+        networkWatch = null
         dropBlackhole()
         generation += 1
         runCatching { chain.stop() }
@@ -412,6 +532,8 @@ class AetherVpnService : VpnService() {
                 generation += 1
                 newHopAttempt()
                 reconnectAttempt = 0
+                lastEngineFailure = null
+                boughtIdentityBehindCarrier = false
                 // A new connect is a new search, planned for whichever network
                 // the phone is on now.
                 autoSteps = emptyList()
@@ -1295,7 +1417,37 @@ class AetherVpnService : VpnService() {
         }
         autoPasses += 1
         EngineLog.record(LogLevel.WARN, "auto", "pass $autoPasses of $MAX_AUTO_PASSES found no way out")
-        if (autoPasses >= MAX_AUTO_PASSES) {
+        // Room for a pass to *finish*, not room to start one. Asking whether
+        // the ceiling has already been passed is the wrong question: the
+        // longest pass this plan can make is under the ceiling by itself, so
+        // that test never fires and the second pass runs to its own end --
+        // twenty-seven minutes, which is the thing being prevented.
+        //
+        // A pass that failed quickly leaves room for another, and gets one.
+        // The first pass is never cut short: Psiphon's own establish window is
+        // five and a half minutes and it is the carrier most likely to get out
+        // where nothing else does, so truncating it would trade a long wait for
+        // a failed connect.
+        val spent = System.currentTimeMillis() - autoSearchStartedAt
+        val another = AutoPlanner.longestPassMs(
+            RouteMemory.recall(
+                preferences.getString(AUTO_ROUTES, null),
+                autoNetworkKey,
+                System.currentTimeMillis(),
+            ),
+            autoOptions(mode),
+        )
+        val outOfTime = autoSearchStartedAt > 0L &&
+            !AutoPlanner.hasRoomForAnotherPass(spent, another, MAX_AUTO_SEARCH_MS)
+        if (outOfTime) {
+            EngineLog.record(
+                LogLevel.WARN,
+                "auto",
+                "stopping after ${spent / 1_000}s; another pass needs ${another / 1_000}s and " +
+                    "this search is allowed ${MAX_AUTO_SEARCH_MS / 1_000}s",
+            )
+        }
+        if (autoPasses >= MAX_AUTO_PASSES || outOfTime) {
             // Lockdown is the one cause worth naming here: it fails every
             // carrier at once and nothing in their own logs says so.
             val told = listOfNotNull(sayNow(R.string.err_auto_nothing_worked), lockdownHint())
@@ -1380,6 +1532,7 @@ class AetherVpnService : VpnService() {
             // whether this one carries it.
             provenFraming = rememberedTransport()?.takeIf { it == "h2" || it == "h3" },
             onMobileData = NetworkKey.isCellular(autoNetworkKey),
+            lastEngineFailure = lastEngineFailure,
             engineFailedHere = RouteMemory.engineFailedRecently(
                 preferences.getString(AUTO_ROUTES, null),
                 autoNetworkKey,
@@ -1468,6 +1621,7 @@ class AetherVpnService : VpnService() {
                 "${winner.route.wireName} carries traffic; routing the interface into 127.0.0.1:${winner.port}",
             )
             watchHop(carrier, winner.client, configJson, mode, sessionGeneration, attempt)
+            buyIdentityBehind(carrier, winner.port, sessionGeneration)
             publish(EngineStatus(EngineStage.CONNECTING, mode, null, sayNow(R.string.status_starting_chain)))
 
             val fd = tun.detachFd()
@@ -1618,6 +1772,7 @@ class AetherVpnService : VpnService() {
         try {
             val port = client.start(AutoPlanner.budgetMs(route)).getOrElse { error ->
                 EngineLog.record(LogLevel.WARN, "auto", "${route.wireName}: ${error.message}")
+                if (route.racesEngine) lastEngineFailure = error.message
                 return null
             }
             if (sessionGeneration != generation) return null
@@ -1676,8 +1831,87 @@ class AetherVpnService : VpnService() {
             // Full is the user's own depth -- balanced unless they chose
             // otherwise; quick is the engine's quickest.
             val depth = if (route.fullSearch) json.optString("scanMode", "balanced") else "turbo"
-            json.put("transport", transport).put("scanMode", depth).toString()
+            json.put("transport", transport).put("scanMode", depth)
+            // A rung that carries a tactic sets it; one that does not leaves
+            // the user's own choice alone, so turning something on by hand is
+            // still worth doing and is not quietly overridden on every rung.
+            route.fragmentTls?.let { json.put("fragmentTls", it) }
+            route.encryptedHello?.let { json.put("encryptedHello", it) }
+            json.toString()
         }.getOrDefault(base)
+    }
+
+    /**
+     * Buys the engine an identity over a carrier that is already working.
+     *
+     * The engine cannot connect without a Cloudflare registration, and a
+     * network that blocks `api.cloudflareclient.com` will not let it get one --
+     * which is a deadlock the app was walking into every session. Psiphon needs
+     * no account at all, so it wins the race, carries the user's traffic, and
+     * the engine goes on being unable to register for as long as that lasts.
+     *
+     * The way out is the route that is already working. This sends the engine's
+     * registration through the winner's own SOCKS listener, once, in the
+     * background. Nothing is torn down and nobody waits for it: the user stays
+     * on the carrier that got them out, and the next connect on this network
+     * can be the engine's direct one, which is faster and has fewer moving
+     * parts.
+     *
+     * No endpoint search comes with it -- registration is all that is bought
+     * here, and searching would be several thousand probes for a tunnel nobody
+     * is about to build.
+     *
+     * Skipped when the engine is the winner, since it evidently has what it
+     * needs, and when it already has an identity: the call is cheap then,
+     * answered from the store without a round trip, but saying so here keeps
+     * the log honest about what was spent.
+     */
+    private fun buyIdentityBehind(carrier: Carrier, port: Int, sessionGeneration: Long) {
+        if (carrier == Carrier.AETHER || port <= 0) return
+        if (boughtIdentityBehindCarrier) return
+        val base = baseConfigJson ?: return
+        boughtIdentityBehindCarrier = true
+
+        serviceScope.launch {
+            // The engine refuses to provision while one is running, and a lane
+            // that just lost the race may still be unwinding inside a blocking
+            // call. Waiting for it costs nothing here -- nobody is watching
+            // this, which is the point of doing it behind a carrier.
+            staleEngine?.let { stale -> withTimeoutOrNull(STALE_ENGINE_WAIT_MS) { stale.join() } }
+            if (sessionGeneration != generation) return@launch
+
+            val config = carrierEngineConfig(base, port)
+            EngineLog.record(
+                LogLevel.INFO,
+                "identity",
+                "asking Cloudflare for an identity through ${carrier.wireName}, " +
+                    "so the next connect here can be the engine's own",
+            )
+            val outcome = withContext(Dispatchers.IO) { NativeAetherBridge.provision(config) }
+            if (sessionGeneration != generation) return@launch
+
+            outcome.fold(
+                onSuccess = { devices ->
+                    EngineLog.record(
+                        LogLevel.INFO,
+                        "identity",
+                        "the engine holds ${devices.size} identit" +
+                            (if (devices.size == 1) "y" else "ies") +
+                            "; it will not have to ask again",
+                    )
+                },
+                onFailure = { error ->
+                    // Not a session failure. The user is connected, by the route
+                    // that won -- this was an attempt to make the next one
+                    // better, and it can be made again next time.
+                    EngineLog.record(
+                        LogLevel.WARN,
+                        "identity",
+                        "could not get an identity through ${carrier.wireName}: ${error.message}",
+                    )
+                },
+            )
+        }
     }
 
     /** Remembers [route] for this network, which is what makes the next connect here quick. */
@@ -2040,6 +2274,11 @@ class AetherVpnService : VpnService() {
      */
     private fun isConclusive(reason: String): Boolean =
         isIdentityRefusal(reason) ||
+            // The engine is holding a wait of its own -- minutes to an hour,
+            // kept across restarts because Cloudflare counts a registration
+            // against the address whether or not we keep the answer. Retrying
+            // three seconds into that is the behaviour the wait exists to stop.
+            reason.contains("registration is on hold", ignoreCase = true) ||
             reason.contains("no WireGuard endpoint answered", ignoreCase = true)
 
     /**
@@ -2751,6 +2990,20 @@ class AetherVpnService : VpnService() {
          * mostly be spent on a network that is simply down.
          */
         private const val MAX_AUTO_PASSES = 2
+
+        /**
+         * The whole search, end to end, however many passes fit inside it.
+         *
+         * A ceiling on what the person waiting experiences rather than on the
+         * number of attempts, which is a proxy for it and drifts every time a
+         * rung is added. Checked between passes only: a pass that has started
+         * runs to its end, because the lanes inside it have their own windows
+         * and cutting one in half is how a carrier that was about to connect
+         * gets thrown away.
+         *
+         * Sized so one full pass always fits. AutoPlannerTest holds it there.
+         */
+        private const val MAX_AUTO_SEARCH_MS = 15 * 60 * 1_000L
         private const val AUTO_RETRY_GAP_MS = 2_000L
         private const val AUTO_STEP_GAP_MS = 1_000L
         private const val AUTO_PASS_GAP_MS = 10_000L

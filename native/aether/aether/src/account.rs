@@ -417,6 +417,10 @@ where
     F: Fn() -> Result<reqwest::RequestBuilder>,
 {
     let mut last_error = AetherError::Api(format!("{label}: no attempt was made"));
+    // Kept so it can leave with the error. Cloudflare is the only party that
+    // knows when it will accept another registration, and a number that is
+    // slept on here and then forgotten is no use to the attempt after next.
+    let mut asked_to_wait: Option<u64> = None;
 
     for attempt in 0..API_ATTEMPTS {
         if attempt > 0 {
@@ -483,8 +487,19 @@ where
                 "[!] {label} asked us to wait {}s before retrying",
                 wait.as_secs()
             );
+            asked_to_wait = Some(wait.as_secs());
             tokio::time::sleep(wait).await;
         }
+    }
+
+    // Out of attempts against an answer that asked for more of them. That is a
+    // rate limit rather than a plain failure, and the difference decides
+    // whether the next attempt is worth making at all.
+    if let AetherError::Api(reason) = last_error {
+        return Err(AetherError::RateLimited {
+            reason,
+            retry_after: asked_to_wait,
+        });
     }
 
     Err(last_error)
@@ -575,9 +590,20 @@ pub async fn register(
             match fallback_call("registration", "POST", &path, Some(encoded), None, jwt).await {
                 Ok(account) => account,
                 Err(secondary) => {
-                    return Err(AetherError::Api(format!(
+                    let retry_after = primary.retry_after().or_else(|| secondary.retry_after());
+                    let reason = format!(
                         "registration: direct route -> {primary}; camouflaged route -> {secondary}"
-                    )));
+                    );
+                    return Err(match retry_after {
+                        // A wait either route was given applies to the address,
+                        // not to the route, so it survives being reported with
+                        // the other one.
+                        Some(_) => AetherError::RateLimited {
+                            reason,
+                            retry_after,
+                        },
+                        None => AetherError::Api(reason),
+                    });
                 }
             }
         }
