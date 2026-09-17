@@ -5111,6 +5111,92 @@ mod enrollment_tests {
     ///     adb shell run-as <pkg> cat files/aether.toml > id.toml
     ///     AETHER_TEST_IDENTITY=id.toml cargo test -p aether identity_from -- \
     ///         --ignored --nocapture
+    /// The 1.8.0 failure and its repair, end to end, against the live API.
+    ///
+    /// Everything else about this defect is checked on files. This checks the
+    /// thing the files are about: that Cloudflare really does stop recognising
+    /// the WireGuard key when the same device is enrolled for MASQUE, and that
+    /// the engine now notices and replaces it instead of handing it back to an
+    /// endpoint search that will never get an answer.
+    ///
+    /// Two registrations against the running address, which is why it is gated
+    /// twice. Run it deliberately:
+    ///
+    ///     AETHER_LIVE_ENROLL_TEST=1 cargo test -p aether adopted_by_masque -- \
+    ///         --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "registers two real warp devices and waits out an edge propagation"]
+    async fn a_wireguard_identity_adopted_by_masque_is_replaced_rather_than_reused() {
+        if std::env::var("AETHER_LIVE_ENROLL_TEST").is_err() {
+            eprintln!("set AETHER_LIVE_ENROLL_TEST=1 to run this");
+            return;
+        }
+        for name in [
+            "AETHER_MASQUE_CONFIG",
+            "AETHER_WG_CONFIG",
+            "AETHER_TEAM",
+            "CF_TEAM",
+        ] {
+            std::env::remove_var(name);
+        }
+
+        let dir = std::env::temp_dir().join(format!("aether-repair-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("aether.toml");
+        let base = base.to_str().unwrap();
+
+        // An install that has only ever run WireGuard.
+        let warp_path = warp_config_path(base);
+        let first = load_or_provision_warp(&warp_path)
+            .await
+            .expect("the first registration");
+        eprintln!("[test] wireguard device {}", first.device_id);
+        assert!(
+            shakes_hands(&first).await.is_ok(),
+            "a freshly registered wireguard identity has to hand shake",
+        );
+
+        // The user taps a MASQUE profile. It adopts that identity rather than
+        // paying for a second, and enrolling the adopted copy is what revokes
+        // the WireGuard key on the device both files describe.
+        let masque_path = masque_config_path(base);
+        let masque = load_or_provision_masque(&masque_path)
+            .await
+            .expect("the enrolment");
+        assert_eq!(
+            first.device_id, masque.device_id,
+            "this scenario only exists when masque adopts rather than registers",
+        );
+
+        // The damage is not immediate: the change takes up to a minute to reach
+        // the edge, which is long enough for a check made straight afterwards
+        // to come back clean.
+        tokio::time::sleep(Duration::from_secs(90)).await;
+        assert!(
+            shakes_hands(&first).await.is_err(),
+            "cloudflare still answers the old key, so this test proves nothing yet",
+        );
+
+        // Back to WireGuard. In 1.8.0 this handed the revoked identity straight
+        // back, and the endpoint search spent three minutes being met with
+        // silence before reporting the network as dead.
+        let second = load_or_provision_warp(&warp_path)
+            .await
+            .expect("the replacement registration");
+        eprintln!("[test] replacement device {}", second.device_id);
+        assert_ne!(
+            first.device_id, second.device_id,
+            "the revoked identity was handed back instead of replaced",
+        );
+        assert!(
+            shakes_hands(&second).await.is_ok(),
+            "the replacement has to be an identity that actually works",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     #[ignore = "needs an identity file pulled off a device"]
     async fn an_identity_from_a_device_hand_shakes_from_here() {
