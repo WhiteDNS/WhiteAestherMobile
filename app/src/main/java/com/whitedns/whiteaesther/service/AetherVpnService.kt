@@ -2637,17 +2637,20 @@ class AetherVpnService : VpnService() {
      */
     private fun autoConfig(json: JSONObject, attempt: Int): String {
         val remembered = rememberedTransport()
+        // Asked, not decided here. This ladder used to put H2 first always while
+        // the race put H3 first on Wi-Fi, so which framing a user reached
+        // depended on which part of the app was asking.
+        val order = AutoPlanner.framingOrder(
+            provenFraming = remembered?.takeIf { it == "h2" || it == "h3" },
+            onMobileData = NetworkKey.isCellular(currentNetworkKey()),
+        )
         val ladder = buildList {
             // Deep, because it is already known to work here.
             remembered?.let { add(it to json.optString("scanMode", "balanced")) }
-            // Then both framings, quickly. H2 first: it is TCP on 443 and looks
-            // like any other HTTPS connection, so it is the one more likely to
-            // survive a filtered network.
-            add("h2" to "turbo")
-            add("h3" to "turbo")
+            // Then both framings, quickly.
+            order.forEach { add(it to "turbo") }
             // Only then spend a full search on each.
-            add("h2" to json.optString("scanMode", "balanced"))
-            add("h3" to json.optString("scanMode", "balanced"))
+            order.forEach { add(it to json.optString("scanMode", "balanced")) }
         }.distinct()
 
         val (transport, scan) = ladder[attempt.coerceAtLeast(0) % ladder.size]

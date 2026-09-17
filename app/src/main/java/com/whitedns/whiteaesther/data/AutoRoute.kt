@@ -305,13 +305,38 @@ object AutoPlanner {
      * weeks at a time -- and H3 first elsewhere, which is what the Wi-Fi in
      * that log needed.
      */
-    fun aetherLane(options: AutoOptions): List<AutoRoute> {
-        if (!options.engineCanSearchDeeper) return listOf(AutoRoute.AETHER_AS_SET)
-        val h3First = when (options.provenFraming) {
+    /**
+     * The order to try the MASQUE framings in, and the only place that decides.
+     *
+     * There were three answers to this and they disagreed: the race preferred
+     * H3 on Wi-Fi and H2 on mobile data, the retry ladder always went H2 first,
+     * and the endpoint scanner did too. Three rules that can drift is worse than
+     * any one of them being wrong, because nothing ever notices -- a user gets a
+     * different order depending on which part of the app is asking, and the one
+     * that connects for them may be the one their path never reaches.
+     *
+     * The rule: whatever connected here last goes first, because it is evidence
+     * and the rest is inference. With nothing to go on, H2 leads on mobile data
+     * -- operators have dropped QUIC for weeks at a time -- and H3 leads
+     * elsewhere, which is what the Wi-Fi in the log that prompted this needed.
+     *
+     * `provenFraming` is per network. A framing proven on another network says
+     * nothing about this one, and treating it as evidence is how a phone that
+     * connected at home opens every session on mobile data with the wrong guess.
+     */
+    fun framingOrder(provenFraming: String?, onMobileData: Boolean): List<String> {
+        val h3First = when (provenFraming) {
             "h3" -> true
             "h2" -> false
-            else -> !options.onMobileData
+            else -> !onMobileData
         }
+        return if (h3First) listOf("h3", "h2") else listOf("h2", "h3")
+    }
+
+    fun aetherLane(options: AutoOptions): List<AutoRoute> {
+        if (!options.engineCanSearchDeeper) return listOf(AutoRoute.AETHER_AS_SET)
+        val h3First =
+            framingOrder(options.provenFraming, options.onMobileData).first() == "h3"
         // Nested MASQUE last, always. It is the slowest thing the engine can
         // do -- an outer tunnel plus up to six inner handshakes through it --
         // and on most networks one of the framings above gets out first. But it
