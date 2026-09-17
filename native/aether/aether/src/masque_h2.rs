@@ -202,6 +202,25 @@ fn build_tls(cfg: &H2TunnelConfig) -> Result<boring::ssl::ConnectConfiguration> 
     Ok(config)
 }
 
+/// What the edge said when it refused, in one line.
+///
+/// Headers as well as the status, because Cloudflare explains itself in
+/// `cf-`-prefixed ones and a number on its own cannot tell a blocked network
+/// from a request it no longer accepts.
+fn describe_refusal(response: &http::Response<h2::RecvStream>) -> String {
+    let mut described = format!("h2 connect-ip status {}", response.status().as_u16());
+    for (name, value) in response.headers() {
+        let name = name.as_str();
+        if name.starts_with("cf-") || name == "reason" || name == "x-error" {
+            described.push_str(&format!(
+                "; {name}={}",
+                value.to_str().unwrap_or("<not text>")
+            ));
+        }
+    }
+    described
+}
+
 fn build_connect_request(cfg: &H2TunnelConfig) -> Result<http::Request<()>> {
     let authority = format!("{}:443", cfg.authority);
     let uri = format!("https://{}", authority);
@@ -263,10 +282,11 @@ pub async fn verify_h2(cfg: &H2TunnelConfig, timeout: Duration) -> Result<Durati
             .map_err(|e| AetherError::Masque(format!("await response: {e}")))?;
         let status = response.status();
         if !status.is_success() {
-            return Err(AetherError::Masque(format!(
-                "h2 connect-ip status {}",
-                status.as_u16()
-            )));
+            // The edge's own reason, not just the number. A bare status is what
+            // several thousand probes collapse into "no clean endpoint found",
+            // and it is the difference between a network that is blocking us
+            // and a request contract that has moved.
+            return Err(AetherError::Masque(describe_refusal(&response)));
         }
 
         if !data_check {
@@ -422,10 +442,7 @@ pub async fn run(
         format!("[h2] connect-ip status: {}", status.as_u16()),
     );
     if !status.is_success() {
-        return Err(AetherError::Masque(format!(
-            "h2 connect-ip status {}",
-            status.as_u16()
-        )));
+        return Err(AetherError::Masque(describe_refusal(&response)));
     }
 
     let mut recv_body = response.into_body();

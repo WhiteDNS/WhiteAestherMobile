@@ -177,6 +177,22 @@ pub fn load(path: &str) -> Result<Option<Identity>> {
     }
 }
 
+/// Reads an identity file without judging it.
+///
+/// [`load`] sets aside anything it cannot parse, which is right for the file in
+/// use and wrong for a sweep across the directory: an identity's siblings
+/// include files that are not identities at all -- the last-connection cache
+/// sits beside them -- and quarantining one for failing to be something it
+/// never was would delete a working cache on every connect.
+///
+/// So this answers one question only, and answers `None` to everything else:
+/// is there an identity here, and which device is it.
+pub fn peek(path: &str) -> Option<Identity> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let persisted: PersistedIdentity = toml::from_str(&text).ok()?;
+    Identity::try_from(persisted).ok()
+}
+
 fn write_private(path: &str, contents: &str) -> Result<()> {
     let target = Path::new(path);
     let directory = target.parent().filter(|p| !p.as_os_str().is_empty());
@@ -217,6 +233,24 @@ fn write_private(path: &str, contents: &str) -> Result<()> {
         }
 
         std::fs::rename(&temporary, target)?;
+
+        // The rename itself, made durable. `sync_all` above puts the contents
+        // on the disk; it says nothing about the directory entry that points at
+        // them, so a phone that loses power here could come back to the old
+        // name or to none. That matters now rather than before, because this is
+        // what a registration is written with, and a registration that is not
+        // on disk has to be bought again from an allowance the address may have
+        // already spent.
+        //
+        // Best effort: a filesystem that will not open a directory for reading
+        // is not a reason to fail a write that has already landed.
+        #[cfg(unix)]
+        if let Some(dir) = directory {
+            if let Ok(handle) = std::fs::File::open(dir) {
+                let _ = handle.sync_all();
+            }
+        }
+
         Ok(())
     })();
 

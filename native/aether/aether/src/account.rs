@@ -234,6 +234,11 @@ fn http_client() -> Result<reqwest::Client> {
     builder.build().map_err(|e| AetherError::Api(e.to_string()))
 }
 
+/// How many times one request is put to Cloudflare over the direct route.
+///
+/// Only ever spent on an answer that asked to be asked again -- 429, 5xx, or a
+/// Retry-After. A request that never completed is not retried here at all; see
+/// [`send_with_retry`].
 const API_ATTEMPTS: u32 = 5;
 const API_BACKOFF_BASE_MS: u64 = 900;
 const API_BACKOFF_CAP_MS: u64 = 15_000;
@@ -428,8 +433,24 @@ where
         let response = match build()?.send().await {
             Ok(response) => response,
             Err(error) => {
-                last_error = AetherError::Api(format!("{label}: {error}"));
-                continue;
+                // The request never became an HTTP exchange at all: the name did
+                // not resolve, the connection was refused, or it was reset or
+                // timed out on the way out. Repeating it cannot change any of
+                // those, because what failed is the route rather than the
+                // answer -- and it used to be repeated four more times at twenty
+                // seconds each. That is a hundred seconds spent before the
+                // camouflaged route was allowed to start, on exactly the
+                // networks where the camouflaged route is the only one that can
+                // work. Measured on a phone in Iran: 18:13:26 to 18:15:08.
+                //
+                // The retry ladder below is kept for the answers that ask for
+                // one -- 429, 5xx and Retry-After -- because those did reach
+                // Cloudflare and are worth asking again.
+                log::warn!(
+                    "[!] {label}: the direct route did not complete a request ({error}); \
+                     handing over to the camouflaged route rather than repeating it"
+                );
+                return Err(AetherError::Api(format!("{label}: {error}")));
             }
         };
 
@@ -957,6 +978,46 @@ impl Identity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A route that never completed a request is not put to it again.
+    ///
+    /// The direct route used to be retried five times whatever went wrong, each
+    /// with a twenty-second ceiling. On a network that blackholes the API that
+    /// is a hundred seconds -- measured on a phone in Iran, 18:13:26 to
+    /// 18:15:08 -- spent before the camouflaged route, the only one that can
+    /// work there, was allowed to start. Twice over for a fresh MASQUE
+    /// identity, which registers and then enrols.
+    ///
+    /// The ladder is kept for answers that ask to be asked again; this is about
+    /// the requests that never became answers at all.
+    #[tokio::test]
+    async fn a_route_that_never_completes_a_request_is_not_repeated() {
+        std::env::remove_var("AETHER_UPSTREAM");
+
+        // A port nothing is listening on: the connection is refused rather than
+        // answered, which is the cheap local stand-in for a blackholed name.
+        let refused = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            drop(listener);
+            address
+        };
+
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = attempts.clone();
+        let outcome = send_with_retry("test call", move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(http_client()?.get(format!("http://{refused}/")))
+        })
+        .await;
+
+        assert!(outcome.is_err(), "a refused connection is not a success");
+        assert_eq!(
+            1,
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            "the same unreachable route was dialled again instead of handing over",
+        );
+    }
 
     #[test]
     fn a_long_rejection_in_any_script_is_cut_without_panicking() {
