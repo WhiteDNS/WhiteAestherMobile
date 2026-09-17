@@ -869,6 +869,56 @@ struct ExportEnvelope {
     masque_secondary: Option<toml::Value>,
 }
 
+/// Provisions the identities this configuration needs, and nothing else.
+///
+/// No endpoint search and no tunnel. Preparation does both, and they are the
+/// slow half -- several thousand probes -- which is exactly what makes them the
+/// wrong thing to do here. This runs while some other carrier is already
+/// carrying the user's traffic, for one purpose: to buy the registration that
+/// carrier has made reachable, so the *next* connect can be the engine's own
+/// direct one.
+///
+/// Every request it makes goes out through whatever `AETHER_UPSTREAM` names, so
+/// with a working carrier's SOCKS listener there, registration leaves by the
+/// route that works instead of the one that does not. On a network where
+/// `api.cloudflareclient.com` is unreachable in every direction this is the
+/// only way an identity is ever obtained at all.
+///
+/// Costs nothing when the identities are already held: both loaders answer from
+/// the store without a round trip.
+pub async fn provision_embedded(config: &EmbeddedConfig) -> Result<Vec<String>> {
+    let nested = matches!(
+        config.protocol(),
+        Protocol::MasqueInMasque | Protocol::WarpInWarp
+    );
+
+    let mut devices = vec![
+        match config.protocol() {
+            Protocol::Masque | Protocol::MasqueInMasque => {
+                load_or_provision_masque(&config.identity_site()).await?
+            }
+            Protocol::WireGuard | Protocol::WarpInWarp => {
+                load_or_provision_warp(&config.identity_site()).await?
+            }
+        }
+        .device_id,
+    ];
+
+    if nested {
+        devices.push(
+            match config.protocol() {
+                Protocol::MasqueInMasque => {
+                    load_or_provision_masque(&config.secondary_identity_site()).await?
+                }
+                _ => load_or_provision_warp(&config.secondary_identity_site()).await?,
+            }
+            .device_id,
+        );
+    }
+
+    Ok(devices)
+}
+
 pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepared> {
     // Before anything is registered or searched for: a promise that cannot be
     // kept should be refused at the start, not discovered at the handshake.
@@ -5401,6 +5451,51 @@ device_id = \"dev-shared\"
 
         let payload = export_identity(base).expect("the store holds an identity");
         assert!(payload.contains("dev-in-store"), "{payload}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Provisioning behind a carrier asks for nothing it already has.
+    ///
+    /// This runs while somebody else's tunnel is carrying the user's traffic,
+    /// so the one thing it must not do is spend a registration to rediscover an
+    /// identity that is already on disk -- or reach the network at all in that
+    /// case, which is what makes this testable.
+    #[tokio::test]
+    async fn provisioning_behind_a_carrier_costs_nothing_when_the_identity_is_held() {
+        isolated();
+        let dir = scratch("provision-held");
+        let base = dir.join("aether.toml");
+        let base = base.to_str().unwrap();
+
+        // Issued now, not at the fixture's fixed date. An expiring certificate
+        // is a renewal, and a renewal is a request -- correct behaviour, and
+        // not what this test is about.
+        let identity = account::Identity {
+            cert_issued_at: account::now_unix(),
+            ..sample_identity("dev-masque")
+        };
+        let mut store = identity::Store::default();
+        store.put(
+            "dev-masque",
+            identity::device_from(&identity, 1_789_000_000),
+        );
+        store.assign(identity::Slot::Masque, "dev-masque").unwrap();
+        identity::save(&store_path(base), &store).unwrap();
+
+        let config = EmbeddedConfig {
+            config_path: base.to_string(),
+            protocol: "masque".to_string(),
+            listen: "127.0.0.1:0".parse().unwrap(),
+            peer: None,
+            peer_fallback: false,
+            scan_mode: "balanced".to_string(),
+            ip_scan: "v4".to_string(),
+            access: socks::Access::default(),
+        };
+        let devices = provision_embedded(&config).await.unwrap();
+
+        assert_eq!(vec!["dev-masque".to_string()], devices);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
