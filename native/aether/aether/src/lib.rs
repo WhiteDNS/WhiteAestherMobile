@@ -548,7 +548,30 @@ pub enum EmbeddedEndpoint {
 /// Versioned because it leaves the device and can come back into a build that
 /// did not write it. Refusing an unknown version is the honest failure; guessing
 /// at its shape and writing the result over a working identity is not.
-const IDENTITY_EXPORT_VERSION: u32 = 1;
+/// Format 2 carries every identity an install holds; format 1 carried the two
+/// WireGuard ones and silently left MASQUE's behind -- which is the only one a
+/// default install has, so for most people the backup was refused as empty.
+/// Both are read; 2 is written.
+const IDENTITY_EXPORT_VERSION: u32 = 2;
+
+/// Every identity file an install can hold, named as the backup names them.
+///
+/// The names are the format's, so `identity` stays what format 1 called the
+/// WireGuard account rather than being tidied into something better -- a file
+/// somebody exported last month has to keep importing.
+fn identity_slots(base_config: &str) -> [(&'static str, String); 4] {
+    let warp = warp_config_path(base_config);
+    let masque = masque_config_path(base_config);
+    [
+        ("identity", warp.clone()),
+        ("secondary", derive_sibling_path(&warp, "secondary")),
+        ("masque", masque.clone()),
+        (
+            "masque_secondary",
+            derive_sibling_path(&masque, "secondary"),
+        ),
+    ]
+}
 
 /// Packages this install's identities so they survive a reinstall.
 ///
@@ -557,26 +580,37 @@ const IDENTITY_EXPORT_VERSION: u32 = 1;
 /// outright. Carrying the registration across is the difference between that and
 /// connecting immediately.
 ///
-/// Both accounts go in. WARP-in-WARP needs a second one for its inner hop, and
-/// leaving it behind would have the user pay for it again on the first nested
-/// connect, which is the cost this exists to avoid.
+/// Every account goes in. Each nested tunnel needs a second one for its inner
+/// hop, and MASQUE's is a separate registration from WireGuard's -- leaving any
+/// of them behind has the user pay for it again, which is the cost this exists
+/// to avoid.
+///
+/// Format 1 exported only the two WireGuard files. A default install has never
+/// run WireGuard -- the transport starts on MASQUE -- so it had no such file,
+/// and the one defence against losing an identity answered "there is no
+/// identity to export yet" to the people who most needed it.
+///
+/// Read with [`config::peek`]: a backup is a read, and [`config::load`] would
+/// set aside a file it could not parse. Refusing to back up the rest because
+/// one slot is damaged is the wrong way round.
 pub fn export_identity(base_config: &str) -> Result<String> {
-    let shared = warp_config_path(base_config);
-    adopt_legacy_masque_identity(&shared)?;
-    let identity = config::load(&shared)?
-        .ok_or_else(|| AetherError::Other("there is no identity to export yet".into()))?;
+    let held: Vec<(&'static str, account::Identity)> = identity_slots(base_config)
+        .into_iter()
+        .filter_map(|(name, path)| config::peek(&path).map(|identity| (name, identity)))
+        .collect();
 
-    let secondary = derive_sibling_path(&shared, "secondary");
-    let inner = config::load(&secondary).ok().flatten();
+    let Some((_, first)) = held.first() else {
+        return Err(AetherError::Other(
+            "there is no identity to export yet".into(),
+        ));
+    };
 
     let mut out = String::new();
     out.push_str(&format!("version = {IDENTITY_EXPORT_VERSION}\n"));
-    out.push_str(&format!("device_id = {:?}\n\n", identity.device_id));
-    out.push_str("[identity]\n");
-    out.push_str(&config::to_text(&identity)?);
-    if let Some(inner) = inner {
-        out.push_str("\n[secondary]\n");
-        out.push_str(&config::to_text(&inner)?);
+    out.push_str(&format!("device_id = {:?}\n", first.device_id));
+    for (name, identity) in &held {
+        out.push_str(&format!("\n[{name}]\n"));
+        out.push_str(&config::to_text(identity)?);
     }
     Ok(out)
 }
@@ -591,39 +625,65 @@ pub fn import_identity(base_config: &str, payload: &str) -> Result<()> {
         AetherError::Other(format!("this is not a WhiteAesther identity file: {e}"))
     })?;
 
-    if envelope.version != IDENTITY_EXPORT_VERSION {
+    // Older formats are read, not refused: a backup is written once and
+    // restored much later, and the whole point of it is the moment when
+    // registering again is not an option. Only a format from the future is
+    // refused, because guessing at a shape this build has never seen and
+    // writing the result over a working identity is worse than saying no.
+    if envelope.version == 0 || envelope.version > IDENTITY_EXPORT_VERSION {
         return Err(AetherError::Other(format!(
             "this file was written by a different version of WhiteAesther (format {}, this build reads {IDENTITY_EXPORT_VERSION})",
             envelope.version
         )));
     }
 
-    let identity = config::parse(
-        &toml::to_string(&envelope.identity)
-            .map_err(|e| AetherError::Other(format!("this identity file is malformed: {e}")))?,
-    )?;
-    let secondary = match envelope.secondary {
-        Some(value) => Some(config::parse(&toml::to_string(&value).map_err(|e| {
-            AetherError::Other(format!("the second identity is malformed: {e}"))
-        })?)?),
-        None => None,
-    };
-
-    let shared = warp_config_path(base_config);
-    config::write_identity(&shared, &identity)?;
-    if let Some(secondary) = secondary {
-        config::write_identity(&derive_sibling_path(&shared, "secondary"), &secondary)?;
+    // Everything is parsed before a single byte is written, so a file that is
+    // half readable cannot leave the device half restored.
+    let carried = [
+        envelope.identity,
+        envelope.secondary,
+        envelope.masque,
+        envelope.masque_secondary,
+    ];
+    let mut ready: Vec<(String, account::Identity)> = Vec::new();
+    for ((name, path), value) in identity_slots(base_config).into_iter().zip(carried) {
+        let Some(value) = value else { continue };
+        let text = toml::to_string(&value)
+            .map_err(|e| AetherError::Other(format!("the {name} identity is malformed: {e}")))?;
+        ready.push((path, config::parse(&text)?));
     }
-    log::info!("[+] imported identity for device {}", identity.device_id);
+
+    if ready.is_empty() {
+        return Err(AetherError::Other(
+            "this file is a WhiteAesther identity backup but carries no identity".into(),
+        ));
+    }
+
+    for (path, identity) in &ready {
+        config::write_identity(path, identity)?;
+    }
+    log::info!(
+        "[+] imported {} identit{}, the first for device {}",
+        ready.len(),
+        if ready.len() == 1 { "y" } else { "ies" },
+        ready[0].1.device_id
+    );
     Ok(())
 }
 
 #[derive(serde::Deserialize)]
 struct ExportEnvelope {
     version: u32,
-    identity: toml::Value,
+    /// The WireGuard account. Named `identity` because format 1 named it that,
+    /// back when it was the only one a backup carried.
+    #[serde(default)]
+    identity: Option<toml::Value>,
     #[serde(default)]
     secondary: Option<toml::Value>,
+    #[serde(default)]
+    masque: Option<toml::Value>,
+    #[serde(default)]
+    masque_secondary: Option<toml::Value>,
 }
 
 pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepared> {
@@ -1972,23 +2032,158 @@ fn keep_saved_identity() -> bool {
     )
 }
 
+/// Serialises everything that can cost a Cloudflare registration.
+///
+/// One lock for all identity files rather than one per file, because what it
+/// guards is not a file -- it is the per-address registration quota behind
+/// them. Two provisionings that never touch the same file still spend the same
+/// allowance, and an address that has spent it is refused outright, for hours,
+/// on every version of this app the user might fall back to.
+///
+/// Held across the whole cycle: register, enrol, and the writes that record
+/// them. The app has a guard of its own, but it covers one preparation against
+/// another -- not a preparation against the run that follows a cancelled one,
+/// which is the pair that could actually overlap.
+fn provisioning_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+/// Every file beside `path` that holds an identity, `path` itself excluded.
+///
+/// Read through [`config::peek`], which does not set aside what it cannot
+/// parse. [`config::load`] would: the cache of the last working endpoint lives
+/// in this directory under a name of the same shape, and quarantining it for
+/// failing to be an identity would throw away a working cache on every connect.
+///
+/// Names that no longer end in `.toml` are skipped, which is what a quarantined
+/// file and a half-written temporary both look like.
+fn identity_siblings(path: &str) -> Vec<(String, account::Identity)> {
+    let dir_end = path
+        .rfind(|c| c == '/' || c == '\\')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let dir = if dir_end == 0 { "." } else { &path[..dir_end] };
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut found = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".toml") {
+            continue;
+        }
+        let sibling = if dir_end == 0 {
+            name
+        } else {
+            format!("{}{name}", &path[..dir_end])
+        };
+        if sibling == path {
+            continue;
+        }
+        if let Some(identity) = config::peek(&sibling) {
+            found.push((sibling, identity));
+        }
+    }
+    found
+}
+
+/// Where this device was enrolled for MASQUE, if it was enrolled anywhere else.
+///
+/// Enrolment is `PATCH /reg/{id}`, and it overwrites the same `key` field that
+/// registration filled with the Curve25519 public key. Cloudflare then holds no
+/// WireGuard key for the device at all, so every endpoint everywhere meets the
+/// key on disk with silence -- which is indistinguishable from a network that
+/// drops UDP, and sends the endpoint search off to blame the network for three
+/// minutes and then report it as dead.
+///
+/// The guard meant to catch this asked the WireGuard file whether it carried a
+/// certificate, and the enrolment that shipped happens on a *copy*: MASQUE
+/// adopts a WireGuard-only identity into its own file and enrols it there, so
+/// the WireGuard file goes on looking untouched for the rest of the install's
+/// life. The question has to be put to the directory, not to one file.
+///
+/// A certificate at all, rather than a usable one. An expired certificate still
+/// means the device's WireGuard key was overwritten; expiry says the MASQUE
+/// credential needs renewing, not that WireGuard came back.
+fn device_enrolled_elsewhere(config_path: &str, device_id: &str) -> Option<String> {
+    identity_siblings(config_path)
+        .into_iter()
+        .find(|(_, other)| other.device_id == device_id && !other.cert_pem.is_empty())
+        .map(|(path, _)| path)
+}
+
+/// Records an enrolment on every other file holding the same device.
+///
+/// So that the next read of that file can see from the file alone that the
+/// WireGuard key in it is not one Cloudflare recognises any more -- rather than
+/// finding out by searching several thousand endpoints that will never answer.
+///
+/// The certificate travels; the private key does not. What the mark has to
+/// carry is the fact of the enrolment, and that file is not the one that will
+/// present the certificate -- copying the secret into a second file would widen
+/// its reach for no use.
+///
+/// Best effort on purpose. This runs after an enrolment that has already
+/// succeeded, and failing to annotate a sibling must not fail the connect that
+/// earned it; [`device_enrolled_elsewhere`] reaches the same conclusion from
+/// the other direction if it does.
+fn record_enrolment_beside(config_path: &str, identity: &account::Identity) {
+    if identity.cert_pem.is_empty() {
+        return;
+    }
+    for (path, other) in identity_siblings(config_path) {
+        if other.device_id != identity.device_id || !other.cert_pem.is_empty() {
+            continue;
+        }
+        match config::save_masque_creds(&path, &identity.cert_pem, &[], identity.cert_issued_at) {
+            Ok(()) => log::info!(
+                "[!] {path} holds the same device, whose WireGuard key this enrolment revoked; \
+                 marked it so that protocol provisions an account of its own"
+            ),
+            Err(error) => log::warn!("[-] could not mark {path} as enrolled: {error}"),
+        }
+    }
+}
+
 async fn load_or_provision_warp(config_path: &str) -> Result<account::Identity> {
+    let _provisioning = provisioning_lock().lock().await;
+
     if let Some(identity) = config::load(config_path)? {
-        // A certificate on this identity means a MASQUE key was enrolled onto
-        // the same Cloudflare device, which replaced its WireGuard public key.
-        // Nothing recognises the key on disk any more, so every endpoint would
-        // meet it with silence and the search would blame the network. Left
-        // over from the release where the two protocols shared a file; MASQUE
-        // adopts this identity for itself, and WireGuard starts again.
-        if identity.has_masque_credentials() {
-            log::info!(
-                "[!] the identity in {config_path} was enrolled for MASQUE, which revokes its \
-                 WireGuard key; provisioning a separate wireguard account"
-            );
-            // Hand it to MASQUE before overwriting it. The certificate on it is
-            // valid and was paid for with a registration; losing it here would
-            // cost the user another one for no reason.
-            preserve_masque_identity(config_path, &identity)?;
+        // A certificate means a MASQUE key was enrolled onto this same
+        // Cloudflare device, which replaced its WireGuard public key. Nothing
+        // recognises the key on disk any more, so every endpoint would meet it
+        // with silence and the search would blame the network.
+        //
+        // Asked two ways, because the fact can be recorded in two places. On
+        // this file, from the release where both protocols shared one. And on
+        // another file holding the same device -- which is what an install that
+        // only ever ran WireGuard looks like after MASQUE adopted its identity
+        // and enrolled the copy. That second case is the one that shipped, and
+        // it left this file looking perfectly healthy.
+        let enrolled_here = !identity.cert_pem.is_empty();
+        let enrolled_elsewhere = device_enrolled_elsewhere(config_path, &identity.device_id);
+
+        if enrolled_here || enrolled_elsewhere.is_some() {
+            match &enrolled_elsewhere {
+                Some(other) => log::info!(
+                    "[!] the device in {config_path} was enrolled for MASQUE in {other}, which \
+                     revoked its WireGuard key; provisioning a separate wireguard account"
+                ),
+                None => log::info!(
+                    "[!] the identity in {config_path} was enrolled for MASQUE, which revoked its \
+                     WireGuard key; provisioning a separate wireguard account"
+                ),
+            }
+            if enrolled_here {
+                // Hand it to MASQUE before overwriting it. The certificate on it
+                // is valid and was paid for with a registration; losing it here
+                // would cost the user another one for no reason.
+                preserve_masque_identity(config_path, &identity)?;
+            }
         } else {
             log::info!("[+] loaded existing warp identity from {config_path}");
             let identity = adopt_team_profile(identity).await;
@@ -2000,6 +2195,11 @@ async fn load_or_provision_warp(config_path: &str) -> Result<account::Identity> 
     }
 
     let identity = provision_account().await?;
+    // Written before anything else is asked of the network. Cloudflare has
+    // already counted this registration against the address whether or not the
+    // rest of the connect succeeds, so the one thing that must not happen is
+    // reaching the next await without it on disk.
+    config::save(config_path, &identity)?;
     let identity = adopt_team_profile(identity).await;
     config::save(config_path, &identity)?;
     log::info!("[+] provisioned and saved new warp identity to {config_path}");
@@ -2016,15 +2216,29 @@ fn preserve_masque_identity(config_path: &str, identity: &account::Identity) -> 
     if masque == config_path || config::load(&masque)?.is_some() {
         return Ok(());
     }
+    // A certificate with no private key beside it is a mark rather than a
+    // credential -- what record_enrolment_beside writes on a file whose device
+    // was enrolled somewhere else. Handing that to MASQUE would give it an
+    // identity it cannot present and a re-enrolment to pay for.
+    if identity.key_pem.is_empty() {
+        return Ok(());
+    }
     log::info!("[+] keeping the enrolled identity for MASQUE at {masque}");
     config::save(&masque, identity)
 }
 
 async fn load_or_provision_masque(config_path: &str) -> Result<account::Identity> {
+    let _provisioning = provisioning_lock().lock().await;
+
     adopt_legacy_masque_identity(config_path)?;
     if let Some(identity) = config::load(config_path)? {
         log::info!("[+] loaded existing masque identity from {config_path}");
         let refused = if identity.has_masque_credentials() {
+            // An install that was enrolled by a build which did not record it
+            // is repaired here, on the first MASQUE connect after updating,
+            // without the user being asked to do anything. Cheap to repeat: it
+            // writes only where the mark is missing.
+            record_enrolment_beside(config_path, &identity);
             let identity = adopt_team_profile(identity).await;
             if !identity.refused {
                 config::save(config_path, &identity)?;
@@ -2042,6 +2256,7 @@ async fn load_or_provision_masque(config_path: &str) -> Result<account::Identity
                         ..identity
                     };
                     config::save(config_path, &identity)?;
+                    record_enrolment_beside(config_path, &identity);
                     return Ok(identity);
                 }
                 Err(AetherError::IdentityRefused(reason)) => {
@@ -2063,6 +2278,15 @@ async fn load_or_provision_masque(config_path: &str) -> Result<account::Identity
 
     log::info!("[+] no masque identity found; provisioning dedicated masque account");
     let identity = provision_account().await?;
+    // Written before the enrolment, which is a second network call and the
+    // longer of the two. Registration is the expensive half -- Cloudflare
+    // counts it against this address the moment it answers -- and enrolling is
+    // resumable: the branch above picks up a saved identity with no certificate
+    // and enrols it. Without this line, an enrolment that failed or was
+    // cancelled threw the registration away and the next attempt bought
+    // another, which is how an address spends its allowance without ever
+    // keeping an identity.
+    config::save(config_path, &identity)?;
     let enrollment = account::ensure_masque_enrolled(&identity).await?;
     let identity = account::Identity {
         cert_pem: enrollment.cert_pem,
@@ -2072,6 +2296,7 @@ async fn load_or_provision_masque(config_path: &str) -> Result<account::Identity
     };
     let identity = adopt_team_profile(identity).await;
     config::save(config_path, &identity)?;
+    record_enrolment_beside(config_path, &identity);
     log::info!("[+] provisioned and saved new masque identity to {config_path}");
     Ok(identity)
 }
@@ -4279,6 +4504,116 @@ mod identity_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The backup the default install could not take.
+    ///
+    /// The transport starts on MASQUE, so an install that was never switched to
+    /// WireGuard has only `aether-masque.toml` -- and format 1 looked at
+    /// `aether.toml` alone and reported that there was nothing to export. The
+    /// one defence against losing a registration was missing from exactly the
+    /// configuration almost everybody runs.
+    #[test]
+    fn an_install_that_has_only_ever_run_masque_can_be_backed_up() {
+        isolated();
+        let dir = scratch("export-masque-only");
+        let base = dir.join("aether.toml");
+        let base = base.to_str().unwrap();
+        config::save(&masque_config_path(base), &sample_identity("masque-one")).unwrap();
+
+        let payload = export_identity(base).expect("a masque install has an identity to export");
+
+        let target = scratch("import-masque-only").join("aether.toml");
+        let target = target.to_str().unwrap();
+        import_identity(target, &payload).unwrap();
+
+        assert_eq!(
+            "masque-one",
+            config::load(&masque_config_path(target))
+                .unwrap()
+                .expect("the masque identity did not travel")
+                .device_id,
+        );
+        assert!(
+            config::peek(target).is_none(),
+            "a wireguard file was invented out of a masque backup",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// All four accounts travel, and land back in their own files.
+    #[test]
+    fn every_account_an_install_holds_travels_in_the_backup() {
+        isolated();
+        let dir = scratch("export-all");
+        let base = dir.join("aether.toml");
+        let base = base.to_str().unwrap();
+        let masque = masque_config_path(base);
+
+        config::save(base, &sample_identity("warp-outer")).unwrap();
+        config::save(
+            &derive_sibling_path(base, "secondary"),
+            &sample_identity("warp-inner"),
+        )
+        .unwrap();
+        config::save(&masque, &sample_identity("masque-outer")).unwrap();
+        config::save(
+            &derive_sibling_path(&masque, "secondary"),
+            &sample_identity("masque-inner"),
+        )
+        .unwrap();
+
+        let payload = export_identity(base).unwrap();
+
+        let target = scratch("import-all").join("aether.toml");
+        let target = target.to_str().unwrap();
+        import_identity(target, &payload).unwrap();
+
+        let target_masque = masque_config_path(target);
+        for (path, expected) in [
+            (target.to_string(), "warp-outer"),
+            (derive_sibling_path(target, "secondary"), "warp-inner"),
+            (target_masque.clone(), "masque-outer"),
+            (
+                derive_sibling_path(&target_masque, "secondary"),
+                "masque-inner",
+            ),
+        ] {
+            assert_eq!(
+                expected,
+                config::load(&path)
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("{expected} did not travel"))
+                    .device_id,
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A backup written by an older build still restores.
+    ///
+    /// Someone exported before updating precisely because they were about to
+    /// reinstall. Refusing their file on the way back in would waste the
+    /// registration the backup existed to carry.
+    #[test]
+    fn a_backup_in_the_older_format_is_still_read() {
+        isolated();
+        let dir = scratch("import-v1");
+        let target = dir.join("aether.toml");
+        let target = target.to_str().unwrap();
+
+        let mut payload = String::from("version = 1\ndevice_id = \"old-backup\"\n\n[identity]\n");
+        payload.push_str(&config::to_text(&sample_identity("old-backup")).unwrap());
+
+        import_identity(target, &payload).expect("a format 1 backup must still import");
+        assert_eq!(
+            "old-backup",
+            config::load(target).unwrap().unwrap().device_id,
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn an_install_with_no_identity_says_so_rather_than_exporting_nothing() {
         isolated();
@@ -4321,9 +4656,10 @@ mod identity_tests {
         let base = base.to_str().unwrap();
         config::save(base, &sample_identity("current")).unwrap();
 
-        let payload = export_identity(base)
-            .unwrap()
-            .replace("version = 1", "version = 99");
+        let payload = export_identity(base).unwrap().replace(
+            &format!("version = {IDENTITY_EXPORT_VERSION}"),
+            "version = 99",
+        );
         let error = import_identity(base, &payload).unwrap_err().to_string();
 
         // Guessing at an unknown shape and writing the result over a working
@@ -4559,6 +4895,151 @@ mod identity_tests {
                 "masque and wireguard identities must live in separate files",
             );
         }
+    }
+
+    /// The bug that broke 1.8, in the form the code can check.
+    ///
+    /// Separate files were not enough. An install that had only ever run
+    /// WireGuard has its identity *copied* into MASQUE's file and enrolled
+    /// there, and the WireGuard file is never told -- so it goes on offering a
+    /// key Cloudflare threw away, every endpoint answers with silence, and the
+    /// search reports the network as dead. Downgrading does not help: the
+    /// damage is on the account, and the older build reads the same file and
+    /// reaches the same wrong conclusion.
+    #[test]
+    fn a_device_enrolled_in_another_file_is_not_a_wireguard_identity_any_more() {
+        isolated();
+        let dir = scratch("enrolled-elsewhere");
+        let warp = dir.join("aether.toml");
+        let warp = warp.to_str().unwrap();
+        let masque = masque_config_path(warp);
+
+        // What an install that only ever ran WireGuard looks like once MASQUE
+        // has adopted its identity: the same device in both files, the
+        // certificate only on MASQUE's.
+        let mut wireguard_only = sample_identity("device-shared");
+        wireguard_only.cert_pem = Vec::new();
+        wireguard_only.key_pem = Vec::new();
+        wireguard_only.cert_issued_at = 0;
+        config::save(warp, &wireguard_only).unwrap();
+        config::save(&masque, &sample_identity("device-shared")).unwrap();
+
+        assert_eq!(
+            Some(masque.clone()),
+            device_enrolled_elsewhere(warp, "device-shared"),
+            "the enrolment on the sibling has to be found from the wireguard file",
+        );
+
+        // And a different device in the same directory is somebody else's
+        // enrolment, which says nothing about this one.
+        assert_eq!(
+            None,
+            device_enrolled_elsewhere(warp, "some-other-device"),
+            "an unrelated device must not be read as this one being revoked",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An expired certificate still means the WireGuard key is gone.
+    ///
+    /// The guard used to ask `has_masque_credentials`, which is false once the
+    /// certificate is old enough to need renewing. Expiry is a statement about
+    /// the MASQUE credential, not about the WireGuard key that enrolment
+    /// overwrote a year earlier -- and reading it as one would hand the dead
+    /// key back to the endpoint search.
+    #[test]
+    fn an_expired_certificate_still_marks_the_device_as_enrolled() {
+        isolated();
+        let dir = scratch("expired-mark");
+        let warp = dir.join("aether.toml");
+        let warp = warp.to_str().unwrap();
+        let masque = masque_config_path(warp);
+
+        let mut long_ago = sample_identity("device-old");
+        long_ago.cert_issued_at = 1;
+        config::save(&masque, &long_ago).unwrap();
+
+        assert!(
+            !long_ago.has_masque_credentials(),
+            "this certificate is meant to be past renewal",
+        );
+        assert_eq!(
+            Some(masque),
+            device_enrolled_elsewhere(warp, "device-old"),
+            "an expired certificate is still evidence of an enrolment",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The mark records the enrolment without spreading the private key.
+    #[test]
+    fn marking_a_sibling_writes_the_certificate_and_not_the_secret() {
+        isolated();
+        let dir = scratch("mark-sibling");
+        let warp = dir.join("aether.toml");
+        let warp = warp.to_str().unwrap();
+        let masque = masque_config_path(warp);
+
+        let mut wireguard_only = sample_identity("device-shared");
+        wireguard_only.cert_pem = Vec::new();
+        wireguard_only.key_pem = Vec::new();
+        wireguard_only.cert_issued_at = 0;
+        config::save(warp, &wireguard_only).unwrap();
+
+        let enrolled = sample_identity("device-shared");
+        config::save(&masque, &enrolled).unwrap();
+        record_enrolment_beside(&masque, &enrolled);
+
+        let marked = config::load(warp)
+            .unwrap()
+            .expect("the file is still there");
+        assert!(
+            !marked.cert_pem.is_empty(),
+            "the wireguard file was not marked, so it will be used again",
+        );
+        assert!(
+            marked.key_pem.is_empty(),
+            "the private key does not belong in a file that will never present it",
+        );
+        assert_eq!(
+            [3u8; 32], marked.wg_private_key,
+            "marking must not disturb the rest of the file",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A sweep of the directory must not eat what is not an identity.
+    ///
+    /// `config::load` sets aside anything it cannot parse, and the cache of the
+    /// last working endpoint lives right beside these files. Reading the
+    /// directory with it would quarantine that cache on every connect, so the
+    /// endpoint found last time would be searched for again from scratch.
+    #[test]
+    fn a_cache_beside_the_identities_is_left_alone() {
+        isolated();
+        let dir = scratch("sweep-safety");
+        let warp = dir.join("aether.toml");
+        let warp = warp.to_str().unwrap();
+        config::save(warp, &sample_identity("device-one")).unwrap();
+
+        let cache = dir.join("aether-lastconn.toml");
+        std::fs::write(
+            &cache,
+            "peer = \"162.159.192.1:2408\"\nprofile = \"firewall\"\n",
+        )
+        .unwrap();
+
+        let siblings = identity_siblings(warp);
+        assert!(
+            siblings.is_empty(),
+            "a cache was read as an identity: {siblings:?}",
+        );
+        assert!(cache.exists(), "the cache was quarantined by a sweep");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
