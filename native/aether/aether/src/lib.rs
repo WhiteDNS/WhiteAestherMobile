@@ -5818,9 +5818,11 @@ mod enrollment_tests {
         let base = dir.join("aether.toml");
         let base = base.to_str().unwrap();
 
-        // An install that has only ever run WireGuard.
-        let warp_path = warp_config_path(base);
-        let first = load_or_provision_warp(&warp_path)
+        // An install that has only ever run WireGuard. Under the store this is
+        // the slot rather than the file, which is the whole point of it -- and
+        // the scenario below is the one the store makes unrepresentable.
+        let warp_site = identity_site(base, identity::Slot::Wireguard);
+        let first = load_or_provision_warp(&warp_site)
             .await
             .expect("the first registration");
         eprintln!("[test] wireguard device {}", first.device_id);
@@ -5832,8 +5834,8 @@ mod enrollment_tests {
         // The user taps a MASQUE profile. It adopts that identity rather than
         // paying for a second, and enrolling the adopted copy is what revokes
         // the WireGuard key on the device both files describe.
-        let masque_path = masque_config_path(base);
-        let masque = load_or_provision_masque(&masque_path)
+        let masque_site = identity_site(base, identity::Slot::Masque);
+        let masque = load_or_provision_masque(&masque_site)
             .await
             .expect("the enrolment");
         assert_eq!(
@@ -5853,7 +5855,7 @@ mod enrollment_tests {
         // Back to WireGuard. In 1.8.0 this handed the revoked identity straight
         // back, and the endpoint search spent three minutes being met with
         // silence before reporting the network as dead.
-        let second = load_or_provision_warp(&warp_path)
+        let second = load_or_provision_warp(&warp_site)
             .await
             .expect("the replacement registration");
         eprintln!("[test] replacement device {}", second.device_id);
@@ -6500,7 +6502,7 @@ mod masque_reachability_tests {
         let base = base.to_str().unwrap();
 
         std::env::set_var("AETHER_MASQUE_HTTP2", "1");
-        let identity = load_or_provision_masque(&masque_config_path(base))
+        let identity = load_or_provision_masque(&identity_site(base, identity::Slot::Masque))
             .await
             .expect("a masque identity");
         eprintln!("[test] identity device {}", identity.device_id);
