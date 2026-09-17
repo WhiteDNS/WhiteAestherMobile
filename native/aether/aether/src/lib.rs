@@ -1424,8 +1424,19 @@ async fn assigned_masque_peers(identity: &account::Identity) -> Vec<SocketAddr> 
         peers.push(stored);
     }
 
-    match account::fetch_device(&identity.device_id, &identity.access_token).await {
-        Ok(reg) => {
+    // Bounded, because this runs on the path to a connect. Asking costs a round
+    // trip to an API that some of these networks black-hole, and a stall here
+    // would delay the search that still works -- so it gets a few seconds and
+    // then we get on with it.
+    let asked = tokio::time::timeout(
+        ASSIGNED_ENDPOINT_LOOKUP,
+        account::fetch_device(&identity.device_id, &identity.access_token),
+    )
+    .await;
+
+    match asked {
+        Err(_) => log::debug!("[-] no answer in time about which endpoint is assigned"),
+        Ok(Ok(reg)) => {
             if let Some(current) = on_443(&account::endpoint_from(&reg)) {
                 if !peers.contains(&current) {
                     if peers.is_empty() {
@@ -1437,11 +1448,17 @@ async fn assigned_masque_peers(identity: &account::Identity) -> Vec<SocketAddr> 
                 }
             }
         }
-        Err(error) => log::debug!("[-] could not ask which endpoint is assigned: {error}"),
+        Ok(Err(error)) => log::debug!("[-] could not ask which endpoint is assigned: {error}"),
     }
 
     peers
 }
+
+/// How long the assigned-endpoint question may take before it is abandoned.
+///
+/// Short on purpose: it is an optimisation on the way to a connect, and the
+/// search behind it works without an answer.
+const ASSIGNED_ENDPOINT_LOOKUP: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// How one MASQUE hop is sized, and what it may skip.
 ///
