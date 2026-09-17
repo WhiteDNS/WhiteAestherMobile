@@ -133,7 +133,7 @@ pub async fn masque_http_ping(p: &MasquePingParams, timeout: Duration) -> Result
                 local_ipv4: p.local_ipv4,
                 quiet: true,
                 pin_endpoint: true,
-                expected_pins: crate::consts::MASQUE_PINS
+                expected_pins: crate::consts::masque_pins()
                     .iter()
                     .map(|p| p.to_vec())
                     .collect(),
