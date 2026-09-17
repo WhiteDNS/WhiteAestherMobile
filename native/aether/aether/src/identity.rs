@@ -8,8 +8,6 @@
 //! every endpoint answers with silence. 1.8.1 catches that by sweeping the
 //! directory; this removes the shape that allows it, by giving a device exactly
 //! one place to be.
-//!
-//! See `docs/IDENTITY_STORE.md` for the design and the migration.
 
 use std::collections::BTreeMap;
 
