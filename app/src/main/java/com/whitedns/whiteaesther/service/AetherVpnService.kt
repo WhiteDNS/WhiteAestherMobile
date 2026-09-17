@@ -158,6 +158,16 @@ class AetherVpnService : VpnService() {
     private var hopAttempt: Long = 0
 
     /**
+     * What the engine said the last time it failed during this session.
+     *
+     * Kept so the next lane can lead with the rung that answers it. The engine
+     * now names a gateway demanding an Encrypted Client Hello rather than
+     * reporting a stop with no reason, and that name is only worth having if
+     * something acts on it.
+     */
+    private var lastEngineFailure: String? = null
+
+    /**
      * The watchers of the current attempt's hops.
      *
      * Cancelled when the next attempt begins. Without that they accumulate one
@@ -412,6 +422,7 @@ class AetherVpnService : VpnService() {
                 generation += 1
                 newHopAttempt()
                 reconnectAttempt = 0
+                lastEngineFailure = null
                 // A new connect is a new search, planned for whichever network
                 // the phone is on now.
                 autoSteps = emptyList()
@@ -1380,6 +1391,7 @@ class AetherVpnService : VpnService() {
             // whether this one carries it.
             provenFraming = rememberedTransport()?.takeIf { it == "h2" || it == "h3" },
             onMobileData = NetworkKey.isCellular(autoNetworkKey),
+            lastEngineFailure = lastEngineFailure,
             engineFailedHere = RouteMemory.engineFailedRecently(
                 preferences.getString(AUTO_ROUTES, null),
                 autoNetworkKey,
@@ -1618,6 +1630,7 @@ class AetherVpnService : VpnService() {
         try {
             val port = client.start(AutoPlanner.budgetMs(route)).getOrElse { error ->
                 EngineLog.record(LogLevel.WARN, "auto", "${route.wireName}: ${error.message}")
+                if (route.racesEngine) lastEngineFailure = error.message
                 return null
             }
             if (sessionGeneration != generation) return null
@@ -1676,7 +1689,13 @@ class AetherVpnService : VpnService() {
             // Full is the user's own depth -- balanced unless they chose
             // otherwise; quick is the engine's quickest.
             val depth = if (route.fullSearch) json.optString("scanMode", "balanced") else "turbo"
-            json.put("transport", transport).put("scanMode", depth).toString()
+            json.put("transport", transport).put("scanMode", depth)
+            // A rung that carries a tactic sets it; one that does not leaves
+            // the user's own choice alone, so turning something on by hand is
+            // still worth doing and is not quietly overridden on every rung.
+            route.fragmentTls?.let { json.put("fragmentTls", it) }
+            route.encryptedHello?.let { json.put("encryptedHello", it) }
+            json.toString()
         }.getOrDefault(base)
     }
 

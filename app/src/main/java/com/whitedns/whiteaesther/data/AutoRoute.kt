@@ -21,6 +21,22 @@ enum class AutoRoute(
     val engineTransport: String? = null,
     /** For the engine racing as a carrier: the user's search depth rather than the quick one. */
     val fullSearch: Boolean = false,
+    /**
+     * Split the TLS ClientHello, or null to leave the user's setting alone.
+     *
+     * A tactic, not a framing. Inspection that blocks on the SNI generally reads
+     * only the first segment, so splitting it is what gets a handshake past a
+     * network filtering by hostname -- and it applies to the TCP framing, which
+     * is the one that has a ClientHello to split.
+     */
+    val fragmentTls: Boolean? = null,
+    /**
+     * Ask for an Encrypted Client Hello, or null to leave the user's setting.
+     *
+     * The other half of the same problem: fragmentation hides the SNI from an
+     * inspector that reassembles nothing, ECH hides it from one that does.
+     */
+    val encryptedHello: Boolean? = null,
 ) {
     /**
      * The engine on the interface, as a session carried by Aether alone has
@@ -36,7 +52,30 @@ enum class AutoRoute(
     // it takes to search that one.
     AETHER_H3_QUICK("aether-h3-quick", Carrier.AETHER, engineTransport = "h3"),
     AETHER_H2_QUICK("aether-h2-quick", Carrier.AETHER, engineTransport = "h2"),
-    AETHER_H3_FULL("aether-h3-full", Carrier.AETHER, engineTransport = "h3", fullSearch = true),
+
+    // The same two framings, carrying the tactic that framing has.
+    //
+    // These replace a second pass at greater search depth, and the trade is
+    // deliberate. Depth buys a larger share of a pool of addresses; since the
+    // engine started trying the endpoint Cloudflare assigns before searching at
+    // all, that pool is rarely where the answer is. What was untried was the
+    // handshake itself -- and the settings that change it sat in Advanced,
+    // waiting for a user to guess, which is exactly the decision Automatic
+    // exists to take away from them.
+    AETHER_H2_FRAGMENT(
+        "aether-h2-fragment",
+        Carrier.AETHER,
+        engineTransport = "h2",
+        fragmentTls = true,
+    ),
+    AETHER_H3_ECH(
+        "aether-h3-ech",
+        Carrier.AETHER,
+        engineTransport = "h3",
+        encryptedHello = true,
+    ),
+
+    /** One deep search, kept for the network whose answer really is in the pool. */
     AETHER_H2_FULL("aether-h2-full", Carrier.AETHER, engineTransport = "h2", fullSearch = true),
 
     /**
@@ -117,6 +156,15 @@ data class AutoOptions(
     val provenFraming: String? = null,
     /** On mobile data rather than Wi-Fi or a cable. */
     val onMobileData: Boolean = false,
+    /**
+     * What the engine said the last time it failed on this network.
+     *
+     * Read for one purpose: a failure that names its own remedy should move the
+     * rung carrying that remedy to the front. Everything else about it is left
+     * alone -- guessing from a message is how a planner ends up with rules
+     * nobody can predict.
+     */
+    val lastEngineFailure: String? = null,
     /**
      * The engine went first on this network recently and did not connect.
      *
@@ -236,23 +284,45 @@ object AutoPlanner {
         // is in the lane rather than only in the picker, because the network it
         // is for is one where every single-hop lane above has already failed,
         // and nobody reaches into Advanced to find it.
-        return if (h3First) {
-            listOf(
-                AutoRoute.AETHER_H3_QUICK,
-                AutoRoute.AETHER_H2_QUICK,
-                AutoRoute.AETHER_H3_FULL,
-                AutoRoute.AETHER_H2_FULL,
-                AutoRoute.AETHER_MIM,
-            )
+        // Plain first, in the order this network suggests; then the same two
+        // framings carrying the tactic that framing has; then one deep search;
+        // then the nested tunnel. Each rung changes one thing, so whatever
+        // answers says which thing mattered.
+        val plain = if (h3First) {
+            listOf(AutoRoute.AETHER_H3_QUICK, AutoRoute.AETHER_H2_QUICK)
         } else {
-            listOf(
-                AutoRoute.AETHER_H2_QUICK,
-                AutoRoute.AETHER_H3_QUICK,
-                AutoRoute.AETHER_H2_FULL,
-                AutoRoute.AETHER_H3_FULL,
-                AutoRoute.AETHER_MIM,
-            )
+            listOf(AutoRoute.AETHER_H2_QUICK, AutoRoute.AETHER_H3_QUICK)
         }
+        val tactics = if (h3First) {
+            listOf(AutoRoute.AETHER_H3_ECH, AutoRoute.AETHER_H2_FRAGMENT)
+        } else {
+            listOf(AutoRoute.AETHER_H2_FRAGMENT, AutoRoute.AETHER_H3_ECH)
+        }
+        val lane = plain + tactics + listOf(AutoRoute.AETHER_H2_FULL, AutoRoute.AETHER_MIM)
+        return preferredFor(lane, options.lastEngineFailure)
+    }
+
+    /**
+     * The lane, reordered by what the last failure actually said.
+     *
+     * A gateway that demands an Encrypted Client Hello says so in the close it
+     * sends -- TLS alert 121, which the engine now names rather than reporting
+     * as a stop with no reason. Moving the rung that carries ECH to the front
+     * is the whole point of having the reason: without it Automatic alternates
+     * framings, and the one thing that would have worked sits fourth in a
+     * queue with a seventy-five second budget in front of it.
+     */
+    fun preferredFor(lane: List<AutoRoute>, failure: String?): List<AutoRoute> {
+        val wanted = when {
+            failure == null -> return lane
+            failure.contains("ECH", ignoreCase = true) -> AutoRoute.AETHER_H3_ECH
+            failure.contains("unrecognised name", ignoreCase = true) ||
+                failure.contains("unrecognized name", ignoreCase = true) ->
+                AutoRoute.AETHER_H2_FRAGMENT
+            else -> return lane
+        }
+        if (!lane.contains(wanted) || lane.firstOrNull() == wanted) return lane
+        return listOf(wanted) + lane.filterNot { it == wanted }
     }
 
     /**
@@ -290,7 +360,10 @@ object AutoPlanner {
     fun budgetMs(route: AutoRoute): Long = when (route) {
         AutoRoute.AETHER -> ENGINE_QUICK_MS
         AutoRoute.AETHER_H3_QUICK, AutoRoute.AETHER_H2_QUICK -> 75_000L
-        AutoRoute.AETHER_H3_FULL, AutoRoute.AETHER_H2_FULL -> 180_000L
+        // A tactic rung is a different handshake, not a deeper search, so it
+        // costs what a quick rung costs.
+        AutoRoute.AETHER_H2_FRAGMENT, AutoRoute.AETHER_H3_ECH -> 75_000L
+        AutoRoute.AETHER_H2_FULL -> 180_000L
         // An outer tunnel, then up to six inner handshakes at twelve seconds
         // each. The search for the outer edge is the quick one, so this is
         // mostly the inner tries.

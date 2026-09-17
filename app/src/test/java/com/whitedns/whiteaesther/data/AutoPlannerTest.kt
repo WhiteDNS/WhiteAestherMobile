@@ -14,6 +14,103 @@ class AutoPlannerTest {
         engineCanSearchDeeper = true,
     )
 
+    /**
+     * The lane varies the handshake, not only the framing.
+     *
+     * Every rung used to differ in framing or search depth. Depth buys a larger
+     * share of an address pool, and since the engine started trying the endpoint
+     * Cloudflare assigns before searching, that pool is rarely where the answer
+     * is. What was never tried was the handshake -- and the settings that change
+     * it sat in Advanced waiting for a user to guess, which is the decision
+     * Automatic exists to take away.
+     */
+    @Test
+    fun theEngineLaneTriesTacticsAndNotOnlyFramings() {
+        val lane = AutoPlanner.aetherLane(everything)
+
+        assertTrue(
+            "no rung carries fragmentation: $lane",
+            lane.any { it.fragmentTls == true },
+        )
+        assertTrue(
+            "no rung carries ECH: $lane",
+            lane.any { it.encryptedHello == true },
+        )
+        // Plain first: a network that needs nothing should not pay for a tactic.
+        assertEquals(null, lane[0].fragmentTls)
+        assertEquals(null, lane[0].encryptedHello)
+        // And the nested tunnel stays last, being the slowest thing here.
+        assertEquals(AutoRoute.AETHER_MIM, lane.last())
+    }
+
+    /**
+     * A rung that carries no tactic leaves the user's own setting alone.
+     *
+     * Someone who turned fragmentation on by hand has said something, and a
+     * planner that overwrote it on every rung would be answering a question
+     * they had already answered.
+     */
+    @Test
+    fun aRungWithoutATacticDoesNotOverrideTheUsersChoice() {
+        val lane = AutoPlanner.aetherLane(everything)
+        val plain = lane.first()
+        assertEquals(null, plain.fragmentTls)
+        assertEquals(null, plain.encryptedHello)
+    }
+
+    /**
+     * A failure that names its own remedy moves that rung to the front.
+     *
+     * A gateway demanding an Encrypted Client Hello says so -- TLS alert 121,
+     * which the engine now names instead of reporting a stop with no reason.
+     * Without acting on it, the rung that would have worked sits fourth behind
+     * three budgets.
+     */
+    @Test
+    fun aGatewayAskingForEchIsAnsweredWithTheEchRung() {
+        val blind = AutoPlanner.aetherLane(everything)
+        assertTrue(blind.first() != AutoRoute.AETHER_H3_ECH)
+
+        val told = AutoPlanner.aetherLane(
+            everything.copy(
+                lastEngineFailure =
+                    "ech: the gateway requires an ECH configuration and refused the one sent",
+            ),
+        )
+        assertEquals(AutoRoute.AETHER_H3_ECH, told.first())
+        // Reordered, not rewritten: nothing is lost from the lane.
+        assertEquals(blind.toSet(), told.toSet())
+        assertEquals(blind.size, told.size)
+    }
+
+    /**
+     * A failure that names nothing changes nothing.
+     *
+     * Guessing from a message is how a planner acquires rules nobody can
+     * predict, so only the failures that name a remedy move anything.
+     */
+    @Test
+    fun anOrdinaryFailureLeavesTheLaneAlone() {
+        val plain = AutoPlanner.aetherLane(everything)
+        val after = AutoPlanner.aetherLane(
+            everything.copy(lastEngineFailure = "prober: no clean endpoint found"),
+        )
+        assertEquals(plain, after)
+    }
+
+    /**
+     * Adding tactics did not make the worst case worse.
+     *
+     * A tactic rung is a different handshake, not a deeper search, so it is
+     * priced like a quick one -- and it replaced a second full search rather
+     * than being added beside it.
+     */
+    @Test
+    fun theEngineLaneCostsNoMoreThanItUsedTo() {
+        val total = AutoPlanner.aetherLane(everything).sumOf { AutoPlanner.budgetMs(it) }
+        assertTrue("the lane grew to ${total / 1000}s", total <= 690_000L)
+    }
+
     @Test
     fun aNewPhoneRacesEverythingFromTheTap() {
         val plan = AutoPlanner.plan(null, everything)
@@ -92,11 +189,18 @@ class AutoPlannerTest {
     fun aetherRacesInBothFramingsQuickFirst() {
         // The log that prompted this: a Wi-Fi network that carried QUIC and
         // not TCP, where 1.6.0 tried only H2 before giving up on Aether.
+        //
+        // Both framings plain first, then the tactic each framing has, then one
+        // deep search, then the nested tunnel. The second pass at greater depth
+        // became a pass at a different handshake: since the engine tries the
+        // endpoint Cloudflare assigns before searching, depth is rarely where
+        // the answer is and the handshake was never varied at all.
         assertEquals(
             listOf(
                 AutoRoute.AETHER_H3_QUICK,
                 AutoRoute.AETHER_H2_QUICK,
-                AutoRoute.AETHER_H3_FULL,
+                AutoRoute.AETHER_H3_ECH,
+                AutoRoute.AETHER_H2_FRAGMENT,
                 AutoRoute.AETHER_H2_FULL,
                 AutoRoute.AETHER_MIM,
             ),
@@ -246,7 +350,7 @@ class AutoPlannerTest {
         // and the connect after. 1.6.0 cut a 300 s thorough search off at
         // 180 s, so its last step could never find anything.
         assertTrue(AutoPlanner.budgetMs(AutoRoute.AETHER_H3_QUICK) >= 60_000L)
-        assertTrue(AutoPlanner.budgetMs(AutoRoute.AETHER_H3_FULL) >= 150_000L)
+        assertTrue(AutoPlanner.budgetMs(AutoRoute.AETHER_H2_FULL) >= 150_000L)
         assertTrue(AutoPlanner.ENGINE_REMEMBERED_MS >= 150_000L)
         // tunnel-core's own window, which a cold Psiphon needs.
         assertTrue(AutoPlanner.budgetMs(AutoRoute.PSIPHON) >= 300_000L)
