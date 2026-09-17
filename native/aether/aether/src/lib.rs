@@ -1363,12 +1363,84 @@ async fn select_embedded_peer(
         }
     }
 
+    // The endpoint Cloudflare assigned this device, before any searching.
+    //
+    // It is in every registration answer -- `config.peers[0].endpoint` -- and
+    // until now it was read, stored, and then used only by Zero Trust. So a
+    // consumer account ignored the one address the server had just named and
+    // brute-forced three thousand candidates instead: sixteen at a time, six
+    // seconds each, a hundred and twenty second budget. That is roughly a tenth
+    // of the pool, which is why MASQUE took minutes when it worked at all,
+    // while WireGuard -- which does have a documented-anchor pass -- connects in
+    // about three seconds.
+    //
+    // Measured against a live account: the assigned endpoint answered in 253ms
+    // over H2 and 543ms over QUIC, while an address from the hard-coded pool
+    // refused every protocol.
+    for peer in assigned_masque_peers(identity).await {
+        if quick_verify_masque_peer(identity, peer).await {
+            log::info!("[+] the endpoint Cloudflare assigned this device answered: {peer}");
+            return Ok(peer);
+        }
+        log::info!("[-] the assigned endpoint {peer} did not answer");
+    }
+
     hunt_masque_peer(
         identity,
         &config.scan_mode,
         prober::IpScan::parse(&config.ip_scan),
     )
     .await
+}
+
+/// The MASQUE endpoints Cloudflare has named for this device, in order.
+///
+/// Two of them, because the answer moves. The address stored at registration is
+/// free to try and is usually right; Cloudflare also reassigns a device between
+/// edges, and `refresh_profile` has always had a line for noticing it. Measured
+/// on one account minutes apart: registration said 162.159.192.2 and the device
+/// record said 162.159.198.2.
+///
+/// So the stored one goes first because it costs nothing, and the current one
+/// is asked for only when that fails -- one API call, skipped silently when it
+/// cannot be answered, because the search still works afterwards. Slowly, which
+/// is the whole reason this exists.
+async fn assigned_masque_peers(identity: &account::Identity) -> Vec<SocketAddr> {
+    fn on_443(host: &str) -> Option<SocketAddr> {
+        let host = host.trim();
+        if host.is_empty() {
+            return None;
+        }
+        let candidate = if host.contains(':') && !host.starts_with('[') {
+            format!("[{host}]:443")
+        } else {
+            format!("{host}:443")
+        };
+        candidate.parse::<SocketAddr>().ok()
+    }
+
+    let mut peers: Vec<SocketAddr> = Vec::new();
+    if let Some(stored) = on_443(&identity.assigned_endpoint) {
+        peers.push(stored);
+    }
+
+    match account::fetch_device(&identity.device_id, &identity.access_token).await {
+        Ok(reg) => {
+            if let Some(current) = on_443(&account::endpoint_from(&reg)) {
+                if !peers.contains(&current) {
+                    if peers.is_empty() {
+                        log::info!("[+] Cloudflare names {current} for this device");
+                    } else {
+                        log::info!("[+] Cloudflare has moved this device to {current}");
+                    }
+                    peers.push(current);
+                }
+            }
+        }
+        Err(error) => log::debug!("[-] could not ask which endpoint is assigned: {error}"),
+    }
+
+    peers
 }
 
 /// How one MASQUE hop is sized, and what it may skip.
@@ -5723,12 +5795,55 @@ mod masque_reachability_tests {
         eprintln!("[test] waiting 90s for the enrolment to reach the edge");
         tokio::time::sleep(Duration::from_secs(90)).await;
 
+        // What Cloudflare itself says about this device. AccountData drops every
+        // field it was not written to know about, and the question here is
+        // exactly whether there is a field we are not reading.
+        let raw = reqwest::Client::builder()
+            .user_agent(consts::UA_REGISTER)
+            .timeout(Duration::from_secs(20))
+            .build()
+            .unwrap()
+            .get(format!(
+                "{}/{}/reg/{}",
+                consts::API_URL,
+                consts::API_VERSION,
+                identity.device_id
+            ))
+            .header("CF-Client-Version", consts::CF_CLIENT_VERSION)
+            .bearer_auth(&identity.access_token)
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        eprintln!(
+            "[test] registration says:
+{raw}"
+        );
+
+        // The endpoint Cloudflare assigned this device, which is the one the
+        // engine should be trying first and currently never tries at all.
+        let reg = account::fetch_device(&identity.device_id, &identity.access_token)
+            .await
+            .expect("the device record");
+        let assigned = account::endpoint_from(&reg);
+        eprintln!("[test] cloudflare assigned {assigned}");
+        let assigned_443 = format!("{assigned}:443");
+
+        // The selection the engine now makes, which is the fix this proves.
+        let chosen = assigned_masque_peers(&identity).await;
+        eprintln!("[test] engine would try {chosen:?} before searching");
+        assert!(
+            chosen.contains(&assigned_443.parse::<SocketAddr>().unwrap()),
+            "the endpoint Cloudflare names has to be among the ones tried first: {chosen:?}",
+        );
+
         let targets = [
+            assigned_443.as_str(),
+            // A control: an address from the hard-coded pool that the scan
+            // spends its budget on.
             "162.159.192.1:443",
-            "162.159.193.1:443",
-            "162.159.195.1:443",
-            "162.159.196.1:443",
-            "162.159.204.1:443",
         ];
 
         for pinned in [true, false] {
