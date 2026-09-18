@@ -165,22 +165,6 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * This app's own page in system settings, where every manufacturer puts
-     * its battery policy somewhere.
-     *
-     * Deliberately not an OEM-specific screen. The activities those live
-     * behind are internal, unstable across versions, and reached by class
-     * name; one that has been renamed throws, and one that has been removed
-     * opens nothing. This intent is part of the platform and always resolves.
-     */
-    /**
-     * Hands the release page to a browser.
-     *
-     * Deliberately not a download: an app that fetches and installs its own
-     * replacement is the shape of the thing this app exists to be trusted
-     * against, and the user should see where the file comes from.
-     */
-    /**
      * Hands the downloaded APK to the system installer.
      *
      * The installer is what actually decides: it refuses anything signed by a
@@ -213,6 +197,15 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    /**
+     * Hands the release page to a browser.
+     *
+     * Still here, and still the only route where the app may not download its
+     * own replacement: outside a whole-device tunnel the request would leave
+     * uncovered, and in an F-Droid build there is nothing for this app to
+     * install. It is also the way out when a check here refuses an update the
+     * user can see published.
+     */
     private fun openReleasePage(url: String) {
         openExternal(
             Intent(Intent.ACTION_VIEW, Uri.parse(url)),
@@ -255,6 +248,15 @@ class MainActivity : ComponentActivity() {
         }.onFailure { explainUnavailable(getString(R.string.err_no_tile_setup)) }
     }
 
+    /**
+     * This app's own page in system settings, where every manufacturer puts
+     * its battery policy somewhere.
+     *
+     * Deliberately not an OEM-specific screen. The activities those live
+     * behind are internal, unstable across versions, and reached by class
+     * name; one that has been renamed throws, and one that has been removed
+     * opens nothing. This intent is part of the platform and always resolves.
+     */
     private fun openAppSettings() {
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
             .setData(Uri.parse("package:$packageName"))
