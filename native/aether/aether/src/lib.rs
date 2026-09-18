@@ -1247,6 +1247,7 @@ async fn run_masque_in_masque_embedded(
         outer_mtu,
         quic::MAX_DATAGRAM_SIZE,
         true,
+        true,
         masque_startup_timeout(),
         "outer",
     )
@@ -1265,45 +1266,58 @@ async fn run_masque_in_masque_embedded(
     }
 
     let mut last: Option<AetherError> = None;
-    for inner_peer in candidates {
-        let shape = MasqueShape::mim_inner(outer_mtu, inner_peer, h2);
-        if !h2 && shape.datagram + 28 > outer_mtu {
-            log::warn!(
-                "[-] the outer link carries {outer_mtu} bytes, too little for an inner quic \
-                 datagram; raise AETHER_MASQUE_MTU or use --h2 for both hops"
-            );
-        }
-
-        // Through the outer tunnel, so the inner handshake never touches the
-        // network directly -- which is the whole point of nesting them.
-        let (forwarder, _forwarder_guard) = if h2 {
-            spawn_tcp_forwarder(&outer.stack, inner_peer).await?
-        } else {
-            spawn_udp_forwarder(&outer.stack, inner_peer).await?
-        };
-        log::info!(
-            "[*] trying inner MASQUE edge {inner_peer} through the outer tunnel via {forwarder}"
-        );
-
-        let outcome =
-            run_masque_tunnel_embedded(secondary, forwarder, None, shape, listen, endpoint, ready)
-                .await;
-
-        match outcome {
-            Ok(()) => return Ok(()),
-            // It took the endpoint, so it was carrying the session: this is the
-            // session ending rather than a candidate refusing, and there is
-            // nothing left to offer the next one.
-            Err(error) if endpoint.is_none() => {
-                outer.exit.abort();
-                return Err(error);
-            }
-            Err(error) => {
-                log::info!(
-                    "[-] inner edge {inner_peer} does not serve masque from inside the tunnel: \
-                     {error}"
+    // QUIC first, then the same edges over TCP.
+    //
+    // The single-hop path has had both framings for as long as it has existed,
+    // because which one gets through is exactly what differs between one
+    // network and the next. The nested path had one, for both hops, whatever
+    // the profile said -- so an inner edge that would not complete a QUIC
+    // handshake ended the attempt, and the framing that might have worked was
+    // never tried. On the mode whose whole reason to exist is the network that
+    // has refused everything simpler.
+    for framing in inner_framings(h2) {
+        for edge in candidates.iter().copied() {
+            let inner_peer = edge.addr;
+            let shape = MasqueShape::mim_inner(outer_mtu, inner_peer, framing);
+            if !framing && shape.datagram + 28 > outer_mtu {
+                log::warn!(
+                    "[-] the outer link carries {outer_mtu} bytes, too little for an inner                      quic datagram; raise AETHER_MASQUE_MTU"
                 );
-                last = Some(error);
+            }
+
+            // Through the outer tunnel, so the inner handshake never touches
+            // the network directly -- the whole point of nesting them.
+            let (forwarder, _forwarder_guard) = if framing {
+                spawn_tcp_forwarder(&outer.stack, masque_h2::h2_peer(inner_peer)).await?
+            } else {
+                spawn_udp_forwarder(&outer.stack, inner_peer).await?
+            };
+            log::info!(
+                "[*] trying inner MASQUE edge {inner_peer} ({}) over {} through the outer                  tunnel via {forwarder}",
+                edge.origin.label(),
+                if framing { "HTTP/2" } else { "QUIC" }
+            );
+
+            let outcome = run_masque_tunnel_embedded(
+                secondary, forwarder, None, shape, listen, endpoint, ready,
+            )
+            .await;
+
+            match outcome {
+                Ok(()) => return Ok(()),
+                // It took the endpoint, so it was carrying the session: this is
+                // the session ending rather than a candidate refusing, and
+                // there is nothing left to offer the next one.
+                Err(error) if endpoint.is_none() => {
+                    outer.exit.abort();
+                    return Err(error);
+                }
+                Err(error) => {
+                    log::info!(
+                        "[-] inner edge {inner_peer} does not serve masque from inside the                          tunnel: {error}"
+                    );
+                    last = Some(error);
+                }
             }
         }
     }
@@ -1734,10 +1748,28 @@ const ASSIGNED_ENDPOINT_LOOKUP: std::time::Duration = std::time::Duration::from_
 /// and does not repeat the version bait its outer hop has already sent -- that
 /// packet is for the network watching the outside of the tunnel, and inside
 /// there is nobody to fool.
+///
+/// The same is now true of the junk packets and the fake first flight. They
+/// exist to make the handshake unrecognisable to whatever is watching the wire,
+/// and the inner hop's wire is the outer tunnel: already encrypted, already
+/// carrying opaque traffic, and with nothing on it that could be fooled. They
+/// were sent inside anyway, which was at best waste -- two junk datagrams and a
+/// fake initial ahead of every inner attempt -- and at worst the reason a real
+/// gateway would not complete the handshake.
 struct MasqueShape {
     mtu: usize,
     datagram: usize,
     version_bait: bool,
+    obfuscate: bool,
+    /// TCP and HTTP/2 instead of QUIC, for this hop alone.
+    ///
+    /// It used to be read from the process-wide setting, which made the two
+    /// hops of a nested pair one decision: either both QUIC or both TCP. They
+    /// do not face the same thing. The outer hop faces the network the user is
+    /// on; the inner one faces a Cloudflare edge through a tunnel that is
+    /// already up, and whether that edge accepts a QUIC handshake arriving from
+    /// inside WARP is not something the outer hop's answer can tell us.
+    h2: bool,
     startup: std::time::Duration,
     label: &'static str,
 }
@@ -1749,6 +1781,8 @@ impl MasqueShape {
             mtu: masque_tunnel_mtu(),
             datagram: quic::MAX_DATAGRAM_SIZE,
             version_bait: true,
+            obfuscate: true,
+            h2: masque_h2::enabled(),
             startup: masque_startup_timeout(),
             label: "masque",
         }
@@ -1761,6 +1795,8 @@ impl MasqueShape {
             mtu,
             datagram,
             version_bait: false,
+            obfuscate: false,
+            h2,
             startup: mim_inner_startup(),
             label: "inner",
         }
@@ -1795,7 +1831,11 @@ async fn run_masque_tunnel_embedded(
         cert_pem: identity.cert_pem.clone(),
         key_pem: identity.key_pem.clone(),
         ech_config_list: ech,
-        noize: noize_config(),
+        noize: if shape.obfuscate {
+            noize_config()
+        } else {
+            noize::NoizeConfig::off()
+        },
         local_ipv4: parse_local_v4(&identity.ipv4),
         quiet: false,
         max_datagram: shape.datagram,
@@ -1816,7 +1856,7 @@ async fn run_masque_tunnel_embedded(
     let (addr_tx, mut addr_rx) = tokio::sync::mpsc::channel::<quic::AssignedAddr>(8);
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
 
-    let mut tunnel_task = if masque_h2::enabled() {
+    let mut tunnel_task = if shape.h2 {
         let h2cfg = masque_h2::H2TunnelConfig {
             peer,
             sni: consts::CONNECT_SNI.to_string(),
@@ -1832,6 +1872,11 @@ async fn run_masque_tunnel_embedded(
                 .map(|pin| pin.to_vec())
                 .collect(),
         };
+        log::info!(
+            "[+] [{}] MASQUE transport: HTTP/2 to {peer} (inner mtu {})",
+            shape.label,
+            shape.mtu
+        );
         tokio::spawn(masque_h2::run(
             h2cfg,
             internals,
@@ -1839,6 +1884,23 @@ async fn run_masque_tunnel_embedded(
             Some(ready_tx),
         ))
     } else {
+        // Said here as well as in establish_masque, because until now only the
+        // hop that dials the network printed its sizing. A nested pair whose
+        // inner hop failed gave no way to tell whether it had room for its own
+        // handshake, which is a question every report of one asked.
+        let budget = cfg.datagram_budget();
+        log::info!(
+            "[+] [{}] MASQUE transport: HTTP/3 (QUIC) to {peer} (inner mtu {}, datagram {budget})",
+            shape.label,
+            shape.mtu
+        );
+        if budget > shape.datagram {
+            log::warn!(
+                "[-] [{}] the link above this hop leaves {} bytes, less than the {budget} a                  client handshake needs; it is being sent at {budget} and may not fit",
+                shape.label,
+                shape.datagram
+            );
+        }
         tokio::spawn(quic::run(cfg, internals, Some(addr_tx), Some(ready_tx)))
     };
 
@@ -3345,6 +3407,7 @@ async fn establish_masque(
     mtu: usize,
     datagram: usize,
     version_bait: bool,
+    obfuscate: bool,
     startup: std::time::Duration,
     label: &str,
 ) -> Result<MasqueHop> {
@@ -3405,7 +3468,11 @@ async fn establish_masque(
             cert_pem: identity.cert_pem.clone(),
             key_pem: identity.key_pem.clone(),
             ech_config_list: ech,
-            noize: noize_config(),
+            noize: if obfuscate {
+                noize_config()
+            } else {
+                noize::NoizeConfig::off()
+            },
             local_ipv4: parse_local_v4(&identity.ipv4),
             quiet: false,
             max_datagram: datagram,
@@ -3465,6 +3532,7 @@ async fn run_masque_tunnel(
         masque_tunnel_mtu(),
         quic::MAX_DATAGRAM_SIZE,
         true,
+        true,
         masque_startup_timeout(),
         "masque",
     )
@@ -3516,6 +3584,16 @@ fn mim_inner_budget(outer_mtu: usize, inner_peer: SocketAddr, h2: bool) -> (usiz
     (datagram, mtu)
 }
 
+/// The framings to try for the inner hop, in order.
+///
+/// The profile's own choice first, because a user who picked one picked it for
+/// a reason, then the other. Only the inner hop gets two passes: the outer hop
+/// has already reached an edge, so its framing is known to work on this
+/// network and there is nothing to learn by changing it.
+fn inner_framings(profile_h2: bool) -> [bool; 2] {
+    [profile_h2, !profile_h2]
+}
+
 const MASQUE_INNER_PORT: u16 = 443;
 const MIM_INNER_TRIES: usize = 6;
 
@@ -3536,19 +3614,63 @@ const MIM_INNER_TRIES: usize = 6;
 ///
 /// The outer edge's own address is dropped, because nesting a hop onto the edge
 /// it is already tunnelled through is not a second hop.
+///
+/// Each candidate carries where it came from, and the log says so. Without
+/// that, a run in which every candidate failed looked identical whether the
+/// assigned endpoint had been tried first or not — which is exactly the
+/// question a failing report needs answered, and a log that cannot answer it
+/// costs another round trip to the person holding the phone.
 fn order_inner_candidates(
     assigned: Vec<SocketAddr>,
     outer: SocketAddr,
     derived: Vec<SocketAddr>,
-) -> Vec<SocketAddr> {
-    let mut out: Vec<SocketAddr> = Vec::new();
-    for candidate in assigned.into_iter().chain(derived) {
-        if candidate.ip() == outer.ip() || out.contains(&candidate) {
+) -> Vec<InnerEdge> {
+    let mut out: Vec<InnerEdge> = Vec::new();
+    let named = assigned.len();
+    for (index, addr) in assigned.into_iter().chain(derived).enumerate() {
+        if addr.ip() == outer.ip() || out.iter().any(|seen| seen.addr == addr) {
             continue;
         }
-        out.push(candidate);
+        out.push(InnerEdge {
+            addr,
+            origin: if index < named {
+                EdgeOrigin::Assigned
+            } else {
+                EdgeOrigin::Derived
+            },
+        });
     }
     out
+}
+
+/// An inner edge to try, and where the address came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InnerEdge {
+    addr: SocketAddr,
+    origin: EdgeOrigin,
+}
+
+/// Where an inner edge's address came from, which the log prints.
+///
+/// Three different things, and a failure means something different for each:
+/// a refused *assigned* edge is Cloudflare declining this device, a refused
+/// *guess* is an address that was never ours, and a refused *pinned* one is the
+/// user's own answer not working.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EdgeOrigin {
+    Assigned,
+    Derived,
+    Pinned,
+}
+
+impl EdgeOrigin {
+    fn label(self) -> &'static str {
+        match self {
+            EdgeOrigin::Assigned => "assigned to this device",
+            EdgeOrigin::Derived => "guessed near the outer edge",
+            EdgeOrigin::Pinned => "pinned by you",
+        }
+    }
 }
 
 fn mim_inner_startup() -> std::time::Duration {
@@ -3640,7 +3762,7 @@ async fn run_masque_in_masque(
     primary: &account::Identity,
     secondary: &account::Identity,
     peer: SocketAddr,
-    inner_peers: &[SocketAddr],
+    inner_peers: &[InnerEdge],
     ech: Option<Vec<u8>>,
     listen: SocketAddr,
 ) -> Result<()> {
@@ -3656,6 +3778,7 @@ async fn run_masque_in_masque(
         outer_mtu,
         quic::MAX_DATAGRAM_SIZE,
         true,
+        true,
         masque_startup_timeout(),
         "outer",
     )
@@ -3663,11 +3786,12 @@ async fn run_masque_in_masque(
 
     let mut chosen: Option<(SocketAddr, MasqueHop, TaskGuard)> = None;
 
-    for inner_peer in inner_peers
+    for edge in inner_peers
         .iter()
         .copied()
-        .filter(|candidate| candidate.ip() != peer.ip())
+        .filter(|candidate| candidate.addr.ip() != peer.ip())
     {
+        let inner_peer = edge.addr;
         let (inner_datagram, inner_mtu) = mim_inner_budget(outer_mtu, inner_peer, h2);
 
         if !h2 && inner_datagram + 28 > outer_mtu {
@@ -3683,7 +3807,8 @@ async fn run_masque_in_masque(
             spawn_udp_forwarder(&outer.stack, inner_peer).await?
         };
         log::info!(
-            "[*] trying inner MASQUE edge {inner_peer} through the outer tunnel via {forwarder}"
+            "[*] trying inner MASQUE edge {inner_peer} ({}) through the outer tunnel via              {forwarder}",
+            edge.origin.label()
         );
 
         match establish_masque(
@@ -3693,6 +3818,9 @@ async fn run_masque_in_masque(
             h2,
             inner_mtu,
             inner_datagram,
+            false,
+            // Off, for the same reason warp-in-warp turns it off: the inner
+            // hop's wire is the outer tunnel, which is already opaque.
             false,
             mim_inner_startup(),
             "inner",
@@ -3833,7 +3961,10 @@ async fn run_mim(
         let candidates = match inner_peer {
             // Asked for by name. Not second-guessed, and not filtered against
             // the outer edge either: a pinned peer is the user's answer.
-            Some(peer) => vec![peer],
+            Some(peer) => vec![InnerEdge {
+                addr: peer,
+                origin: EdgeOrigin::Pinned,
+            }],
             None => order_inner_candidates(
                 assigned_masque_peers(&secondary).await,
                 outer,
@@ -6205,6 +6336,99 @@ mod tests {
     /// then six inner attempts died identically with TLS alert 40, because
     /// every one of them was a guessed neighbour of the outer edge rather than
     /// the address Cloudflare had assigned to the inner device.
+    /// The inner hop does not obfuscate, because warp-in-warp does not either.
+    ///
+    /// Its wire is the outer tunnel: already encrypted, already carrying
+    /// opaque traffic, with nothing on it that could be fooled. Warp-in-warp
+    /// reached that conclusion and turns its inner obfuscation off; the nested
+    /// MASQUE path was sending two junk datagrams and a fake first flight to a
+    /// real Cloudflare gateway ahead of every inner handshake.
+    /// Every hop can hold its own first packet, whatever it is nested under.
+    ///
+    /// quiche pads a client Initial only as far as the buffer it is handed, so
+    /// a hop sized from a tunnel above it can send a short first flight and
+    /// nothing says so. The inner hop of a nested pair is exactly that case:
+    /// its budget is the outer link minus headers, and on an IPv6 edge under a
+    /// 1280-byte link that is 1232 -- ten bytes under what an Initial needs.
+    /// The inner hop gets both framings; the outer keeps the one that worked.
+    ///
+    /// Which framing gets through is the thing that differs between networks,
+    /// and the nested path used to make it one decision for both hops -- so an
+    /// inner edge that refused a QUIC handshake ended the whole attempt without
+    /// TCP ever being tried. The outer hop is not retried because it has
+    /// already reached an edge: its framing is known to work here.
+    #[test]
+    fn the_inner_hop_tries_the_other_framing_before_giving_up() {
+        assert_eq!(
+            inner_framings(false),
+            [false, true],
+            "quic profile: quic, then tcp"
+        );
+        assert_eq!(
+            inner_framings(true),
+            [true, false],
+            "tcp profile: tcp, then quic"
+        );
+        for profile in [true, false] {
+            let order = inner_framings(profile);
+            assert_eq!(order[0], profile, "the profile's own choice goes first");
+            assert_ne!(order[0], order[1], "and the other one is actually tried");
+        }
+    }
+
+    /// A hop's framing is its own, not the process's.
+    #[test]
+    fn a_nested_pair_can_carry_a_different_framing_on_each_hop() {
+        let peer: SocketAddr = "162.159.192.2:443".parse().unwrap();
+        assert!(MasqueShape::mim_inner(1280, peer, true).h2);
+        assert!(!MasqueShape::mim_inner(1280, peer, false).h2);
+    }
+
+    #[test]
+    fn every_hop_can_send_a_whole_client_initial() {
+        for (outer_mtu, peer) in [
+            (1280usize, "162.159.192.2:443"),
+            (1280, "[2606:4700:d0::a29f:c002]:443"),
+            (1200, "162.159.192.2:443"),
+            (900, "162.159.192.2:443"),
+        ] {
+            let inner = MasqueShape::mim_inner(outer_mtu, peer.parse().unwrap(), false);
+            let cfg = quic::TunnelConfig {
+                peer: peer.parse().unwrap(),
+                sni: String::new(),
+                authority: String::new(),
+                path: String::new(),
+                cert_pem: Vec::new(),
+                key_pem: Vec::new(),
+                ech_config_list: None,
+                noize: noize::NoizeConfig::off(),
+                local_ipv4: std::net::Ipv4Addr::LOCALHOST,
+                quiet: true,
+                max_datagram: inner.datagram,
+                version_bait: inner.version_bait,
+            };
+            assert!(
+                cfg.datagram_budget() >= quic::MIN_INITIAL_BUDGET,
+                "an outer link of {outer_mtu} to {peer} left {} for the inner handshake",
+                cfg.datagram_budget()
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_hop_that_touches_the_network_is_obfuscated() {
+        let single = MasqueShape::single();
+        assert!(single.obfuscate, "a single hop is the one being watched");
+        assert!(single.version_bait);
+
+        let inner = MasqueShape::mim_inner(1280, "162.159.192.2:443".parse().unwrap(), false);
+        assert!(!inner.obfuscate, "the inner hop is already inside cover");
+        assert!(
+            !inner.version_bait,
+            "and does not repeat the bait either -- the same argument"
+        );
+    }
+
     #[test]
     fn the_inner_hop_tries_the_endpoint_cloudflare_assigned_first() {
         let outer: SocketAddr = "162.159.198.104:443".parse().unwrap();
@@ -6213,15 +6437,23 @@ mod tests {
 
         let ordered = order_inner_candidates(vec![assigned], outer, derived.clone());
 
+        let first = ordered.first().expect("a candidate");
+        assert_eq!(first.addr, assigned, "the assigned endpoint is tried first");
         assert_eq!(
-            ordered.first(),
-            Some(&assigned),
-            "the assigned endpoint is tried before any guess"
+            first.origin,
+            EdgeOrigin::Assigned,
+            "and the log says where it came from, so a failing report can be read"
         );
         assert_eq!(
             ordered.len(),
             1 + derived.len(),
             "the guesses remain behind it"
+        );
+        assert!(
+            ordered[1..]
+                .iter()
+                .all(|edge| edge.origin == EdgeOrigin::Derived),
+            "a guess is never reported as an assignment"
         );
     }
 
@@ -6242,7 +6474,7 @@ mod tests {
         );
 
         assert_eq!(
-            ordered,
+            ordered.iter().map(|edge| edge.addr).collect::<Vec<_>>(),
             vec![moved, "162.159.198.7:443".parse().unwrap()],
             "each edge appears once, and never the outer one"
         );
