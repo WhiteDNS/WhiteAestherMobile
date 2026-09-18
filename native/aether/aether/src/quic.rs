@@ -19,19 +19,16 @@ pub const MIN_DATAGRAM_SIZE: usize = 1200;
 
 /// The smallest send buffer that can still hold a whole client Initial.
 ///
-/// quiche pads a client Initial to `MIN_CLIENT_INITIAL_LEN` and no further,
-/// and it pads only as far as the buffer it was given allows:
+/// quiche pads a client Initial to `MIN_CLIENT_INITIAL_LEN`, and only as far as
+/// the buffer it was given allows, so a buffer under that produces a first
+/// flight padded to less than quiche intends. Legal -- the protocol's floor is
+/// [`MIN_DATAGRAM_SIZE`] -- but not what the library is trying to send.
 ///
-/// ```text
-/// let pad_len = cmp::min(left, MIN_CLIENT_INITIAL_LEN - done);
-/// ```
-///
-/// So a buffer below that silently produces a short first flight rather than
-/// an error -- the handshake goes out undersized and the peer decides what to
-/// do about it. A hop sized from whatever a tunnel above it can carry can land
-/// there without anything saying so, which is why this floor is separate from
-/// [`MIN_DATAGRAM_SIZE`]: that one is the protocol's minimum datagram, this one
-/// is the minimum buffer our own first packet needs.
+/// Worth stating plainly, because a reading of `Stats::sent_bytes` sent this
+/// somewhere wrong: that counter is incremented inside `send_single`, with the
+/// size of the *packet*, before `send_on_path` pads the *datagram* around it.
+/// A first flight reported as 390 bytes therefore went out at 1242. It is not
+/// evidence of a short handshake and nothing here ever was.
 pub const MIN_INITIAL_BUDGET: usize = 1242;
 
 fn net_queue() -> usize {
