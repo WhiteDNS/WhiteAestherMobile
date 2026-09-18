@@ -1247,6 +1247,7 @@ async fn run_masque_in_masque_embedded(
         outer_mtu,
         quic::MAX_DATAGRAM_SIZE,
         true,
+        true,
         masque_startup_timeout(),
         "outer",
     )
@@ -1737,10 +1738,19 @@ const ASSIGNED_ENDPOINT_LOOKUP: std::time::Duration = std::time::Duration::from_
 /// and does not repeat the version bait its outer hop has already sent -- that
 /// packet is for the network watching the outside of the tunnel, and inside
 /// there is nobody to fool.
+///
+/// The same is now true of the junk packets and the fake first flight. They
+/// exist to make the handshake unrecognisable to whatever is watching the wire,
+/// and the inner hop's wire is the outer tunnel: already encrypted, already
+/// carrying opaque traffic, and with nothing on it that could be fooled. They
+/// were sent inside anyway, which was at best waste -- two junk datagrams and a
+/// fake initial ahead of every inner attempt -- and at worst the reason a real
+/// gateway would not complete the handshake.
 struct MasqueShape {
     mtu: usize,
     datagram: usize,
     version_bait: bool,
+    obfuscate: bool,
     startup: std::time::Duration,
     label: &'static str,
 }
@@ -1752,6 +1762,7 @@ impl MasqueShape {
             mtu: masque_tunnel_mtu(),
             datagram: quic::MAX_DATAGRAM_SIZE,
             version_bait: true,
+            obfuscate: true,
             startup: masque_startup_timeout(),
             label: "masque",
         }
@@ -1764,6 +1775,7 @@ impl MasqueShape {
             mtu,
             datagram,
             version_bait: false,
+            obfuscate: false,
             startup: mim_inner_startup(),
             label: "inner",
         }
@@ -1798,7 +1810,11 @@ async fn run_masque_tunnel_embedded(
         cert_pem: identity.cert_pem.clone(),
         key_pem: identity.key_pem.clone(),
         ech_config_list: ech,
-        noize: noize_config(),
+        noize: if shape.obfuscate {
+            noize_config()
+        } else {
+            noize::NoizeConfig::off()
+        },
         local_ipv4: parse_local_v4(&identity.ipv4),
         quiet: false,
         max_datagram: shape.datagram,
@@ -3348,6 +3364,7 @@ async fn establish_masque(
     mtu: usize,
     datagram: usize,
     version_bait: bool,
+    obfuscate: bool,
     startup: std::time::Duration,
     label: &str,
 ) -> Result<MasqueHop> {
@@ -3408,7 +3425,11 @@ async fn establish_masque(
             cert_pem: identity.cert_pem.clone(),
             key_pem: identity.key_pem.clone(),
             ech_config_list: ech,
-            noize: noize_config(),
+            noize: if obfuscate {
+                noize_config()
+            } else {
+                noize::NoizeConfig::off()
+            },
             local_ipv4: parse_local_v4(&identity.ipv4),
             quiet: false,
             max_datagram: datagram,
@@ -3467,6 +3488,7 @@ async fn run_masque_tunnel(
         h2,
         masque_tunnel_mtu(),
         quic::MAX_DATAGRAM_SIZE,
+        true,
         true,
         masque_startup_timeout(),
         "masque",
@@ -3703,6 +3725,7 @@ async fn run_masque_in_masque(
         outer_mtu,
         quic::MAX_DATAGRAM_SIZE,
         true,
+        true,
         masque_startup_timeout(),
         "outer",
     )
@@ -3742,6 +3765,9 @@ async fn run_masque_in_masque(
             h2,
             inner_mtu,
             inner_datagram,
+            false,
+            // Off, for the same reason warp-in-warp turns it off: the inner
+            // hop's wire is the outer tunnel, which is already opaque.
             false,
             mim_inner_startup(),
             "inner",
@@ -6257,6 +6283,27 @@ mod tests {
     /// then six inner attempts died identically with TLS alert 40, because
     /// every one of them was a guessed neighbour of the outer edge rather than
     /// the address Cloudflare had assigned to the inner device.
+    /// The inner hop does not obfuscate, because warp-in-warp does not either.
+    ///
+    /// Its wire is the outer tunnel: already encrypted, already carrying
+    /// opaque traffic, with nothing on it that could be fooled. Warp-in-warp
+    /// reached that conclusion and turns its inner obfuscation off; the nested
+    /// MASQUE path was sending two junk datagrams and a fake first flight to a
+    /// real Cloudflare gateway ahead of every inner handshake.
+    #[test]
+    fn only_the_hop_that_touches_the_network_is_obfuscated() {
+        let single = MasqueShape::single();
+        assert!(single.obfuscate, "a single hop is the one being watched");
+        assert!(single.version_bait);
+
+        let inner = MasqueShape::mim_inner(1280, "162.159.192.2:443".parse().unwrap(), false);
+        assert!(!inner.obfuscate, "the inner hop is already inside cover");
+        assert!(
+            !inner.version_bait,
+            "and does not repeat the bait either -- the same argument"
+        );
+    }
+
     #[test]
     fn the_inner_hop_tries_the_endpoint_cloudflare_assigned_first() {
         let outer: SocketAddr = "162.159.198.104:443".parse().unwrap();
