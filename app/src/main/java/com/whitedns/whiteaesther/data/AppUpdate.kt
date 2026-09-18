@@ -214,17 +214,29 @@ object AppUpdatePolicy {
      * One line, exactly. A file naming an asset twice is malformed rather than
      * ambiguous, and picking either would be choosing which of two answers to
      * trust about something that must have only one.
+     *
+     * A single leading `./` is dropped, because that is what the release
+     * workflow writes: it runs `sha256sum` over a relative glob inside the
+     * assets directory, so every published line names the file as
+     * `./WhiteAestherMobile-1.9.0-arm64-v8a.apk`.
+     * Only that exact prefix and only one of it — a deeper path names a
+     * different file and is left to fail the comparison. Both sides are
+     * compared after the prefix is gone, so a file naming both forms of one
+     * asset is still ambiguous and still refused.
      */
     fun checksumFor(text: String, assetName: String): String {
         val line = Regex("^([a-fA-F0-9]{64}) [ *](.+)$")
+        val wanted = bareName(assetName)
         val found = text.lineSequence()
             .filter { it.isNotBlank() }
             .map { line.matchEntire(it.removeSuffix("\r")) ?: throw IOException("SHA256SUMS is malformed") }
-            .filter { it.groupValues[2] == assetName }
+            .filter { bareName(it.groupValues[2]) == wanted }
             .map { it.groupValues[1].lowercase() }
             .toList()
         return found.singleOrNull() ?: throw IOException("SHA256SUMS does not name $assetName exactly once")
     }
+
+    private fun bareName(entry: String): String = entry.removePrefix("./")
 
     /** Where a release asset may be downloaded from, and nowhere else. */
     fun requireDownloadUrl(url: String, tag: String, name: String) {

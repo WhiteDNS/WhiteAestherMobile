@@ -191,6 +191,58 @@ class AppUpdatePolicyTest {
         )
     }
 
+    /**
+     * The checksum file as the release workflow actually writes it.
+     *
+     * Copied from v1.9.0's published `SHA256SUMS`. The workflow runs
+     * `sha256sum` over a relative glob inside the assets directory, so every
+     * line carries a `./` the parser first did not expect — and the fixture it
+     * was written against was invented rather than taken from a release, so
+     * nothing caught it. An updater that refuses every real release is worse
+     * than no updater: it fails at the moment a user most needs it to work.
+     */
+    @Test
+    fun theChecksumFileTheReleaseActuallyPublishesIsReadable() {
+        val published = """
+            5a2334df6c4ddbd7c3d1e3256e12a608aed7378aea8e97c931f5b204d8b05fee  ./WhiteAestherMobile-1.9.0-arm64-v8a.apk
+            977cd85d35fec59aaeac4c1858900d59062ca2114cd2b67a759e78c14ba349b4  ./WhiteAestherMobile-1.9.0-armeabi-v7a.apk
+            369ff44523e988f0168b139db88b47a9924fdc50316319ae2ad40db4519b9754  ./WhiteAestherMobile-1.9.0-universal.apk
+            4006b04fa3f864e8baf93e00f9702b1ad4de5ecfb8dc35303885b7523d61b87f  ./WhiteAestherMobile-1.9.0-x86_64.apk
+            e3aea2633d1dae59f0eb869ea10c22ecc510570ea83a25cee8cf72b09b5151bb  ./WhiteAestherMobile-1.9.0-bundle.aab
+        """.trimIndent()
+        for (variant in ApkVariant.entries) {
+            val name = AppUpdatePolicy.apkNameFor("1.9.0", variant)
+            assertEquals(64, AppUpdatePolicy.checksumFor(published, name).length)
+        }
+        // An asset that release does not carry is still absent, prefix or not.
+        assertThrows(IOException::class.java) {
+            AppUpdatePolicy.checksumFor(published, "WhiteAestherMobile-1.9.0-riscv64.apk")
+        }
+    }
+
+    /**
+     * The prefix is dropped, not the path.
+     *
+     * Tolerating `./` must not become tolerating any directory: two different
+     * paths ending in the same file name are two different files, and picking
+     * one would be choosing which to trust.
+     */
+    @Test
+    fun onlyTheWorkflowsOwnPrefixIsForgiven() {
+        val hash = "a".repeat(64)
+        // A directory is not the asset.
+        assertThrows(IOException::class.java) {
+            AppUpdatePolicy.checksumFor("$hash  elsewhere/x.apk\n", "x.apk")
+        }
+        assertThrows(IOException::class.java) {
+            AppUpdatePolicy.checksumFor("$hash  ././x.apk\n", "x.apk")
+        }
+        // Both spellings of one asset is still two answers about one thing.
+        assertThrows(IOException::class.java) {
+            AppUpdatePolicy.checksumFor("$hash  ./x.apk\n$hash  x.apk\n", "x.apk")
+        }
+    }
+
     /** One line names the asset, or the file is not usable. */
     @Test
     fun aChecksumHasToNameTheAssetExactlyOnce() {
