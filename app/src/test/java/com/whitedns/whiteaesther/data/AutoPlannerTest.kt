@@ -233,6 +233,76 @@ class AutoPlannerTest {
         )
     }
 
+    /**
+     * One rule decides the framing order, and the race obeys it.
+     *
+     * There were three answers to this and they disagreed: the race preferred
+     * H3 on Wi-Fi, the retry ladder always went H2 first, and the scanner did
+     * too. Three rules that can drift is worse than any one of them being
+     * wrong, because nothing notices — a user gets a different order depending
+     * on which part of the app is asking, and the framing that would have
+     * connected may be the one their path never reaches.
+     */
+    @Test
+    fun theRaceTakesItsFramingOrderFromTheOneRule() {
+        for (mobile in listOf(false, true)) {
+            for (proven in listOf(null, "h2", "h3")) {
+                val expected = AutoPlanner.framingOrder(proven, mobile)
+                val lane = AutoPlanner.aetherLane(
+                    everything.copy(provenFraming = proven, onMobileData = mobile),
+                )
+                val actual = lane.mapNotNull { it.engineTransport }
+                    .filter { it == "h2" || it == "h3" }
+                    .distinct()
+                assertEquals(
+                    "proven=$proven mobile=$mobile",
+                    expected,
+                    actual,
+                )
+            }
+        }
+    }
+
+    /**
+     * Evidence beats inference, and the evidence is per network.
+     *
+     * What connected here last goes first. A framing proven on another network
+     * is not evidence about this one — treating it as such is how a phone that
+     * connected at home opens every session on mobile data with the wrong guess.
+     */
+    @Test
+    fun whatConnectedHereLastLeadsWhateverTheNetworkIs() {
+        assertEquals(listOf("h2", "h3"), AutoPlanner.framingOrder("h2", onMobileData = false))
+        assertEquals(listOf("h3", "h2"), AutoPlanner.framingOrder("h3", onMobileData = true))
+    }
+
+    /**
+     * With nothing proven, the kind of network decides.
+     *
+     * Operators have dropped QUIC for weeks at a time, so H2 leads on mobile
+     * data; H3 leads elsewhere, which is what the Wi-Fi in the log that
+     * prompted this needed.
+     */
+    @Test
+    fun withNothingProvenTheNetworkDecides() {
+        assertEquals(listOf("h2", "h3"), AutoPlanner.framingOrder(null, onMobileData = true))
+        assertEquals(listOf("h3", "h2"), AutoPlanner.framingOrder(null, onMobileData = false))
+    }
+
+    /** Both framings are always offered, whichever leads. */
+    @Test
+    fun neitherFramingIsEverDropped() {
+        for (mobile in listOf(false, true)) {
+            for (proven in listOf(null, "h2", "h3", "wg", "")) {
+                assertEquals(
+                    "proven=$proven mobile=$mobile",
+                    setOf("h2", "h3"),
+                    AutoPlanner.framingOrder(proven, mobile).toSet(),
+                )
+            }
+        }
+    }
+
     @Test
     fun aNewPhoneRacesEverythingFromTheTap() {
         val plan = AutoPlanner.plan(null, everything)

@@ -20,7 +20,10 @@ import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.data.TunnelProtocol
 import com.whitedns.whiteaesther.data.SettingsRepository
+import com.whitedns.whiteaesther.data.AutoPlanner
+import com.whitedns.whiteaesther.data.NetworkKey
 import com.whitedns.whiteaesther.data.UpdateChecker
+import com.whitedns.whiteaesther.service.NetworkIdentity
 import com.whitedns.whiteaesther.service.AetherVpnService
 import com.whitedns.whiteaesther.service.EngineLog
 import com.whitedns.whiteaesther.service.EngineStage
@@ -400,6 +403,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Returns null when there is nothing to export yet, so the caller does not
      * open a file picker for an empty file.
      */
+    /**
+     * Which framing a scan should sweep first.
+     *
+     * The same question the connect path asks, answered in the same place. The
+     * scanner has no memory of its own -- what connected last is the service's
+     * to know -- so it asks with what it has, which is the kind of network the
+     * phone is on. Getting only that half right still beats a third rule.
+     */
+    private fun scanFirstFraming(): TunnelProtocol {
+        val cellular = runCatching {
+            NetworkKey.isCellular(NetworkIdentity.current(getApplication()).key.orEmpty())
+        }.getOrDefault(false)
+        return when (AutoPlanner.framingOrder(provenFraming = null, onMobileData = cellular).first()) {
+            "h2" -> TunnelProtocol.H2
+            else -> TunnelProtocol.H3
+        }
+    }
+
     fun exportIdentity(): String? {
         val result = NativeAetherBridge.exportIdentity(identityConfigPath())
         result.exceptionOrNull()?.let { error ->
@@ -710,9 +731,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
             val base = settings
                 .copy(endpointMode = EndpointMode.AUTOMATIC, customEndpoint = "")
-                // The bridge takes a real transport. Scanning on H2 first
-                // matches what Automatic tries first when connecting.
-                .let { if (it.transport.isAutomatic) it.copy(transport = TunnelProtocol.H2) else it }
+                // The bridge takes a real transport, and which one is not this
+                // screen's decision to make: asking the planner is what keeps a
+                // scan looking for what a connect would actually try. Scanning
+                // H2 first regardless was a third answer to that question, and
+                // it disagreed with the race on Wi-Fi.
+                .let {
+                    if (!it.transport.isAutomatic) it else {
+                        it.copy(transport = scanFirstFraming())
+                    }
+                }
             var result = withContext(Dispatchers.IO) {
                 NativeAetherBridge.scan(base.toNativeJson(getApplication()))
             }
@@ -723,8 +751,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // mobile users were seeing. Sweep the other rather than reporting an
             // empty network.
             val other = when (base.transport) {
-                // Automatic has not resolved yet here -- the scanner is not a
-                // connect. Sweeping both framings is exactly what it would do.
+                // Reached only if the planner ever answers with something that
+                // is not a framing; sweeping the other one is still the useful
+                // move.
                 TunnelProtocol.AUTO -> TunnelProtocol.H3
                 TunnelProtocol.H3 -> TunnelProtocol.H2
                 TunnelProtocol.H2 -> TunnelProtocol.H3
