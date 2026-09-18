@@ -682,7 +682,7 @@ async fn verify_one(
             local_ipv4: probe.local_ipv4,
             quiet: true,
             pin_endpoint: true,
-            expected_pins: crate::consts::MASQUE_PINS
+            expected_pins: crate::consts::masque_pins()
                 .iter()
                 .map(|p| p.to_vec())
                 .collect(),

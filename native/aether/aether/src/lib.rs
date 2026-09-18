@@ -1822,7 +1822,10 @@ async fn run_masque_tunnel_embedded(
             local_ipv4: parse_local_v4(&identity.ipv4),
             quiet: false,
             pin_endpoint: true,
-            expected_pins: consts::MASQUE_PINS.iter().map(|pin| pin.to_vec()).collect(),
+            expected_pins: consts::masque_pins()
+                .iter()
+                .map(|pin| pin.to_vec())
+                .collect(),
         };
         tokio::spawn(masque_h2::run(
             h2cfg,
@@ -3116,7 +3119,7 @@ async fn verify_masque_peer(
             local_ipv4: parse_local_v4(&identity.ipv4),
             quiet: true,
             pin_endpoint: true,
-            expected_pins: consts::MASQUE_PINS.iter().map(|p| p.to_vec()).collect(),
+            expected_pins: consts::masque_pins().iter().map(|p| p.to_vec()).collect(),
         };
         return masque_h2::verify_h2(&cfg, std::time::Duration::from_secs(5))
             .await
@@ -3325,7 +3328,7 @@ async fn establish_masque(
             local_ipv4: parse_local_v4(&identity.ipv4),
             quiet: false,
             pin_endpoint: true,
-            expected_pins: consts::MASQUE_PINS.iter().map(|p| p.to_vec()).collect(),
+            expected_pins: consts::masque_pins().iter().map(|p| p.to_vec()).collect(),
         };
         log::info!("[+] [{label}] MASQUE transport: HTTP/2 (TCP) to {peer} (inner mtu {mtu})");
         tokio::spawn(masque_h2::run(
@@ -6576,7 +6579,7 @@ mod masque_reachability_tests {
                     local_ipv4: parse_local_v4(&identity.ipv4),
                     quiet: true,
                     pin_endpoint: pinned,
-                    expected_pins: consts::MASQUE_PINS.iter().map(|p| p.to_vec()).collect(),
+                    expected_pins: consts::masque_pins().iter().map(|p| p.to_vec()).collect(),
                 };
                 match masque_h2::verify_h2(&cfg, Duration::from_secs(6)).await {
                     Ok(rtt) => eprintln!("[test] {target} OK rtt={rtt:?}"),

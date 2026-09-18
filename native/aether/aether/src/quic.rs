@@ -312,7 +312,7 @@ pub async fn run(
         cert_pem: &cfg.cert_pem,
         key_pem: &cfg.key_pem,
         pin_endpoint: true,
-        expected_pins: consts::MASQUE_PINS,
+        expected_pins: &consts::masque_pins(),
     })?;
 
     let datagram = cfg.datagram_budget();
@@ -898,7 +898,7 @@ pub async fn verify_masque(p: &VerifyParams) -> Result<Duration> {
         cert_pem: &p.cert_pem,
         key_pem: &p.key_pem,
         pin_endpoint: true,
-        expected_pins: consts::MASQUE_PINS,
+        expected_pins: &consts::masque_pins(),
     })?;
 
     let scid_bytes = random_scid();
