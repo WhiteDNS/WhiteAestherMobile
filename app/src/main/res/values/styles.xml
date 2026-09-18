@@ -6,4 +6,11 @@
         <item name="android:navigationBarColor">#0B0D0D</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
+    <!-- Draws nothing: the widget's tap handler is on screen for one frame. -->
+    <style name="Theme.WhiteAestherInvisible" parent="@android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
 </resources>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  updatePeriodMillis is zero deliberately. The platform's own schedule is at
+  best half-hourly and would wake the device to redraw something that has not
+  changed; the provider is told directly whenever the engine's stage moves,
+  which is the only time this widget has anything new to say.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="70dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_aether"
+    android:previewLayout="@layout/widget_aether"
+    android:description="@string/widget_description"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen" />

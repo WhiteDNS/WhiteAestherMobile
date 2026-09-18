@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="widget_surface">#0A100E</color>
+    <color name="widget_border">#3A4C45</color>
+    <color name="widget_text">#EAF2EF</color>
+    <color name="widget_text_dim">#93A29E</color>
+    <color name="widget_brand">#34D1A6</color>
+    <color name="widget_on_brand">#052018</color>
+    <color name="widget_signal_idle">#7A8D88</color>
+    <color name="widget_signal_working">#F2B544</color>
+    <color name="widget_signal_live">#34D1A6</color>
+    <color name="widget_signal_failed">#FF7068</color>
+</resources>

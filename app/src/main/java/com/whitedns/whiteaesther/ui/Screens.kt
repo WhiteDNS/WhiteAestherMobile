@@ -2251,6 +2251,7 @@ fun SettingsScreen(
     onRequestBatteryExemption: () -> Unit,
     onOpenAppSettings: () -> Unit,
     onAddTile: () -> Unit,
+    onAddWidget: () -> Unit,
     onGoToDiagnostics: () -> Unit,
     onGoToAbout: () -> Unit,
     onGoToIdentity: () -> Unit,
@@ -2301,6 +2302,27 @@ fun SettingsScreen(
                         text = stringResource(R.string.add),
                         modifier = Modifier.testTag("add-tile-button"),
                         onClick = onAddTile,
+                    )
+                }
+            }
+        }
+
+        // The same offer for people who do not use the shade. Asking to pin is
+        // only possible where the launcher supports it, which is why the button
+        // is drawn either way and the answer is a message rather than a missing
+        // control -- a launcher that cannot pin still shows the widget in its
+        // own picker.
+        if (!isTelevision) {
+            Spacer(Modifier.height(12.dp))
+            AetherCard {
+                SettingRow(
+                    title = stringResource(R.string.add_a_home_screen_widget),
+                    subtitle = stringResource(R.string.connect_and_disconnect_from_the_home_screen),
+                ) {
+                    OutlineButton(
+                        text = stringResource(R.string.add),
+                        modifier = Modifier.testTag("add-widget-button"),
+                        onClick = onAddWidget,
                     )
                 }
             }
