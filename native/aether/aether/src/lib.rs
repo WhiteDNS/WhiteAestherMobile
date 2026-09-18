@@ -1265,7 +1265,8 @@ async fn run_masque_in_masque_embedded(
     }
 
     let mut last: Option<AetherError> = None;
-    for inner_peer in candidates {
+    for edge in candidates {
+        let inner_peer = edge.addr;
         let shape = MasqueShape::mim_inner(outer_mtu, inner_peer, h2);
         if !h2 && shape.datagram + 28 > outer_mtu {
             log::warn!(
@@ -1282,7 +1283,9 @@ async fn run_masque_in_masque_embedded(
             spawn_udp_forwarder(&outer.stack, inner_peer).await?
         };
         log::info!(
-            "[*] trying inner MASQUE edge {inner_peer} through the outer tunnel via {forwarder}"
+            "[*] trying inner MASQUE edge {inner_peer} ({}) through the outer tunnel via \
+             {forwarder}",
+            edge.origin.label()
         );
 
         let outcome =
@@ -3536,19 +3539,63 @@ const MIM_INNER_TRIES: usize = 6;
 ///
 /// The outer edge's own address is dropped, because nesting a hop onto the edge
 /// it is already tunnelled through is not a second hop.
+///
+/// Each candidate carries where it came from, and the log says so. Without
+/// that, a run in which every candidate failed looked identical whether the
+/// assigned endpoint had been tried first or not — which is exactly the
+/// question a failing report needs answered, and a log that cannot answer it
+/// costs another round trip to the person holding the phone.
 fn order_inner_candidates(
     assigned: Vec<SocketAddr>,
     outer: SocketAddr,
     derived: Vec<SocketAddr>,
-) -> Vec<SocketAddr> {
-    let mut out: Vec<SocketAddr> = Vec::new();
-    for candidate in assigned.into_iter().chain(derived) {
-        if candidate.ip() == outer.ip() || out.contains(&candidate) {
+) -> Vec<InnerEdge> {
+    let mut out: Vec<InnerEdge> = Vec::new();
+    let named = assigned.len();
+    for (index, addr) in assigned.into_iter().chain(derived).enumerate() {
+        if addr.ip() == outer.ip() || out.iter().any(|seen| seen.addr == addr) {
             continue;
         }
-        out.push(candidate);
+        out.push(InnerEdge {
+            addr,
+            origin: if index < named {
+                EdgeOrigin::Assigned
+            } else {
+                EdgeOrigin::Derived
+            },
+        });
     }
     out
+}
+
+/// An inner edge to try, and where the address came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InnerEdge {
+    addr: SocketAddr,
+    origin: EdgeOrigin,
+}
+
+/// Where an inner edge's address came from, which the log prints.
+///
+/// Three different things, and a failure means something different for each:
+/// a refused *assigned* edge is Cloudflare declining this device, a refused
+/// *guess* is an address that was never ours, and a refused *pinned* one is the
+/// user's own answer not working.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EdgeOrigin {
+    Assigned,
+    Derived,
+    Pinned,
+}
+
+impl EdgeOrigin {
+    fn label(self) -> &'static str {
+        match self {
+            EdgeOrigin::Assigned => "assigned to this device",
+            EdgeOrigin::Derived => "guessed near the outer edge",
+            EdgeOrigin::Pinned => "pinned by you",
+        }
+    }
 }
 
 fn mim_inner_startup() -> std::time::Duration {
@@ -3640,7 +3687,7 @@ async fn run_masque_in_masque(
     primary: &account::Identity,
     secondary: &account::Identity,
     peer: SocketAddr,
-    inner_peers: &[SocketAddr],
+    inner_peers: &[InnerEdge],
     ech: Option<Vec<u8>>,
     listen: SocketAddr,
 ) -> Result<()> {
@@ -3663,11 +3710,12 @@ async fn run_masque_in_masque(
 
     let mut chosen: Option<(SocketAddr, MasqueHop, TaskGuard)> = None;
 
-    for inner_peer in inner_peers
+    for edge in inner_peers
         .iter()
         .copied()
-        .filter(|candidate| candidate.ip() != peer.ip())
+        .filter(|candidate| candidate.addr.ip() != peer.ip())
     {
+        let inner_peer = edge.addr;
         let (inner_datagram, inner_mtu) = mim_inner_budget(outer_mtu, inner_peer, h2);
 
         if !h2 && inner_datagram + 28 > outer_mtu {
@@ -3683,7 +3731,8 @@ async fn run_masque_in_masque(
             spawn_udp_forwarder(&outer.stack, inner_peer).await?
         };
         log::info!(
-            "[*] trying inner MASQUE edge {inner_peer} through the outer tunnel via {forwarder}"
+            "[*] trying inner MASQUE edge {inner_peer} ({}) through the outer tunnel via              {forwarder}",
+            edge.origin.label()
         );
 
         match establish_masque(
@@ -3833,7 +3882,10 @@ async fn run_mim(
         let candidates = match inner_peer {
             // Asked for by name. Not second-guessed, and not filtered against
             // the outer edge either: a pinned peer is the user's answer.
-            Some(peer) => vec![peer],
+            Some(peer) => vec![InnerEdge {
+                addr: peer,
+                origin: EdgeOrigin::Pinned,
+            }],
             None => order_inner_candidates(
                 assigned_masque_peers(&secondary).await,
                 outer,
@@ -6213,15 +6265,23 @@ mod tests {
 
         let ordered = order_inner_candidates(vec![assigned], outer, derived.clone());
 
+        let first = ordered.first().expect("a candidate");
+        assert_eq!(first.addr, assigned, "the assigned endpoint is tried first");
         assert_eq!(
-            ordered.first(),
-            Some(&assigned),
-            "the assigned endpoint is tried before any guess"
+            first.origin,
+            EdgeOrigin::Assigned,
+            "and the log says where it came from, so a failing report can be read"
         );
         assert_eq!(
             ordered.len(),
             1 + derived.len(),
             "the guesses remain behind it"
+        );
+        assert!(
+            ordered[1..]
+                .iter()
+                .all(|edge| edge.origin == EdgeOrigin::Derived),
+            "a guess is never reported as an assignment"
         );
     }
 
@@ -6242,7 +6302,7 @@ mod tests {
         );
 
         assert_eq!(
-            ordered,
+            ordered.iter().map(|edge| edge.addr).collect::<Vec<_>>(),
             vec![moved, "162.159.198.7:443".parse().unwrap()],
             "each edge appears once, and never the outer one"
         );
