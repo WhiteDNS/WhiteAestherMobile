@@ -14,6 +14,9 @@ import com.whitedns.whiteaesther.core.TorBridges
 import com.whitedns.whiteaesther.core.NativeAetherBridge
 import com.whitedns.whiteaesther.core.PsiphonConfig
 import com.whitedns.whiteaesther.data.AddressReporter
+import com.whitedns.whiteaesther.data.AppRelease
+import com.whitedns.whiteaesther.data.AppUpdateManager
+import com.whitedns.whiteaesther.data.UpdateDownload
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EndpointMode
 import com.whitedns.whiteaesther.data.EngineMode
@@ -36,6 +39,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -147,6 +151,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val engineStatus = EngineStatusStore.status
     private val mutableEndpointScannerState = MutableStateFlow(EndpointScannerState())
     val endpointScannerState = mutableEndpointScannerState.asStateFlow()
+    private var updateJob: Job? = null
     private var endpointJob: Job? = null
     private var realAddressJob: Job? = null
     private var bridgeJob: Job? = null
@@ -225,6 +230,104 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val mutableUpdate = MutableStateFlow<UpdateChecker.Available?>(null)
     val update = mutableUpdate.asStateFlow()
+
+    private val updates = AppUpdateManager(application)
+
+    /**
+     * The release this phone could install, once one has been found.
+     *
+     * Separate from [update], which only knows a version is out. This one has
+     * been checked against what is installed -- same package, newer version,
+     * this architecture -- and carries the assets to fetch.
+     */
+    private val mutableInstallable = MutableStateFlow<AppRelease?>(null)
+    val installable = mutableInstallable.asStateFlow()
+
+    private val mutableDownload = MutableStateFlow<UpdateDownload>(UpdateDownload.Idle)
+    val updateDownload = mutableDownload.asStateFlow()
+
+    /**
+     * Whether an update may be fetched right now, rather than opened in a
+     * browser.
+     *
+     * The download does not go through this app's proxy — the downloader is a
+     * system service, outside this process — so only a whole-device tunnel
+     * carries it. Anywhere else the user gets the release page, which is what
+     * they had before.
+     */
+    val canInstallInPlace: StateFlow<Boolean> = combine(
+        repository.settings,
+        EngineStatusStore.status,
+        mutableInstallable,
+    ) { settings, status, release ->
+        release != null && updates.mayDownload(
+            coverage = settings.coverage(),
+            connected = status.stage == EngineStage.CONNECTED,
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = false,
+    )
+
+    /**
+     * Fetches the release and follows it until it has arrived or failed.
+     *
+     * The download itself is the system downloader's, so it survives this
+     * process; what is watched here is only its progress. Verification happens
+     * where the file lands, in [AppUpdateManager], not here.
+     */
+    fun downloadUpdate() {
+        val release = mutableInstallable.value ?: return
+        if (updateJob?.isActive == true) return
+        updateJob = viewModelScope.launch {
+            mutableDownload.value = UpdateDownload.Running(0L, release.apk?.size ?: 0L)
+            val started = runCatching { updates.download(release) }
+            started.exceptionOrNull()?.let { error ->
+                mutableDownload.value = UpdateDownload.Failed(
+                    error.message ?: say(R.string.the_update_could_not_be_verified),
+                )
+                return@launch
+            }
+            while (true) {
+                val state = runCatching { updates.progress(release) }
+                    .getOrElse {
+                        UpdateDownload.Failed(
+                            it.message ?: say(R.string.the_update_could_not_be_verified),
+                        )
+                    }
+                mutableDownload.value = state
+                if (state !is UpdateDownload.Running) return@launch
+                delay(UPDATE_POLL_MS)
+            }
+        }
+    }
+
+    /**
+     * Whether this build updates itself at all.
+     *
+     * False in an F-Droid build, where F-Droid does it. The interface needs the
+     * difference: "not right now, because of your coverage" and "never, this
+     * build does not do that" are not the same thing to explain.
+     */
+    val updatesInPlace: Boolean get() = updates.selfUpdates
+
+    fun cancelUpdateDownload() {
+        updateJob?.cancel()
+        updateJob = null
+        viewModelScope.launch {
+            updates.cancel()
+            mutableDownload.value = UpdateDownload.Idle
+        }
+    }
+
+    /** Remembers that the user said no, so the same version stops asking. */
+    fun skipUpdate() {
+        mutableInstallable.value?.version?.let(updates::skip)
+        cancelUpdateDownload()
+        mutableInstallable.value = null
+        dismissUpdate()
+    }
 
     /**
      * Whether the user has switched IPv6 off.
@@ -353,10 +456,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 else -> AddressReporter.tunnelAddress(ipv4Only())
                             }
                             mutableAddresses.value = mutableAddresses.value.copy(tunnel = exit)
-                            // Only here. Asking GitHub from an unprotected
-                            // socket would tell the network this device runs a
-                            // circumvention tool; inside the tunnel it is just
-                            // more session traffic.
+                            // Only here, and both of them. Asking GitHub from
+                            // an unprotected socket would tell the network this
+                            // device runs a circumvention tool; inside the
+                            // tunnel it is just more session traffic.
+                            mutableInstallable.value = runCatching {
+                                updates.check(acceptPrereleases = false)
+                            }.getOrNull()
                             mutableUpdate.value = UpdateChecker.check(
                                 getApplication(),
                                 BuildConfig.VERSION_NAME,
@@ -876,6 +982,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private companion object {
+        /** How often the system downloader is asked where it has got to. */
+        const val UPDATE_POLL_MS = 700L
+
         /** What the Psiphon process names the file this watches for. */
         const val REGIONS_FILE = "regions.txt"
 

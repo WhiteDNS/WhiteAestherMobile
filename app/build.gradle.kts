@@ -74,6 +74,23 @@ android {
         }
         buildConfigField("String", "PSIPHON_SERVER_ENTRY_SIGNATURE_KEY", "\"$psiphonEntryKey\"")
 
+        // Whether this build updates itself.
+        //
+        // On by default, because a sideloaded APK has no other way to be told
+        // about a release -- and telling people to fetch one from a website is
+        // the moment an attacker most wants to be the website. An F-Droid build
+        // passes -PWHITEAESTHER_NO_SELF_UPDATE=true: two updaters for one app
+        // means whichever runs first wins, and the user is left on a version
+        // neither of them thinks it installed.
+        buildConfigField(
+            "boolean",
+            "SELF_UPDATE",
+            providers.gradleProperty("WHITEAESTHER_NO_SELF_UPDATE")
+                .map { (!it.toBoolean()).toString() }
+                .orElse("true")
+                .get(),
+        )
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {

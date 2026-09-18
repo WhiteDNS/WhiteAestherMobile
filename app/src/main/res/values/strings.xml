@@ -545,4 +545,13 @@
     <string name="on_dialled_through_carrier">On, dialled through %1$s</string>
     <string name="nodes_dialled_through_carrier">Your nodes are dialled through %1$s. It has one way out and they take it, so there is nothing to choose here.</string>
     <string name="tor_bridges_country">Ask as this country</string>
+    <string name="download_and_install">Download and install</string>
+    <string name="downloading_update">Downloading %1$s of %2$s</string>
+    <string name="preparing_the_download">Preparing the download</string>
+    <string name="install_the_update">Install it</string>
+    <string name="the_update_could_not_be_verified">The update could not be verified</string>
+    <string name="open_the_download_page_instead">Open the download page instead</string>
+    <string name="cancel_the_download">Cancel</string>
+    <string name="update_downloads_whole_device_only">This downloads through the tunnel, so it needs Whole device coverage. On proxy coverage the download would leave outside it.</string>
+    <string name="err_no_installer">This device would not open the installer. Allow WhiteAesther to install apps, or open the download page instead.</string>
 </resources>

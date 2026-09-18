@@ -43,6 +43,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!--
+        Handing the system installer an APK this app downloaded and checked. It
+        is checked first: the same signing key, the same package, a newer
+        version, the architecture this phone runs, and the SHA-256 the release
+        published. See AppUpdatePolicy.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!--
       Doze and OEM battery managers suspend or kill long-running services, which
       drops the tunnel while the screen is off. Persistent background execution is
       the core function of a VPN, which is a permitted use of this permission.
@@ -99,6 +106,21 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="vpn and local SOCKS5 proxy connection engine" />
         </service>
+
+        <!--
+            Handing the installer the APK, and nothing else. The folder is one
+            this app writes and the installer reads, for the moment it takes to
+            read it.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_paths" />
+        </provider>
 
         <!--
             Connecting from the shade. The settings do not change between

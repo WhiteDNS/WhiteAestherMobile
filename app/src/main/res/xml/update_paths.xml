@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Only the folder the downloaded APK is copied into, and only that one. The
+    downloader writes to external storage, which other apps can reach on some
+    versions of Android; the copy this shares is somewhere only this app can
+    write, so what the installer reads is what was checked.
+-->
+<paths>
+    <files-path
+        name="updates"
+        path="updates/" />
+</paths>

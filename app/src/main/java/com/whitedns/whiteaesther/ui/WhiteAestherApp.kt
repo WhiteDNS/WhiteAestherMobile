@@ -61,12 +61,14 @@ import com.whitedns.whiteaesther.IdentityMessage
 import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.UpdateChecker
+import com.whitedns.whiteaesther.data.UpdateDownload
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatus
 import com.whitedns.whiteaesther.service.LogEntry
 import com.whitedns.whiteaesther.service.TrafficSample
 import com.whitedns.whiteaesther.ui.theme.AetherTheme
 import com.whitedns.whiteaesther.ui.theme.AetherType
+import java.io.File
 
 private enum class Tab(@StringRes val label: Int, val icon: ImageVector) {
     HOME(R.string.tab_home, AetherIcons.Home),
@@ -124,8 +126,14 @@ fun WhiteAestherApp(
     addresses: AddressPair = AddressPair(),
     traffic: TrafficSample = TrafficSample(),
     update: UpdateChecker.Available? = null,
+    updateDownload: UpdateDownload = UpdateDownload.Idle,
+    canInstallUpdate: Boolean = false,
+    updatesInPlace: Boolean = false,
     onLiftBlock: () -> Unit = {},
     onOpenUpdate: (String) -> Unit = {},
+    onDownloadUpdate: () -> Unit = {},
+    onInstallUpdate: (File) -> Unit = {},
+    onCancelUpdateDownload: () -> Unit = {},
     onDismissUpdate: () -> Unit = {},
     batteryExempt: Boolean = true,
     onRequestBatteryExemption: () -> Unit = {},
@@ -213,8 +221,14 @@ fun WhiteAestherApp(
                     traffic = traffic,
                     chainSelection = chainState.selected,
                     update = update,
+                    updateDownload = updateDownload,
+                    canInstallUpdate = canInstallUpdate,
+                    updatesInPlace = updatesInPlace,
                     onLiftBlock = onLiftBlock,
                     onOpenUpdate = onOpenUpdate,
+                    onDownloadUpdate = onDownloadUpdate,
+                    onInstallUpdate = onInstallUpdate,
+                    onCancelUpdateDownload = onCancelUpdateDownload,
                     onDismissUpdate = onDismissUpdate,
                     // STOPPING is deliberately not actionable. The service takes
                     // the stop through a mutex and waits on the session job, so a

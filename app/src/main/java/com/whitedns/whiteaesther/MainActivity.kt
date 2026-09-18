@@ -38,6 +38,8 @@ import com.whitedns.whiteaesther.service.EngineStatusStore
 import com.whitedns.whiteaesther.ui.WhiteAestherApp
 import com.whitedns.whiteaesther.ui.TvUiPolicy
 import com.whitedns.whiteaesther.ui.theme.WhiteAestherTheme
+import androidx.core.content.FileProvider
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<MainViewModel>()
@@ -178,6 +180,39 @@ class MainActivity : ComponentActivity() {
      * replacement is the shape of the thing this app exists to be trusted
      * against, and the user should see where the file comes from.
      */
+    /**
+     * Hands the downloaded APK to the system installer.
+     *
+     * The installer is what actually decides: it refuses anything signed by a
+     * different key than what is installed. The checks made before this point
+     * exist so the user is told why, in this app, instead of meeting a bare
+     * "app not installed" from the system after a forty-megabyte download.
+     *
+     * Android 8 and later also require the user to have allowed this app to
+     * install packages. There is no way to ask inline, so a refusal sends them
+     * to the screen that grants it rather than failing silently.
+     */
+    private fun installUpdate(apk: File) {
+        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+            openExternal(
+                Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName"),
+                ),
+                getString(R.string.err_no_installer),
+            )
+            return
+        }
+        val uri = FileProvider.getUriForFile(this, "$packageName.updates", apk)
+        openExternal(
+            Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            getString(R.string.err_no_installer),
+        )
+    }
+
     private fun openReleasePage(url: String) {
         openExternal(
             Intent(Intent.ACTION_VIEW, Uri.parse(url)),
@@ -299,7 +334,14 @@ class MainActivity : ComponentActivity() {
                     update = viewModel.update.collectAsStateWithLifecycle().value,
                     onLiftBlock = { AetherVpnService.liftBlock(this) },
                     onOpenUpdate = ::openReleasePage,
-                    onDismissUpdate = viewModel::dismissUpdate,
+                    updateDownload = viewModel.updateDownload.collectAsStateWithLifecycle().value,
+                    canInstallUpdate = viewModel.canInstallInPlace
+                        .collectAsStateWithLifecycle().value,
+                    updatesInPlace = viewModel.updatesInPlace,
+                    onDownloadUpdate = viewModel::downloadUpdate,
+                    onInstallUpdate = ::installUpdate,
+                    onCancelUpdateDownload = viewModel::cancelUpdateDownload,
+                    onDismissUpdate = viewModel::skipUpdate,
                     batteryExempt = batteryExempt,
                     onRequestBatteryExemption = ::requestBatteryExemption,
                     onOpenAppSettings = ::openAppSettings,

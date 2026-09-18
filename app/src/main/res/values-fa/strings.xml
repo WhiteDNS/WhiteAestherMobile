@@ -539,4 +539,13 @@
     <string name="on_dialled_through_carrier">روشن، از داخل %1$s شماره‌گیری می‌شود</string>
     <string name="nodes_dialled_through_carrier">نودهای شما از داخل %1$s شماره‌گیری می‌شوند. یک راه خروج دارد و نودها از همان می‌روند، پس اینجا چیزی برای انتخاب نیست.</string>
     <string name="tor_bridges_country">به‌عنوان این کشور بپرس</string>
+    <string name="download_and_install">دانلود و نصب</string>
+    <string name="downloading_update">%1$s از %2$s دانلود شد</string>
+    <string name="preparing_the_download">آماده‌سازی دانلود</string>
+    <string name="install_the_update">نصبش کن</string>
+    <string name="the_update_could_not_be_verified">درستی این به‌روزرسانی تأیید نشد</string>
+    <string name="open_the_download_page_instead">به‌جایش صفحهٔ دانلود را باز کن</string>
+    <string name="cancel_the_download">لغو</string>
+    <string name="update_downloads_whole_device_only">دانلود از داخل تونل انجام می‌شود، پس به پوشش «کل دستگاه» نیاز دارد. با پوشش پراکسی، دانلود از بیرون تونل خارج می‌شد.</string>
+    <string name="err_no_installer">این دستگاه نصب‌کننده را باز نکرد. به وایت‌ایستر اجازهٔ نصب برنامه بدهید، یا به‌جایش صفحهٔ دانلود را باز کنید.</string>
 </resources>
