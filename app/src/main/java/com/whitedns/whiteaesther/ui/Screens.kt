@@ -86,7 +86,9 @@ import com.whitedns.whiteaesther.service.EngineStatus
 import com.whitedns.whiteaesther.service.LogEntry
 import com.whitedns.whiteaesther.service.LogLevel
 import com.whitedns.whiteaesther.service.TrafficSample
+import com.whitedns.whiteaesther.data.UpdateDownload
 import com.whitedns.whiteaesther.service.formatBytes
+import java.io.File
 import com.whitedns.whiteaesther.service.formatRate
 import com.whitedns.whiteaesther.ui.theme.AetherTheme
 import com.whitedns.whiteaesther.ui.theme.AetherType
@@ -262,8 +264,14 @@ fun HomeScreen(
     traffic: TrafficSample,
     chainSelection: String?,
     update: UpdateChecker.Available?,
+    updateDownload: UpdateDownload,
+    canInstallUpdate: Boolean,
+    updatesInPlace: Boolean,
     onLiftBlock: () -> Unit,
     onOpenUpdate: (String) -> Unit,
+    onDownloadUpdate: () -> Unit,
+    onInstallUpdate: (File) -> Unit,
+    onCancelUpdateDownload: () -> Unit,
     onDismissUpdate: () -> Unit,
     onToggleConnection: () -> Unit,
     onGoToRoutes: () -> Unit,
@@ -521,20 +529,97 @@ fun HomeScreen(
                     Modifier.padding(11.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    PrimaryButton(
-                        text = stringResource(R.string.open_the_download_page),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("update-open-button"),
-                        onClick = { onOpenUpdate(update.url) },
-                    )
-                    OutlineButton(
-                        text = stringResource(R.string.not_now),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("update-dismiss-button"),
-                        onClick = onDismissUpdate,
-                    )
+                    // Only the whole-device tunnel carries the download, so
+                    // everywhere else this stays what it always was: a link to
+                    // the release page. The explanation is shown only where it
+                    // is true -- an F-Droid build never downloads its own
+                    // update, and telling those users to change their coverage
+                    // would send them looking for a switch that changes nothing.
+                    val ready = updateDownload as? UpdateDownload.Ready
+                    val running = updateDownload as? UpdateDownload.Running
+                    (updateDownload as? UpdateDownload.Failed)?.let { failed ->
+                        Text(
+                            text = failed.reason,
+                            style = AetherTheme.type.Small,
+                            color = colors.signalFailed,
+                            modifier = Modifier.testTag("update-failure"),
+                        )
+                    }
+                    when {
+                        ready != null -> PrimaryButton(
+                            text = stringResource(R.string.install_the_update),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("update-install-button"),
+                            onClick = { onInstallUpdate(ready.apk) },
+                        )
+
+                        running != null -> {
+                            Text(
+                                text = if (running.total > 0) {
+                                    stringResource(
+                                        R.string.downloading_update,
+                                        formatBytes(running.done),
+                                        formatBytes(running.total),
+                                    )
+                                } else {
+                                    stringResource(R.string.preparing_the_download)
+                                },
+                                style = AetherTheme.type.Small,
+                                color = colors.text2,
+                                modifier = Modifier.testTag("update-progress"),
+                            )
+                            OutlineButton(
+                                text = stringResource(R.string.cancel_the_download),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("update-cancel-button"),
+                                onClick = onCancelUpdateDownload,
+                            )
+                        }
+
+                        canInstallUpdate -> PrimaryButton(
+                            text = stringResource(R.string.download_and_install),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("update-download-button"),
+                            onClick = onDownloadUpdate,
+                        )
+
+                        updatesInPlace -> Text(
+                            text = stringResource(R.string.update_downloads_whole_device_only),
+                            style = AetherTheme.type.Small,
+                            color = colors.text2,
+                        )
+                    }
+                    if (running == null) {
+                        val open = if (ready == null && canInstallUpdate) {
+                            R.string.open_the_download_page_instead
+                        } else {
+                            R.string.open_the_download_page
+                        }
+                        val modifier = Modifier.fillMaxWidth().testTag("update-open-button")
+                        if (canInstallUpdate || ready != null) {
+                            OutlineButton(
+                                text = stringResource(open),
+                                modifier = modifier,
+                                onClick = { onOpenUpdate(update.url) },
+                            )
+                        } else {
+                            PrimaryButton(
+                                text = stringResource(open),
+                                modifier = modifier,
+                                onClick = { onOpenUpdate(update.url) },
+                            )
+                        }
+                        OutlineButton(
+                            text = stringResource(R.string.not_now),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("update-dismiss-button"),
+                            onClick = onDismissUpdate,
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(12.dp))
