@@ -92,6 +92,27 @@ object NativeAetherBridge {
             onFailure = { Result.failure(it) },
         )
 
+    /**
+     * Buys the engine's identity without building anything with it.
+     *
+     * For the moment another carrier is already carrying traffic. A Cloudflare
+     * registration is the one thing the engine cannot do without and the one
+     * thing a blocked network will not let it do -- so it is done through the
+     * route that is working, once, and every later connect can be the engine's
+     * own direct one.
+     *
+     * No endpoint search: that is the slow half of preparing, several thousand
+     * probes, and none of it is needed to register. Returns the devices this
+     * install now holds, which is nothing new when it already had them.
+     */
+    fun provision(configJson: String): Result<List<String>> = call { nativeProvision(configJson) }
+        .mapCatching { raw ->
+            val json = JSONObject(raw)
+            check(json.optBoolean("ok")) { json.optString("error", "Provisioning failed") }
+            val devices = json.getJSONArray("devices")
+            List(devices.length()) { devices.getString(it) }
+        }
+
     fun scan(configJson: String): Result<List<EndpointScanResult>> = call { nativeScan(configJson) }
         .mapCatching { raw ->
             val json = JSONObject(raw)
@@ -170,6 +191,9 @@ object NativeAetherBridge {
 
     @JvmStatic
     private external fun nativePrepare(configJson: String): String
+
+    @JvmStatic
+    private external fun nativeProvision(configJson: String): String
 
     @JvmStatic
     private external fun nativeScan(configJson: String): String

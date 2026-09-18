@@ -177,6 +177,16 @@ class AetherVpnService : VpnService() {
     private var networkWatch: ConnectivityManager.NetworkCallback? = null
 
     /**
+     * Whether this session has already bought the engine an identity over a
+     * carrier that was working.
+     *
+     * Once is the whole idea. It costs a Cloudflare registration, the engine
+     * keeps what it buys, and a second attempt in the same session would be
+     * spending an allowance to learn something already on disk.
+     */
+    private var boughtIdentityBehindCarrier = false
+
+    /**
      * The watchers of the current attempt's hops.
      *
      * Cancelled when the next attempt begins. Without that they accumulate one
@@ -523,6 +533,7 @@ class AetherVpnService : VpnService() {
                 newHopAttempt()
                 reconnectAttempt = 0
                 lastEngineFailure = null
+                boughtIdentityBehindCarrier = false
                 // A new connect is a new search, planned for whichever network
                 // the phone is on now.
                 autoSteps = emptyList()
@@ -1610,6 +1621,7 @@ class AetherVpnService : VpnService() {
                 "${winner.route.wireName} carries traffic; routing the interface into 127.0.0.1:${winner.port}",
             )
             watchHop(carrier, winner.client, configJson, mode, sessionGeneration, attempt)
+            buyIdentityBehind(carrier, winner.port, sessionGeneration)
             publish(EngineStatus(EngineStage.CONNECTING, mode, null, sayNow(R.string.status_starting_chain)))
 
             val fd = tun.detachFd()
@@ -1827,6 +1839,79 @@ class AetherVpnService : VpnService() {
             route.encryptedHello?.let { json.put("encryptedHello", it) }
             json.toString()
         }.getOrDefault(base)
+    }
+
+    /**
+     * Buys the engine an identity over a carrier that is already working.
+     *
+     * The engine cannot connect without a Cloudflare registration, and a
+     * network that blocks `api.cloudflareclient.com` will not let it get one --
+     * which is a deadlock the app was walking into every session. Psiphon needs
+     * no account at all, so it wins the race, carries the user's traffic, and
+     * the engine goes on being unable to register for as long as that lasts.
+     *
+     * The way out is the route that is already working. This sends the engine's
+     * registration through the winner's own SOCKS listener, once, in the
+     * background. Nothing is torn down and nobody waits for it: the user stays
+     * on the carrier that got them out, and the next connect on this network
+     * can be the engine's direct one, which is faster and has fewer moving
+     * parts.
+     *
+     * No endpoint search comes with it -- registration is all that is bought
+     * here, and searching would be several thousand probes for a tunnel nobody
+     * is about to build.
+     *
+     * Skipped when the engine is the winner, since it evidently has what it
+     * needs, and when it already has an identity: the call is cheap then,
+     * answered from the store without a round trip, but saying so here keeps
+     * the log honest about what was spent.
+     */
+    private fun buyIdentityBehind(carrier: Carrier, port: Int, sessionGeneration: Long) {
+        if (carrier == Carrier.AETHER || port <= 0) return
+        if (boughtIdentityBehindCarrier) return
+        val base = baseConfigJson ?: return
+        boughtIdentityBehindCarrier = true
+
+        serviceScope.launch {
+            // The engine refuses to provision while one is running, and a lane
+            // that just lost the race may still be unwinding inside a blocking
+            // call. Waiting for it costs nothing here -- nobody is watching
+            // this, which is the point of doing it behind a carrier.
+            staleEngine?.let { stale -> withTimeoutOrNull(STALE_ENGINE_WAIT_MS) { stale.join() } }
+            if (sessionGeneration != generation) return@launch
+
+            val config = carrierEngineConfig(base, port)
+            EngineLog.record(
+                LogLevel.INFO,
+                "identity",
+                "asking Cloudflare for an identity through ${carrier.wireName}, " +
+                    "so the next connect here can be the engine's own",
+            )
+            val outcome = withContext(Dispatchers.IO) { NativeAetherBridge.provision(config) }
+            if (sessionGeneration != generation) return@launch
+
+            outcome.fold(
+                onSuccess = { devices ->
+                    EngineLog.record(
+                        LogLevel.INFO,
+                        "identity",
+                        "the engine holds ${devices.size} identit" +
+                            (if (devices.size == 1) "y" else "ies") +
+                            "; it will not have to ask again",
+                    )
+                },
+                onFailure = { error ->
+                    // Not a session failure. The user is connected, by the route
+                    // that won -- this was an attempt to make the next one
+                    // better, and it can be made again next time.
+                    EngineLog.record(
+                        LogLevel.WARN,
+                        "identity",
+                        "could not get an identity through ${carrier.wireName}: ${error.message}",
+                    )
+                },
+            )
+        }
     }
 
     /** Remembers [route] for this network, which is what makes the next connect here quick. */
@@ -2189,6 +2274,11 @@ class AetherVpnService : VpnService() {
      */
     private fun isConclusive(reason: String): Boolean =
         isIdentityRefusal(reason) ||
+            // The engine is holding a wait of its own -- minutes to an hour,
+            // kept across restarts because Cloudflare counts a registration
+            // against the address whether or not we keep the answer. Retrying
+            // three seconds into that is the behaviour the wait exists to stop.
+            reason.contains("registration is on hold", ignoreCase = true) ||
             reason.contains("no WireGuard endpoint answered", ignoreCase = true)
 
     /**
