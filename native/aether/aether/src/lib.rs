@@ -1221,9 +1221,10 @@ pub async fn run_embedded(
 /// they go to whatever the caller asked for.
 ///
 /// For a network that has learnt to recognise a single MASQUE hop. The inner
-/// edges are derived from the outer one rather than scanned for -- the same
-/// list the desktop path uses -- so this costs no discovery beyond the outer
-/// peer that prepare already chose.
+/// edge is the one Cloudflare named for the inner device, with the derived
+/// neighbours behind it as a fallback -- see [`order_inner_candidates`], and
+/// note that this used to be the derivation alone, which is why nesting failed
+/// on networks where a single hop worked.
 async fn run_masque_in_masque_embedded(
     primary: &account::Identity,
     secondary: &account::Identity,
@@ -1251,10 +1252,11 @@ async fn run_masque_in_masque_embedded(
     )
     .await?;
 
-    let candidates: Vec<SocketAddr> = inner_masque_candidates(peer, MIM_INNER_TRIES)
-        .into_iter()
-        .filter(|candidate| candidate.ip() != peer.ip())
-        .collect();
+    let candidates = order_inner_candidates(
+        assigned_masque_peers(secondary).await,
+        peer,
+        inner_masque_candidates(peer, MIM_INNER_TRIES),
+    );
     if candidates.is_empty() {
         outer.exit.abort();
         return Err(AetherError::Other(
@@ -3517,6 +3519,38 @@ fn mim_inner_budget(outer_mtu: usize, inner_peer: SocketAddr, h2: bool) -> (usiz
 const MASQUE_INNER_PORT: u16 = 443;
 const MIM_INNER_TRIES: usize = 6;
 
+/// The inner edges of a nested pair, in the order they should be tried.
+///
+/// The endpoints Cloudflare named for the *inner* device come first, then the
+/// derived neighbours. The derivation is a guess -- it keeps the outer edge's
+/// first three octets and randomises the last -- and a guess at a Cloudflare
+/// address lands on an ordinary edge that does not serve MASQUE for this
+/// device, which closes the handshake with TLS alert 40. Six of those in a row
+/// is what "MIM does not connect" looked like, on a network where the outer hop
+/// had just been validated end to end.
+///
+/// It is the same defect as the one fixed for the single-hop path: the server
+/// names the address in every registration answer and the engine went looking
+/// for one instead. The fix did not reach here because the inner edge was
+/// derived rather than discovered, so nothing in the nested path ever asked.
+///
+/// The outer edge's own address is dropped, because nesting a hop onto the edge
+/// it is already tunnelled through is not a second hop.
+fn order_inner_candidates(
+    assigned: Vec<SocketAddr>,
+    outer: SocketAddr,
+    derived: Vec<SocketAddr>,
+) -> Vec<SocketAddr> {
+    let mut out: Vec<SocketAddr> = Vec::new();
+    for candidate in assigned.into_iter().chain(derived) {
+        if candidate.ip() == outer.ip() || out.contains(&candidate) {
+            continue;
+        }
+        out.push(candidate);
+    }
+    out
+}
+
 fn mim_inner_startup() -> std::time::Duration {
     masque_startup_timeout().min(std::time::Duration::from_secs(12))
 }
@@ -3797,8 +3831,14 @@ async fn run_mim(
         };
 
         let candidates = match inner_peer {
+            // Asked for by name. Not second-guessed, and not filtered against
+            // the outer edge either: a pinned peer is the user's answer.
             Some(peer) => vec![peer],
-            None => inner_masque_candidates(outer, MIM_INNER_TRIES),
+            None => order_inner_candidates(
+                assigned_masque_peers(&secondary).await,
+                outer,
+                inner_masque_candidates(outer, MIM_INNER_TRIES),
+            ),
         };
 
         if candidates.is_empty() {
@@ -6156,6 +6196,55 @@ mod tests {
         assert!(
             mtu < H2_TUNNEL_MTU,
             "the inner link stays under the outer one"
+        );
+    }
+
+    /// The inner hop asks where its device lives before it guesses.
+    ///
+    /// Reproduces the reported failure: the outer hop validated end to end and
+    /// then six inner attempts died identically with TLS alert 40, because
+    /// every one of them was a guessed neighbour of the outer edge rather than
+    /// the address Cloudflare had assigned to the inner device.
+    #[test]
+    fn the_inner_hop_tries_the_endpoint_cloudflare_assigned_first() {
+        let outer: SocketAddr = "162.159.198.104:443".parse().unwrap();
+        let assigned: SocketAddr = "162.159.192.2:443".parse().unwrap();
+        let derived = inner_masque_candidates(outer, MIM_INNER_TRIES);
+
+        let ordered = order_inner_candidates(vec![assigned], outer, derived.clone());
+
+        assert_eq!(
+            ordered.first(),
+            Some(&assigned),
+            "the assigned endpoint is tried before any guess"
+        );
+        assert_eq!(
+            ordered.len(),
+            1 + derived.len(),
+            "the guesses remain behind it"
+        );
+    }
+
+    /// Two answers about one device, and the outer edge, are not candidates.
+    #[test]
+    fn the_inner_hop_does_not_try_the_same_edge_twice_or_the_outer_one() {
+        let outer: SocketAddr = "162.159.198.104:443".parse().unwrap();
+        let moved: SocketAddr = "162.159.192.2:443".parse().unwrap();
+
+        // `assigned_masque_peers` returns the stored endpoint and the current
+        // one, which are often the same address; and Cloudflare can perfectly
+        // well have assigned the inner device to the edge the outer hop is
+        // already using, which is not a second hop.
+        let ordered = order_inner_candidates(
+            vec![moved, moved, outer],
+            outer,
+            vec![moved, "162.159.198.7:443".parse().unwrap()],
+        );
+
+        assert_eq!(
+            ordered,
+            vec![moved, "162.159.198.7:443".parse().unwrap()],
+            "each edge appears once, and never the outer one"
         );
     }
 
