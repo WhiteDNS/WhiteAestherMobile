@@ -373,6 +373,21 @@ class AetherVpnService : VpnService() {
 
                 autoNetworkKey = now
                 EngineLog.record(LogLevel.INFO, "auto", "the network changed from $was to $now")
+
+                // Move the tunnel rather than rebuild it, where the tunnel can
+                // be moved. quiche probes the new path and shifts the source
+                // without a new handshake -- and nothing on Android had ever
+                // asked it to, so every roam cost a reconnect and the endpoint
+                // search that comes with it. Only QUIC answers yes; H2 rides
+                // TCP and a moved interface closes it, and WireGuard rebinds by
+                // its own route.
+                if (action == RoamAction.RecordOnly && NativeAetherBridge.migrate()) {
+                    EngineLog.record(
+                        LogLevel.INFO,
+                        "auto",
+                        "the tunnel is moving to $now rather than reconnecting",
+                    )
+                }
                 if (action != RoamAction.Replan) return@withLock
 
                 EngineLog.record(

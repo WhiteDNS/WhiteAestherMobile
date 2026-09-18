@@ -141,6 +141,19 @@ object NativeAetherBridge {
      */
     fun cancelPrepare(): Boolean = isLoaded && nativeCancelPrepare()
 
+    /**
+     * Moves a running tunnel onto the network this phone is on now.
+     *
+     * Returns whether there was one able to do it. Only the QUIC path can: H2
+     * rides TCP and a moved interface closes it outright, and WireGuard rebinds
+     * by its own route. A false is not a failure -- it is the ordinary answer
+     * for those two, and the caller reconnects as it always did.
+     *
+     * Worth trying first because the alternative is a reconnect, and a
+     * reconnect on these networks means another endpoint search.
+     */
+    fun migrate(): Boolean = isLoaded && runCatching { nativeMigrate() }.getOrDefault(false)
+
     fun run(
         configJson: String,
         preparedPeer: String,
@@ -206,6 +219,9 @@ object NativeAetherBridge {
 
     @JvmStatic
     private external fun nativeCancelPrepare(): Boolean
+
+    @JvmStatic
+    private external fun nativeMigrate(): Boolean
 
     @JvmStatic
     private external fun nativeRun(

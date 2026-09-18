@@ -829,6 +829,24 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
 /// Separate from cancelScan because they interrupt different work: that one
 /// belongs to the standalone endpoint search, and never reached the
 /// provisioning and peer selection that prepare does before a session starts.
+/// Moves the running tunnel onto the network this phone is on now.
+///
+/// Returns whether there was a tunnel able to do it. Only the QUIC path can:
+/// H2 rides TCP and a moved interface closes it, and WireGuard rebinds by its
+/// own route. The caller reconnects when this says no, which is what used to
+/// happen every time.
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeMigrate(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+) -> jboolean {
+    if aether::migrate_running_tunnel() {
+        JNI_TRUE
+    } else {
+        JNI_FALSE
+    }
+}
+
 #[no_mangle]
 pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeCancelPrepare(
     _env: JNIEnv<'_>,
