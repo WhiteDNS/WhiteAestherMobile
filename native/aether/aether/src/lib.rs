@@ -1851,6 +1851,11 @@ async fn run_masque_tunnel_embedded(
                 .map(|pin| pin.to_vec())
                 .collect(),
         };
+        log::info!(
+            "[+] [{}] MASQUE transport: HTTP/2 to {peer} (inner mtu {})",
+            shape.label,
+            shape.mtu
+        );
         tokio::spawn(masque_h2::run(
             h2cfg,
             internals,
@@ -1858,6 +1863,23 @@ async fn run_masque_tunnel_embedded(
             Some(ready_tx),
         ))
     } else {
+        // Said here as well as in establish_masque, because until now only the
+        // hop that dials the network printed its sizing. A nested pair whose
+        // inner hop failed gave no way to tell whether it had room for its own
+        // handshake, which is a question every report of one asked.
+        let budget = cfg.datagram_budget();
+        log::info!(
+            "[+] [{}] MASQUE transport: HTTP/3 (QUIC) to {peer} (inner mtu {}, datagram {budget})",
+            shape.label,
+            shape.mtu
+        );
+        if budget > shape.datagram {
+            log::warn!(
+                "[-] [{}] the link above this hop leaves {} bytes, less than the {budget} a                  client handshake needs; it is being sent at {budget} and may not fit",
+                shape.label,
+                shape.datagram
+            );
+        }
         tokio::spawn(quic::run(cfg, internals, Some(addr_tx), Some(ready_tx)))
     };
 
@@ -6290,6 +6312,44 @@ mod tests {
     /// reached that conclusion and turns its inner obfuscation off; the nested
     /// MASQUE path was sending two junk datagrams and a fake first flight to a
     /// real Cloudflare gateway ahead of every inner handshake.
+    /// Every hop can hold its own first packet, whatever it is nested under.
+    ///
+    /// quiche pads a client Initial only as far as the buffer it is handed, so
+    /// a hop sized from a tunnel above it can send a short first flight and
+    /// nothing says so. The inner hop of a nested pair is exactly that case:
+    /// its budget is the outer link minus headers, and on an IPv6 edge under a
+    /// 1280-byte link that is 1232 -- ten bytes under what an Initial needs.
+    #[test]
+    fn every_hop_can_send_a_whole_client_initial() {
+        for (outer_mtu, peer) in [
+            (1280usize, "162.159.192.2:443"),
+            (1280, "[2606:4700:d0::a29f:c002]:443"),
+            (1200, "162.159.192.2:443"),
+            (900, "162.159.192.2:443"),
+        ] {
+            let inner = MasqueShape::mim_inner(outer_mtu, peer.parse().unwrap(), false);
+            let cfg = quic::TunnelConfig {
+                peer: peer.parse().unwrap(),
+                sni: String::new(),
+                authority: String::new(),
+                path: String::new(),
+                cert_pem: Vec::new(),
+                key_pem: Vec::new(),
+                ech_config_list: None,
+                noize: noize::NoizeConfig::off(),
+                local_ipv4: std::net::Ipv4Addr::LOCALHOST,
+                quiet: true,
+                max_datagram: inner.datagram,
+                version_bait: inner.version_bait,
+            };
+            assert!(
+                cfg.datagram_budget() >= quic::MIN_INITIAL_BUDGET,
+                "an outer link of {outer_mtu} to {peer} left {} for the inner handshake",
+                cfg.datagram_budget()
+            );
+        }
+    }
+
     #[test]
     fn only_the_hop_that_touches_the_network_is_obfuscated() {
         let single = MasqueShape::single();

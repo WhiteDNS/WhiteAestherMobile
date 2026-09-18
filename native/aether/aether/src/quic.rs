@@ -17,6 +17,23 @@ use crate::{consts, error::AetherError, error::Result};
 pub const MAX_DATAGRAM_SIZE: usize = 1350;
 pub const MIN_DATAGRAM_SIZE: usize = 1200;
 
+/// The smallest send buffer that can still hold a whole client Initial.
+///
+/// quiche pads a client Initial to `MIN_CLIENT_INITIAL_LEN` and no further,
+/// and it pads only as far as the buffer it was given allows:
+///
+/// ```text
+/// let pad_len = cmp::min(left, MIN_CLIENT_INITIAL_LEN - done);
+/// ```
+///
+/// So a buffer below that silently produces a short first flight rather than
+/// an error -- the handshake goes out undersized and the peer decides what to
+/// do about it. A hop sized from whatever a tunnel above it can carry can land
+/// there without anything saying so, which is why this floor is separate from
+/// [`MIN_DATAGRAM_SIZE`]: that one is the protocol's minimum datagram, this one
+/// is the minimum buffer our own first packet needs.
+pub const MIN_INITIAL_BUDGET: usize = 1242;
+
 fn net_queue() -> usize {
     crate::sysprofile::channel_capacity()
 }
@@ -70,9 +87,15 @@ pub struct TunnelConfig {
 }
 
 impl TunnelConfig {
+    /// The send buffer for this connection.
+    ///
+    /// Floored at [`MIN_INITIAL_BUDGET`] rather than [`MIN_DATAGRAM_SIZE`],
+    /// because a buffer between the two is enough for the protocol's minimum
+    /// datagram and not enough for our own client Initial, and quiche pads to
+    /// whatever it is given instead of complaining.
     pub fn datagram_budget(&self) -> usize {
         self.max_datagram
-            .clamp(MIN_DATAGRAM_SIZE, MAX_DATAGRAM_SIZE)
+            .clamp(MIN_INITIAL_BUDGET, MAX_DATAGRAM_SIZE)
     }
 }
 
