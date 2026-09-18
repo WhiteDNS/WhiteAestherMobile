@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The widget sits on the launcher, not inside this app, so it cannot read the
+  Compose palette. These are the same values, written once here and once in
+  values-night, so the two surfaces do not drift apart silently.
+-->
+<resources>
+    <color name="widget_surface">#F6FAF8</color>
+    <color name="widget_border">#D2DEDA</color>
+    <color name="widget_text">#0B1513</color>
+    <color name="widget_text_dim">#4C5E59</color>
+    <color name="widget_brand">#0B8F6C</color>
+    <color name="widget_on_brand">#FFFFFF</color>
+    <color name="widget_signal_idle">#7C8D88</color>
+    <color name="widget_signal_working">#A06A08</color>
+    <color name="widget_signal_live">#0B8F6C</color>
+    <color name="widget_signal_failed">#C2372F</color>
+</resources>

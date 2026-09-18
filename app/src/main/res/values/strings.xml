@@ -554,4 +554,11 @@
     <string name="cancel_the_download">Cancel</string>
     <string name="update_downloads_whole_device_only">This downloads through the tunnel, so it needs Whole device coverage. On proxy coverage the download would leave outside it.</string>
     <string name="err_no_installer">This device would not open the installer. Allow WhiteAesther to install apps, or open the download page instead.</string>
+    <string name="widget_connect">Connect</string>
+    <string name="widget_disconnect">Disconnect</string>
+    <string name="widget_working">Working…</string>
+    <string name="widget_description">Connect and disconnect from the home screen.</string>
+    <string name="add_a_home_screen_widget">Add a home-screen widget</string>
+    <string name="connect_and_disconnect_from_the_home_screen">Connect and disconnect without opening the app.</string>
+    <string name="err_no_widget_pin">This launcher will not place it for you. Look for WhiteAesther in its own widget list.</string>
 </resources>

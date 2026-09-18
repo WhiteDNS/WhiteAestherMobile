@@ -548,4 +548,11 @@
     <string name="cancel_the_download">لغو</string>
     <string name="update_downloads_whole_device_only">دانلود از داخل تونل انجام می‌شود، پس به پوشش «کل دستگاه» نیاز دارد. با پوشش پراکسی، دانلود از بیرون تونل خارج می‌شد.</string>
     <string name="err_no_installer">این دستگاه نصب‌کننده را باز نکرد. به وایت‌ایستر اجازهٔ نصب برنامه بدهید، یا به‌جایش صفحهٔ دانلود را باز کنید.</string>
+    <string name="widget_connect">اتصال</string>
+    <string name="widget_disconnect">قطع اتصال</string>
+    <string name="widget_working">در حال کار…</string>
+    <string name="widget_description">اتصال و قطع اتصال از صفحهٔ اصلی.</string>
+    <string name="add_a_home_screen_widget">افزودن ابزارک صفحهٔ اصلی</string>
+    <string name="connect_and_disconnect_from_the_home_screen">اتصال و قطع اتصال بدون باز کردن اپ.</string>
+    <string name="err_no_widget_pin">این لانچر خودش ابزارک را اضافه نمی‌کند. وایت‌ایستر را در فهرست ابزارک‌های خودش پیدا کنید.</string>
 </resources>

@@ -38,6 +38,7 @@ import com.whitedns.whiteaesther.service.EngineStatusStore
 import com.whitedns.whiteaesther.ui.WhiteAestherApp
 import com.whitedns.whiteaesther.ui.TvUiPolicy
 import com.whitedns.whiteaesther.ui.theme.WhiteAestherTheme
+import com.whitedns.whiteaesther.service.AetherWidgetProvider
 import androidx.core.content.FileProvider
 import java.io.File
 
@@ -206,6 +207,28 @@ class MainActivity : ComponentActivity() {
      * install. It is also the way out when a check here refuses an update the
      * user can see published.
      */
+    /**
+     * Asks the launcher to place the widget, where it can be asked.
+     *
+     * Not every launcher supports pinning, and the ones that do may refuse. The
+     * fallback is not a failure: the widget is in the launcher's own picker
+     * either way, so the message says where to find it rather than that
+     * something went wrong.
+     */
+    private fun offerHomeScreenWidget() {
+        val manager = getSystemService(android.appwidget.AppWidgetManager::class.java)
+        val pinned = manager != null &&
+            manager.isRequestPinAppWidgetSupported &&
+            runCatching {
+                manager.requestPinAppWidget(
+                    android.content.ComponentName(this, AetherWidgetProvider::class.java),
+                    null,
+                    null,
+                )
+            }.getOrDefault(false)
+        if (!pinned) explainUnavailable(getString(R.string.err_no_widget_pin))
+    }
+
     private fun openReleasePage(url: String) {
         openExternal(
             Intent(Intent.ACTION_VIEW, Uri.parse(url)),
@@ -348,6 +371,7 @@ class MainActivity : ComponentActivity() {
                     onRequestBatteryExemption = ::requestBatteryExemption,
                     onOpenAppSettings = ::openAppSettings,
                     onAddTile = ::offerQuickSettingsTile,
+                    onAddWidget = ::offerHomeScreenWidget,
                 )
             }
         }

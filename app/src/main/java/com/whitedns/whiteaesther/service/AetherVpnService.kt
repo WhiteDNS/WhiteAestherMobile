@@ -64,6 +64,8 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.net.InetAddress
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 class AetherVpnService : VpnService() {
     /**
@@ -301,6 +303,24 @@ class AetherVpnService : VpnService() {
         super.onCreate()
         AetherNotification.createChannel(this)
         watchTheNetworkUnderneath()
+        redrawTheWidgetOnEveryStage()
+    }
+
+    /**
+     * Keeps the home-screen widget showing the engine rather than the past.
+     *
+     * Pushed from here rather than polled: the widget's own update period is
+     * zero, because the platform's schedule is half-hourly at best and would
+     * wake the device to redraw something that has not changed. A stage change
+     * is the only moment it has anything new to say.
+     */
+    private fun redrawTheWidgetOnEveryStage() {
+        serviceScope.launch {
+            EngineStatusStore.status
+                .map { it.stage }
+                .distinctUntilChanged()
+                .collect { AetherWidgetProvider.refresh(applicationContext) }
+        }
     }
 
     /**
@@ -534,6 +554,10 @@ class AetherVpnService : VpnService() {
         NativeAetherBridge.stop()
         runCatching { NativeAetherBridge.setSocketProtector(null) }
         serviceScope.cancel()
+        // After the collector is gone, and with the application context rather
+        // than this one: without it a widget would keep saying "On" for a
+        // session that ended with the service.
+        AetherWidgetProvider.refresh(applicationContext)
         super.onDestroy()
     }
 

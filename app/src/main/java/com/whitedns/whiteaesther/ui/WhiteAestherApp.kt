@@ -139,6 +139,7 @@ fun WhiteAestherApp(
     onRequestBatteryExemption: () -> Unit = {},
     onOpenAppSettings: () -> Unit = {},
     onAddTile: () -> Unit = {},
+    onAddWidget: () -> Unit = {},
     television: Boolean? = null,
 ) {
     var destination by rememberSaveable { mutableStateOf(Destination.HOME) }
@@ -317,6 +318,7 @@ fun WhiteAestherApp(
                     onRequestBatteryExemption = onRequestBatteryExemption,
                     onOpenAppSettings = onOpenAppSettings,
                     onAddTile = onAddTile,
+                    onAddWidget = onAddWidget,
                     onGoToDiagnostics = {
                         openDetail(Destination.DIAGNOSTICS, diagnosticsFocus)
                     },

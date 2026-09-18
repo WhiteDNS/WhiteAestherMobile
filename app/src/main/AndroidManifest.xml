@@ -146,6 +146,37 @@
         </service>
 
         <!--
+          The same argument as the tile, for people who do not use the shade.
+          Exported because the launcher hosts it; it takes no data from the
+          broadcast beyond the action names it defines itself.
+        -->
+        <receiver
+            android:name=".service.AetherWidgetProvider"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_aether_info" />
+        </receiver>
+
+        <!--
+          Carries out a widget tap. Not exported: the widget's own pending
+          intents are the only thing that should be able to start a session
+          without the app being open, and an exported activity would let any
+          app on the phone do it.
+        -->
+        <activity
+            android:name=".WidgetActionActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.WhiteAestherInvisible" />
+
+        <!--
           Psiphon, in its own process, and that is the entire point of the
           declaration. Its tunnel core is Go and so is the exit chain; one
           process may host one Go runtime, because two of them export the same
