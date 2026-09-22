@@ -30,6 +30,7 @@ import com.whitedns.whiteaesther.core.PsiphonConfig
 import com.whitedns.whiteaesther.core.TorClient
 import com.whitedns.whiteaesther.core.TorBridges
 import com.whitedns.whiteaesther.core.TorConfig
+import com.whitedns.whiteaesther.data.DnsServers
 import com.whitedns.whiteaesther.data.AutoOptions
 import com.whitedns.whiteaesther.data.AutoPlanner
 import com.whitedns.whiteaesther.data.AutoRoute
@@ -751,6 +752,7 @@ class AetherVpnService : VpnService() {
                 useChain,
                 transportOf(engineConfig),
                 splitTunnel,
+                dnsServersOf(engineConfig),
             )
             if (tun == null) {
                 reportError(mode, sayNow(R.string.err_no_interface))
@@ -2471,6 +2473,7 @@ class AetherVpnService : VpnService() {
         forChain: Boolean,
         transport: String,
         splitTunnel: SplitTunnel = SplitTunnel(),
+        dns: List<String> = emptyList(),
     ): ParcelFileDescriptor? {
         val configureIntent = PendingIntent.getActivity(
             this,
@@ -2500,6 +2503,11 @@ class AetherVpnService : VpnService() {
             builder.setMtu(9000)
             addAddress(builder, ChainConfig.TUN_IPV4, 30)
             addAddress(builder, ChainConfig.TUN_IPV6, 126)
+            // The chain's own resolver, not the user's field: mihomo answers
+            // from here and asks upstream itself, over DoH through the tunnel.
+            // Pointing this at a plain address would move every lookup onto UDP
+            // and undo that, so the field is deliberately not honoured in chain
+            // mode rather than honoured in a way that reads as a downgrade.
             builder.addDnsServer(ChainConfig.TUN_DNS)
             builder.addRoute("::", 0)
         } else {
@@ -2513,8 +2521,22 @@ class AetherVpnService : VpnService() {
             // the chain: they need a 1280-byte UDP payload, and 1280 here left
             // 1252 of it.
             builder.setMtu(mtu)
-            builder.addDnsServer("1.1.1.1")
-            builder.addDnsServer("1.0.0.1")
+            // What the user asked for, or Cloudflare. The interface is the only
+            // place this can be said: in TUN mode an app sends IP packets, so
+            // its queries go to whatever is advertised here, and the engine's
+            // own resolver is never consulted -- it only answers when something
+            // hands the SOCKS listener a name to look up.
+            //
+            // IPv6 resolvers are held back until the interface is known to
+            // carry IPv6, below, because advertising one on an IPv4-only
+            // interface is a resolver nothing can reach.
+            val (wantedV6, wantedV4) = dns.partition { it.contains(':') }
+            if (wantedV4.isEmpty() && wantedV6.isEmpty()) {
+                addDnsServer(builder, "1.1.1.1")
+                addDnsServer(builder, "1.0.0.1")
+            } else {
+                wantedV4.forEach { addDnsServer(builder, it) }
+            }
             addAddress(builder, ipv4, 32)
             // IPv6 requires a 1280-byte minimum MTU, and Android enforces it:
             // an interface carrying an IPv6 address with anything smaller is
@@ -2524,8 +2546,12 @@ class AetherVpnService : VpnService() {
             // honour, which is the fault this number was chosen to fix.
             if (ipv6.isNotBlank() && mtu >= IPV6_MINIMUM_MTU) {
                 addAddress(builder, ipv6, 128)
-                builder.addDnsServer("2606:4700:4700::1111")
-                builder.addDnsServer("2606:4700:4700::1001")
+                if (wantedV4.isEmpty() && wantedV6.isEmpty()) {
+                    addDnsServer(builder, "2606:4700:4700::1111")
+                    addDnsServer(builder, "2606:4700:4700::1001")
+                } else {
+                    wantedV6.forEach { addDnsServer(builder, it) }
+                }
                 builder.addRoute("::", 0)
             } else if (ipv6.isNotBlank()) {
                 EngineLog.record(
@@ -2541,6 +2567,21 @@ class AetherVpnService : VpnService() {
             builder.setBlocking(false)
         }
         return builder.establish()
+    }
+
+    /**
+     * Puts one resolver on the interface, or leaves it off.
+     *
+     * The platform throws on an address it will not take, and this runs while
+     * the tunnel is being built: one bad entry would be a failed connect rather
+     * than a resolver the user does not get. [DnsServers] has already filtered
+     * the field, so reaching the catch means the two disagree -- worth a line
+     * in the log, never worth the connection.
+     */
+    private fun addDnsServer(builder: Builder, address: String) {
+        runCatching { builder.addDnsServer(address) }.onFailure {
+            EngineLog.record(LogLevel.WARN, "tun", "the interface would not take the resolver $address")
+        }
     }
 
     private fun addAddress(builder: Builder, cidr: String, defaultPrefix: Int) {
@@ -2719,6 +2760,12 @@ class AetherVpnService : VpnService() {
         "mim" -> MASQUE_IN_MASQUE_MTU
         else -> MASQUE_MTU
     }
+
+    /** The resolvers the user asked for, read back out of the engine's config. */
+    private fun dnsServersOf(configJson: String): List<String> =
+        DnsServers.parse(
+            runCatching { JSONObject(configJson).optString("dnsServers") }.getOrDefault("")
+        )
 
     private fun transportOf(configJson: String): String =
         runCatching { JSONObject(configJson).optString("transport", "h3") }.getOrDefault("h3")
