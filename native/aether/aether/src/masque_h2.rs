@@ -105,6 +105,17 @@ fn validation_timeout() -> Duration {
 
 const DATA_PROBE_REQUIRED_SUCCESSES: u32 = 2;
 
+/// How long a data-plane probe waits for its answer before another is sent.
+///
+/// The probe is one datagram, and a datagram can be lost. The tunnel has always
+/// sent it again on this interval; the check an endpoint has to pass before it
+/// is chosen sent it once and then waited, so a single lost probe cost a
+/// working edge its whole timeout and the verdict "does not answer". That check
+/// is every H2 candidate the scanner tries and every remembered or assigned
+/// endpoint verified before use -- on the framing most filtered networks leave
+/// open.
+const DATA_PROBE_RESEND: Duration = Duration::from_millis(700);
+
 fn h2_keepalive_interval() -> Duration {
     let secs = std::env::var("AETHER_MASQUE_H2_KEEPALIVE_SECS")
         .ok()
@@ -294,48 +305,79 @@ pub async fn verify_h2(cfg: &H2TunnelConfig, timeout: Duration) -> Result<Durati
         }
 
         let mut recv_body = response.into_body();
-        let mut capsules = CapsuleParser::new();
         let probe = masque::build_dns_probe_packet(cfg.local_ipv4);
-        let framed = masque::encode_datagram_capsule(&probe);
-        send_capsule(&mut send_stream, Bytes::from(framed)).await?;
-
-        let mut probe_successes: u32 = 0;
-
-        loop {
-            match futures::future::poll_fn(|cx| recv_body.poll_data(cx)).await {
-                Some(Ok(chunk)) => {
-                    let _ = recv_body.flow_control().release_capacity(chunk.len());
-                    capsules.push(&chunk);
-                    loop {
-                        match capsules.next() {
-                            Ok(Some(Capsule::Datagram(_))) => {
-                                probe_successes += 1;
-                                if probe_successes >= DATA_PROBE_REQUIRED_SUCCESSES {
-                                    return Ok(());
-                                }
-                                let framed = masque::encode_datagram_capsule(&probe);
-                                send_capsule(&mut send_stream, Bytes::from(framed)).await?;
-                            }
-                            Ok(Some(_)) => continue,
-                            Ok(None) => break,
-                            Err(_) => break,
-                        }
-                    }
-                }
-                Some(Err(e)) => {
-                    return Err(AetherError::Masque(format!("h2 body: {e}")));
-                }
-                None => {
-                    return Err(AetherError::Masque("h2 stream closed before data".into()));
-                }
-            }
-        }
+        prove_data_plane(&mut recv_body, &mut send_stream, &probe).await
     };
 
     match tokio::time::timeout(timeout, attempt).await {
         Ok(Ok(())) => Ok(start.elapsed()),
         Ok(Err(e)) => Err(e),
         Err(_) => Err(AetherError::Other("h2 verify timeout".into())),
+    }
+}
+
+/// Sends `probe` through an open connect-ip stream until enough answers have
+/// come back to call the edge's data plane working.
+///
+/// Returns only on an answer or on the stream failing; the caller's timeout is
+/// what ends a wait for an edge that never answers.
+async fn prove_data_plane(
+    recv_body: &mut h2::RecvStream,
+    send_stream: &mut h2::SendStream<Bytes>,
+    probe: &[u8],
+) -> Result<()> {
+    let mut capsules = CapsuleParser::new();
+    let framed = masque::encode_datagram_capsule(probe);
+    send_capsule(send_stream, Bytes::from(framed)).await?;
+
+    let mut probe_successes: u32 = 0;
+    // Sent again until answered, as the tunnel itself does. The first tick of
+    // an interval is immediate and the probe has just gone, so it is spent here
+    // rather than sending a second copy at once.
+    let mut resend = tokio::time::interval(DATA_PROBE_RESEND);
+    resend.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    resend.tick().await;
+
+    loop {
+        tokio::select! {
+            biased;
+
+            data = futures::future::poll_fn(|cx| recv_body.poll_data(cx)) => {
+                match data {
+                    Some(Ok(chunk)) => {
+                        let _ = recv_body.flow_control().release_capacity(chunk.len());
+                        capsules.push(&chunk);
+                        loop {
+                            match capsules.next() {
+                                Ok(Some(Capsule::Datagram(_))) => {
+                                    probe_successes += 1;
+                                    if probe_successes >= DATA_PROBE_REQUIRED_SUCCESSES {
+                                        return Ok(());
+                                    }
+                                    let framed = masque::encode_datagram_capsule(probe);
+                                    send_capsule(send_stream, Bytes::from(framed)).await?;
+                                    resend.reset();
+                                }
+                                Ok(Some(_)) => continue,
+                                Ok(None) => break,
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                    Some(Err(e)) => {
+                        return Err(AetherError::Masque(format!("h2 body: {e}")));
+                    }
+                    None => {
+                        return Err(AetherError::Masque("h2 stream closed before data".into()));
+                    }
+                }
+            }
+
+            _ = resend.tick() => {
+                let framed = masque::encode_datagram_capsule(probe);
+                send_capsule(send_stream, Bytes::from(framed)).await?;
+            }
+        }
     }
 }
 
@@ -480,7 +522,7 @@ pub async fn run(
         }
     }
 
-    let mut probe_interval = tokio::time::interval(Duration::from_millis(700));
+    let mut probe_interval = tokio::time::interval(DATA_PROBE_RESEND);
     probe_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let keepalive_period = h2_keepalive_interval();
@@ -763,5 +805,95 @@ fn bytes_to_ip(version: u8, bytes: &[u8]) -> Option<IpAddr> {
             Some(IpAddr::V6(b.into()))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A connect-ip stream to an edge that loses the first probe it is sent and
+    /// answers every one after it, over memory rather than a network.
+    async fn stream_to_an_edge_that_drops_the_first_probe() -> (
+        h2::RecvStream,
+        h2::SendStream<Bytes>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (client_io, edge_io) = tokio::io::duplex(64 * 1024);
+
+        let edge = tokio::spawn(async move {
+            let mut connection = h2::server::handshake(edge_io)
+                .await
+                .expect("the edge's side of the handshake");
+            let (request, mut respond) = connection
+                .accept()
+                .await
+                .expect("a request")
+                .expect("a well-formed request");
+            tokio::spawn(async move { while connection.accept().await.is_some() {} });
+
+            let mut send = respond
+                .send_response(http::Response::new(()), false)
+                .expect("an answer to the request");
+            let mut body = request.into_body();
+            let mut capsules = CapsuleParser::new();
+            let mut probes = 0;
+            while let Some(Ok(chunk)) = body.data().await {
+                let _ = body.flow_control().release_capacity(chunk.len());
+                capsules.push(&chunk);
+                while let Ok(Some(capsule)) = capsules.next() {
+                    if let Capsule::Datagram(packet) = capsule {
+                        probes += 1;
+                        if probes == 1 {
+                            continue;
+                        }
+                        let answer = masque::encode_datagram_capsule(&packet);
+                        if send.send_data(Bytes::from(answer), false).is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+
+        let (h2, connection) = h2::client::handshake(client_io)
+            .await
+            .expect("our side of the handshake");
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let mut h2 = h2.ready().await.expect("a connection ready for a request");
+        let request = http::Request::builder()
+            .method(Method::CONNECT)
+            .uri("https://edge.test:443")
+            .body(())
+            .expect("a request");
+        let (response, send) = h2.send_request(request, false).expect("a stream");
+        let response = response.await.expect("the edge's answer");
+        (response.into_body(), send, edge)
+    }
+
+    #[tokio::test]
+    async fn a_lost_probe_is_sent_again_rather_than_waited_out() {
+        let (mut recv, mut send, edge) = stream_to_an_edge_that_drops_the_first_probe().await;
+        let probe = masque::build_dns_probe_packet(Ipv4Addr::new(172, 16, 0, 2));
+
+        let started = Instant::now();
+        let proved = tokio::time::timeout(
+            Duration::from_secs(5),
+            prove_data_plane(&mut recv, &mut send, &probe),
+        )
+        .await;
+
+        assert!(
+            matches!(proved, Ok(Ok(()))),
+            "one lost probe must not cost a working edge its verdict: {proved:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "the lost probe cost {:?}: that is waiting for the timeout, not sending again",
+            started.elapsed()
+        );
+        edge.abort();
     }
 }
