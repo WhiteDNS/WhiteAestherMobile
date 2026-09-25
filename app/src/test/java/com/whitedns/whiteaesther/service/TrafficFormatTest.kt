@@ -36,6 +36,19 @@ class TrafficFormatTest {
     }
 
     @Test
+    fun theNotificationShowsBothRatesDownFirst() {
+        val sample = TrafficSample(downloadPerSecond = 1024L * 1024, uploadPerSecond = 2048)
+
+        assertEquals("1.0 MB/s" to "2.0 KB/s", notificationRates(sample))
+    }
+
+    @Test
+    fun theNotificationSaysNothingWhereTheDeviceKeepsNoCounters() {
+        // A zero there would read as a tunnel carrying nothing.
+        assertEquals(null, notificationRates(TrafficSample(supported = false)))
+    }
+
+    @Test
     fun aMeterThatCannotMeasureSaysSoRatherThanReadingZero() {
         // TrafficStats is allowed to answer UNSUPPORTED. Reporting that as a
         // tunnel carrying nothing would look like a broken connection.

@@ -117,6 +117,19 @@ object TrafficMeter {
     }
 
     /**
+     * Takes a reading unless one was taken within [maxAgeMs].
+     *
+     * For a second reader beside the screen's once-a-second one. Two readers
+     * sampling on their own clocks would each see a sliver of an interval,
+     * and the rate would flicker with whichever read last.
+     */
+    @Synchronized
+    fun sampleIfStale(maxAgeMs: Long) {
+        if (System.nanoTime() - lastSampledAt < maxAgeMs * 1_000_000L) return
+        sampleNow()
+    }
+
+    /**
      * Weighted towards the new reading, but not entirely.
      *
      * Enough to follow a download starting or stopping within a couple of
@@ -177,3 +190,10 @@ fun formatBytes(bytes: Long): String {
 
 /** Formats a rate. Always per second, so the unit says so once. */
 fun formatRate(bytesPerSecond: Long): String = "${formatBytes(bytesPerSecond)}/s"
+
+/**
+ * The rates for the notification, down then up -- or nothing, where the device
+ * keeps no counters and a zero would read as a tunnel carrying nothing.
+ */
+fun notificationRates(sample: TrafficSample): Pair<String, String>? =
+    if (sample.supported) formatRate(sample.downloadPerSecond) to formatRate(sample.uploadPerSecond) else null
