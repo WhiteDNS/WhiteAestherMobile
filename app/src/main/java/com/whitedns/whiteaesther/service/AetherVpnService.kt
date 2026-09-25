@@ -244,6 +244,12 @@ class AetherVpnService : VpnService() {
     private var autoMode: EngineMode? = null
 
     /**
+     * The route that last got out on this pass's network, as it was: framing
+     * and tactic. The direct engine repeats it; see [autoEngineConfig].
+     */
+    private var autoRemembered: AutoRoute? = null
+
+    /**
      * How far each carrier has got this pass, in the order the pass tries them.
      *
      * Replaced rather than mutated: the engine's callback thread reads it when
@@ -625,7 +631,10 @@ class AetherVpnService : VpnService() {
                 is AutoStep.Engine -> {
                     carrier = Carrier.AETHER
                     secondCarrier = null
+                    // Named by what it runs with, so a win here is remembered
+                    // as the framing and the tactic that got out.
                     autoEngineConfig(requestedConfig, step)
+                        .also { autoRunningRoute = AutoRoute.ofEngineConfig(it) }
                 }
             }
         } else {
@@ -1299,6 +1308,7 @@ class AetherVpnService : VpnService() {
                 autoNetworkKey,
                 System.currentTimeMillis(),
             )
+            autoRemembered = remembered
             val options = autoOptions(mode)
             autoSteps = AutoPlanner.plan(remembered, options)
             autoStages = AutoPlanner.offeredRoutes(options)
@@ -1585,14 +1595,26 @@ class AetherVpnService : VpnService() {
     /**
      * The engine's configuration for this rung of an engine step.
      *
-     * The same ladder a user on Automatic transport has always climbed, one
-     * rung per attempt. The last step starts where that ladder does its full
-     * searches, rather than switching to the thorough scan: thorough is slower
-     * than any budget worth giving it, so it was a search cut off before it
-     * could finish.
+     * The first attempt repeats what got out on this network last time, as it
+     * was: its framing and the tactic it carried, at the user's own depth, as
+     * the remembered rung of the ladder always searched. Framing alone was not
+     * enough -- a network that answers only a split ClientHello was greeted
+     * with an unsplit one, the step spent its whole budget failing, and the
+     * race behind it started over from the plain rungs.
+     *
+     * After that, the same ladder a user on Automatic transport has always
+     * climbed, one rung per attempt. The last step starts where that ladder
+     * does its full searches, rather than switching to the thorough scan:
+     * thorough is slower than any budget worth giving it, so it was a search
+     * cut off before it could finish.
      */
-    private fun autoEngineConfig(base: String, step: AutoStep.Engine): String =
-        configForAttempt(base, autoEngineAttempt + if (step.deep) FULL_SEARCH_RUNG else 0)
+    private fun autoEngineConfig(base: String, step: AutoStep.Engine): String {
+        val proven = autoRemembered?.takeIf {
+            it.engineTransport != null && !step.deep && autoEngineAttempt == 0
+        }
+        if (proven != null) return AutoPlanner.engineConfig(base, proven, deep = true)
+        return configForAttempt(base, autoEngineAttempt + if (step.deep) FULL_SEARCH_RUNG else 0)
+    }
 
     private class AutoWinner(val route: AutoRoute, val client: CarrierClient, val port: Int)
 
@@ -1647,7 +1669,14 @@ class AetherVpnService : VpnService() {
 
             carrier = winner.route.carrier
             secondCarrier = null
-            autoRunningRoute = winner.route
+            // For the engine, what it actually ran with. A rung that carries
+            // no tactic leaves the user's own in place, and whichever one got
+            // out is what the next connect here has to repeat.
+            autoRunningRoute = if (winner.route.racesEngine) {
+                AutoRoute.ofEngineConfig(raceEngineConfig(winner.route))
+            } else {
+                winner.route
+            }
             // The framing that got Aether out, so the direct engine starts on
             // it next time -- the memory sends that connect to the direct path.
             if (winner.route.racesEngine) rememberWorkingTransport(raceEngineConfig(winner.route))
@@ -1863,24 +1892,13 @@ class AetherVpnService : VpnService() {
         }
     }
 
-    /** The user's own configuration, on the framing and at the depth [route] asks for. */
-    private fun raceEngineConfig(route: AutoRoute): String {
-        val base = baseConfigJson ?: "{}"
-        val transport = route.engineTransport ?: return base
-        return runCatching {
-            val json = JSONObject(base)
-            // Full is the user's own depth -- balanced unless they chose
-            // otherwise; quick is the engine's quickest.
-            val depth = if (route.fullSearch) json.optString("scanMode", "balanced") else "turbo"
-            json.put("transport", transport).put("scanMode", depth)
-            // A rung that carries a tactic sets it; one that does not leaves
-            // the user's own choice alone, so turning something on by hand is
-            // still worth doing and is not quietly overridden on every rung.
-            route.fragmentTls?.let { json.put("fragmentTls", it) }
-            route.encryptedHello?.let { json.put("encryptedHello", it) }
-            json.toString()
-        }.getOrDefault(base)
-    }
+    /**
+     * The user's own configuration, on the framing and at the depth [route]
+     * asks for: full is the user's own depth -- balanced unless they chose
+     * otherwise -- and quick is the engine's quickest.
+     */
+    private fun raceEngineConfig(route: AutoRoute): String =
+        AutoPlanner.engineConfig(baseConfigJson ?: "{}", route, deep = route.fullSearch)
 
     /**
      * Buys the engine an identity over a carrier that is already working.
