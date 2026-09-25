@@ -329,6 +329,7 @@
     <string name="notify_title_proxy">WhiteAesther proxy</string>
     <string name="notify_title_tun">WhiteAesther device VPN</string>
     <string name="notify_whole_device_protected">Whole-device traffic is protected</string>
+    <string name="notify_traffic">↓ %1$s · ↑ %2$s</string>
     <string name="notify_socks_shared">SOCKS5 shared on the local network, port %1$d</string>
     <string name="notify_socks_local">SOCKS5 listening on 127.0.0.1:%1$d</string>
     <string name="status_preparing_connection">Preparing connection</string>
@@ -469,7 +470,7 @@
     <string name="carrier_second_none">Nothing further</string>
     <string name="carrier_second_none_detail">One carrier. The fastest, and what most connections want.</string>
     <string name="carrier_swap">Swap the order</string>
-    <string name="carrier_automatic">Automatic (experimental)</string>
+    <string name="carrier_automatic">Automatic</string>
     <string name="carrier_automatic_detail">The app tries each way out itself, and remembers what worked on each network for next time.</string>
     <string name="carrier_manual">I will choose</string>
     <string name="carrier_manual_detail">One carrier, or two in the order you pick.</string>

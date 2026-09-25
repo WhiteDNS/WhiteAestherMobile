@@ -2578,32 +2578,55 @@ async fn provision_within_budget(
     store: &mut identity::Store,
     site: &IdentitySite,
 ) -> Result<account::Identity> {
-    if let Err(wait) = store.registration.may_attempt(account::now_unix()) {
-        log::warn!(
-            "[-] not registering: {wait}s of the wait from the last attempt is still to run ({})",
-            store.registration.last_reason
-        );
-        return Err(AetherError::RegistrationOnHold {
-            reason: store.registration.last_reason.clone(),
-            wait,
-        });
-    }
+    // Through a proxy, the registration leaves from the proxy's address, so a
+    // wait this device's own address has earned is not the one that applies.
+    let through_proxy = crate::upstream::configured().is_some();
+    registration_may_go(store, through_proxy, account::now_unix())?;
 
     match provision_account().await {
         Ok(identity) => {
-            store.registration.succeeded(account::now_unix());
+            store
+                .registration_budget(through_proxy)
+                .succeeded(account::now_unix());
             Ok(identity)
         }
         Err(error) => {
-            store
-                .registration
-                .failed(account::now_unix(), &error.to_string(), error.retry_after());
+            store.registration_budget(through_proxy).failed(
+                account::now_unix(),
+                &error.to_string(),
+                error.retry_after(),
+            );
             if let Err(write) = identity::save(&site.store_path, store) {
                 log::warn!("[-] could not record what the registration attempt cost: {write}");
             }
             Err(error)
         }
     }
+}
+
+/// Whether a registration may be sent now, by the route it would leave by.
+///
+/// Refused here, with the reason the last attempt on that route was given,
+/// while that route's wait runs: an attempt made then spends an allowance to
+/// learn something already on disk.
+fn registration_may_go(store: &mut identity::Store, through_proxy: bool, now: u64) -> Result<()> {
+    let budget = store.registration_budget(through_proxy);
+    if let Err(wait) = budget.may_attempt(now) {
+        log::warn!(
+            "[-] not registering{}: {wait}s of the wait from the last attempt is still to run ({})",
+            if through_proxy {
+                " through the proxy"
+            } else {
+                ""
+            },
+            budget.last_reason
+        );
+        return Err(AetherError::RegistrationOnHold {
+            reason: budget.last_reason.clone(),
+            wait,
+        });
+    }
+    Ok(())
 }
 
 async fn load_or_provision_warp(site: &IdentitySite) -> Result<account::Identity> {
@@ -4829,22 +4852,22 @@ async fn spawn_udp_forwarder(
     let up_peer = inner_peer.clone();
     let up_task = tokio::spawn(async move {
         let mut buf = vec![0u8; 65536];
-        loop {
-            match up_sock.recv_from(&mut buf).await {
-                Ok((n, from)) => {
-                    {
-                        let mut known = up_peer.lock().await;
-                        match *known {
-                            Some(peer) if peer != from => continue,
-                            Some(_) => {}
-                            None => *known = Some(from),
-                        }
+        // The inner engine is the only sender, and it moves: it rebinds its
+        // socket when it reconnects. Latching onto the first source port it
+        // used dropped everything after the move and killed the tunnel, so
+        // replies follow whichever port it last sent from.
+        while let Ok((n, from)) = up_sock.recv_from(&mut buf).await {
+            {
+                let mut known = up_peer.lock().await;
+                if *known != Some(from) {
+                    if let Some(previous) = *known {
+                        log::debug!("inner udp forwarder follows {from} now, was {previous}");
                     }
-                    if udp_tx.send_to(remote, buf[..n].to_vec()).await.is_err() {
-                        break;
-                    }
+                    *known = Some(from);
                 }
-                Err(_) => break,
+            }
+            if udp_tx.send_to(remote, buf[..n].to_vec()).await.is_err() {
+                break;
             }
         }
     });
@@ -5608,6 +5631,47 @@ mod identity_tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A wait this device's address has earned does not hold back a
+    /// registration that leaves from a carrier's.
+    ///
+    /// No network is reached: the rule is which wait applies, and the store
+    /// is all it needs.
+    #[test]
+    fn a_hold_on_this_address_does_not_stop_a_registration_through_a_carrier() {
+        let now = account::now_unix();
+        let mut store = identity::Store::default();
+        store.registration.failed(
+            now,
+            "registration: direct route -> timed out; camouflaged route -> timed out",
+            None,
+        );
+
+        assert!(matches!(
+            registration_may_go(&mut store, false, now),
+            Err(AetherError::RegistrationOnHold { .. })
+        ));
+        assert!(registration_may_go(&mut store, true, now).is_ok());
+    }
+
+    /// And a wait earned through a carrier stays with that route.
+    #[test]
+    fn a_hold_through_a_carrier_is_kept_to_that_route() {
+        let now = account::now_unix();
+        let mut store = identity::Store::default();
+        store.registration_via_proxy.failed(
+            now,
+            "registration: too many registrations from this address",
+            Some(600),
+        );
+
+        let error = registration_may_go(&mut store, true, now).unwrap_err();
+        assert!(
+            error.to_string().contains("too many registrations"),
+            "the reason Cloudflare gave has to survive: {error}",
+        );
+        assert!(registration_may_go(&mut store, false, now).is_ok());
     }
 
     /// A backup of an install 1.8.0 had already broken must not restore the break.

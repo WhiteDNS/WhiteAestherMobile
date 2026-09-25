@@ -28,7 +28,12 @@ object AetherNotification {
         )
     }
 
-    fun build(context: Context, title: String, text: String): Notification {
+    /**
+     * @param subText shown beside the app's name in the header, or nothing.
+     *   What the tunnel is carrying goes there, so the line saying which
+     *   route carries it keeps the room it needs.
+     */
+    fun build(context: Context, title: String, text: String, subText: String? = null): Notification {
         val contentIntent = PendingIntent.getActivity(
             context,
             0,
@@ -46,6 +51,7 @@ object AetherNotification {
             .setColor(0xFF34D1A6.toInt())
             .setContentTitle(title)
             .setContentText(text)
+            .setSubText(subText)
             .setContentIntent(contentIntent)
             .setOnlyAlertOnce(true)
             .setOngoing(true)

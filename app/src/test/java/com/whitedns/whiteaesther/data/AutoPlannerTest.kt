@@ -127,13 +127,16 @@ class AutoPlannerTest {
     @Test
     fun onePassFitsInsideTheSearchCeiling() {
         val ceiling = 15 * 60 * 1_000L
-        for (remembered in listOf(null, AutoRoute.AETHER, AutoRoute.PSIPHON)) {
-            val pass = AutoPlanner.longestPassMs(remembered, everything)
-            assertTrue(
-                "a pass remembering $remembered takes ${pass / 1000}s, " +
-                    "which does not fit in ${ceiling / 1000}s",
-                pass <= ceiling,
-            )
+        val fixedTransport = everything.copy(engineCanSearchDeeper = false)
+        for (options in listOf(everything, fixedTransport)) {
+            for (remembered in listOf(null, AutoRoute.AETHER, AutoRoute.PSIPHON)) {
+                val pass = AutoPlanner.longestPassMs(remembered, options)
+                assertTrue(
+                    "a pass remembering $remembered takes ${pass / 1000}s, " +
+                        "which does not fit in ${ceiling / 1000}s",
+                    pass <= ceiling,
+                )
+            }
         }
     }
 
@@ -420,12 +423,60 @@ class AutoPlannerTest {
         )
     }
 
+    /**
+     * A transport the user fixed leads the engine's lane without being all of it.
+     *
+     * It used to be the whole lane, so on a network that blocks WireGuard a
+     * user who had once chosen it raced an engine that could only fail.
+     */
     @Test
-    fun aFixedTransportRacesAsTheUserSetIt() {
-        assertEquals(
-            listOf(AutoRoute.AETHER_AS_SET),
-            AutoPlanner.aetherLane(everything.copy(engineCanSearchDeeper = false)),
+    fun aFixedTransportLeadsTheLaneWithoutBeingAllOfIt() {
+        val lane = AutoPlanner.aetherLane(everything.copy(engineCanSearchDeeper = false))
+
+        assertEquals(AutoRoute.AETHER_AS_SET, lane.first())
+        for (framing in listOf("h2", "h3")) {
+            assertTrue("no $framing rung behind it: $lane", lane.any { it.engineTransport == framing })
+        }
+        assertTrue("no split ClientHello behind it: $lane", lane.any { it.fragmentTls == true })
+        assertTrue("no ECH behind it: $lane", lane.any { it.encryptedHello == true })
+    }
+
+    /**
+     * The user's settings, as Automatic reads them.
+     *
+     * A depth deeper than balanced fits no window a rung is given, so it was a
+     * search cut off before it could answer; a pin with fallback off left every
+     * rung dialling one address wherever the phone went.
+     */
+    @Test
+    fun automaticDoesNotInheritAHandTunedSearch() {
+        for (slow in listOf("thorough", "stealth", "ironclad")) {
+            val read = org.json.JSONObject(AutoPlanner.automaticBase("""{"scanMode":"$slow"}"""))
+            assertEquals("balanced", read.getString("scanMode"))
+        }
+        for (fits in listOf("turbo", "balanced")) {
+            val read = org.json.JSONObject(AutoPlanner.automaticBase("""{"scanMode":"$fits"}"""))
+            assertEquals(fits, read.getString("scanMode"))
+        }
+
+        val pinned = org.json.JSONObject(
+            AutoPlanner.automaticBase("""{"peer":"162.159.198.1:443","peerFallback":false}"""),
         )
+        assertTrue(pinned.getBoolean("peerFallback"))
+        assertEquals("162.159.198.1:443", pinned.getString("peer"))
+    }
+
+    /** Everything else the user set is left as they set it. */
+    @Test
+    fun automaticKeepsTheRestOfTheUsersSettings() {
+        val base = """{"scanMode":"balanced","noize":"gfw","fragmentTls":true,"dnsServers":"9.9.9.9"}"""
+        val read = org.json.JSONObject(AutoPlanner.automaticBase(base))
+
+        assertEquals("gfw", read.getString("noize"))
+        assertTrue(read.getBoolean("fragmentTls"))
+        assertEquals("9.9.9.9", read.getString("dnsServers"))
+        // Nothing pinned, so nothing to fall back from.
+        assertFalse(read.has("peerFallback"))
     }
 
     @Test

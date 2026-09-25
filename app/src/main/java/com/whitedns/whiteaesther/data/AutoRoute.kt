@@ -428,7 +428,6 @@ object AutoPlanner {
     }
 
     fun aetherLane(options: AutoOptions, remembered: AutoRoute? = null): List<AutoRoute> {
-        if (!options.engineCanSearchDeeper) return listOf(AutoRoute.AETHER_AS_SET)
         val h3First =
             framingOrder(options.provenFraming, options.onMobileData).first() == "h3"
         // Nested MASQUE last, always. It is the slowest thing the engine can
@@ -451,9 +450,48 @@ object AutoPlanner {
         } else {
             listOf(AutoRoute.AETHER_H2_FRAGMENT, AutoRoute.AETHER_H3_ECH)
         }
-        val lane = plain + tactics + listOf(AutoRoute.AETHER_H2_FULL, AutoRoute.AETHER_MIM)
+        val lane = if (options.engineCanSearchDeeper) {
+            plain + tactics + listOf(AutoRoute.AETHER_H2_FULL, AutoRoute.AETHER_MIM)
+        } else {
+            // A transport the user fixed -- WireGuard, say -- leads, searched
+            // as they set it: it is what they have said about their network.
+            // It used to be the whole lane, which on a network that blocks it
+            // left the engine nothing else to try. The MASQUE rungs follow,
+            // plain and carrying their tactics; the long searches are left
+            // out, the fixed transport having had one, so that a round still
+            // fits inside the search with the direct engine's step before it.
+            listOf(AutoRoute.AETHER_AS_SET) + plain + tactics
+        }
         return preferredFor(provenFirst(lane, remembered), options.lastEngineFailure)
     }
+
+    /**
+     * The user's engine settings as Automatic runs them.
+     *
+     * Two of them steer the engine by hand in a way that costs Automatic the
+     * search it exists to make, and are set aside here:
+     *
+     * - a search deeper than balanced -- thorough, stealth, ironclad -- which
+     *   no window in [budgetMs] fits, so it was cut off before it could answer;
+     * - an endpoint pinned with fallback off, which left every Aether rung
+     *   dialling one address on every network the phone went to.
+     *
+     * Everything else is left as set: the obfuscation profile, a tactic turned
+     * on by hand, the resolvers. The screens still show the user's own choice,
+     * and a carrier chosen by hand still runs it; this is only how a search
+     * reads it.
+     */
+    fun automaticBase(base: String): String = runCatching {
+        val json = JSONObject(base)
+        if (json.optString("scanMode", "balanced") !in AUTOMATIC_DEPTHS) {
+            json.put("scanMode", "balanced")
+        }
+        if (json.has("peer")) json.put("peerFallback", true)
+        json.toString()
+    }.getOrDefault(base)
+
+    /** The search depths the windows in [budgetMs] were sized for. */
+    private val AUTOMATIC_DEPTHS = setOf("turbo", "balanced")
 
     /**
      * The lane with the route that got out on this network last time in front.

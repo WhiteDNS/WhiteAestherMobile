@@ -323,6 +323,7 @@
     <string name="notify_title_proxy">پروکسی WhiteAesther</string>
     <string name="notify_title_tun">وی‌پی‌ان دستگاه WhiteAesther</string>
     <string name="notify_whole_device_protected">ترافیک کل دستگاه محافظت می‌شود</string>
+    <string name="notify_traffic">⁦↓ %1$s · ↑ %2$s⁩</string>
     <string name="notify_socks_shared">‏SOCKS5 روی شبکهٔ محلی به اشتراک گذاشته شد، پورت %1$d</string>
     <string name="notify_socks_local">‏SOCKS5 روی 127.0.0.1:%1$d گوش می‌دهد</string>
     <string name="status_preparing_connection">در حال آماده‌سازی اتصال</string>
@@ -463,7 +464,7 @@
     <string name="carrier_second_none">هیچ‌چیز دیگر</string>
     <string name="carrier_second_none_detail">یک حامل. سریع‌ترین، و چیزی که بیشتر اتصال‌ها می‌خواهند.</string>
     <string name="carrier_swap">ترتیب را جابه‌جا کن</string>
-    <string name="carrier_automatic">خودکار (آزمایشی)</string>
+    <string name="carrier_automatic">خودکار</string>
     <string name="carrier_automatic_detail">برنامه خودش راه‌ها را یکی‌یکی امتحان می‌کند و راهی را که روی هر شبکه کار کرد برای دفعهٔ بعد یادش می‌ماند.</string>
     <string name="carrier_manual">خودم انتخاب می‌کنم</string>
     <string name="carrier_manual_detail">یک حامل، یا دو حامل به ترتیبی که می‌خواهید.</string>

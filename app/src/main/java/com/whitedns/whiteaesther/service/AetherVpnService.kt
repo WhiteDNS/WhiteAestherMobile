@@ -11,6 +11,7 @@ import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.PowerManager
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
@@ -272,6 +273,9 @@ class AetherVpnService : VpnService() {
 
     /** The generation whose engine log is already being copied; see [startEngineLogPump]. */
     private var logPumpGeneration = -1L
+
+    /** Keeps the notification's traffic figures current; see [showTrafficWhileConnected]. */
+    private var notificationTraffic: Job? = null
 
     /**
      * Whether the current session can be cancelled rather than waited for.
@@ -636,7 +640,7 @@ class AetherVpnService : VpnService() {
                     secondCarrier = null
                     // Named by what it runs with, so a win here is remembered
                     // as the framing and the tactic that got out.
-                    autoEngineConfig(requestedConfig, step)
+                    autoEngineConfig(AutoPlanner.automaticBase(requestedConfig), step)
                         .also { autoRunningRoute = AutoRoute.ofEngineConfig(it) }
                 }
             }
@@ -1940,12 +1944,16 @@ class AetherVpnService : VpnService() {
     }
 
     /**
-     * The user's own configuration, on the framing and at the depth [route]
-     * asks for: full is the user's own depth -- balanced unless they chose
-     * otherwise -- and quick is the engine's quickest.
+     * The user's own configuration as Automatic reads it, on the framing and at
+     * the depth [route] asks for: full is the user's own depth -- balanced
+     * unless they chose otherwise, and never deeper -- and quick is the
+     * engine's quickest.
      */
-    private fun raceEngineConfig(route: AutoRoute): String =
-        AutoPlanner.engineConfig(baseConfigJson ?: "{}", route, deep = route.fullSearch)
+    private fun raceEngineConfig(route: AutoRoute): String = AutoPlanner.engineConfig(
+        AutoPlanner.automaticBase(baseConfigJson ?: "{}"),
+        route,
+        deep = route.fullSearch,
+    )
 
     /**
      * Buys the engine an identity over a carrier that is already working.
@@ -2329,6 +2337,9 @@ class AetherVpnService : VpnService() {
             ),
         )
         updateNotification(mode, said)
+        // Posted for the same reason as autoWon: the job belongs to the main
+        // thread, and this may be the engine's.
+        serviceScope.launch { showTrafficWhileConnected(mode, said) }
     }
 
     /**
@@ -2676,6 +2687,7 @@ class AetherVpnService : VpnService() {
         // wedged in a native call may be holding that lock, and waiting for it
         // is what left the service unstoppable.
         generation += 1
+        notificationTraffic?.cancel()
         runCatching { NativeAetherBridge.cancelPrepare() }
         runCatching { NativeAetherBridge.cancelScan() }
         runCatching { NativeAetherBridge.stop() }
@@ -2961,6 +2973,7 @@ class AetherVpnService : VpnService() {
      */
     private fun giveUp(mode: EngineMode, reason: String, told: String? = null) {
         generation += 1
+        notificationTraffic?.cancel()
         preferences.edit { remove(LAST_TUN_CONFIG) }
         // The moment the feature exists for: every retry is spent, the tunnel
         // is not coming back on its own, and without this the phone resumes
@@ -3026,7 +3039,7 @@ class AetherVpnService : VpnService() {
         )
     }
 
-    private fun updateNotification(mode: EngineMode?, text: String) {
+    private fun updateNotification(mode: EngineMode?, text: String, subText: String? = null) {
         val title = when (mode) {
             EngineMode.PROXY -> sayNow(R.string.notify_title_proxy)
             EngineMode.TUN -> sayNow(R.string.notify_title_tun)
@@ -3034,8 +3047,40 @@ class AetherVpnService : VpnService() {
         }
         getSystemService(android.app.NotificationManager::class.java).notify(
             AetherNotification.NOTIFICATION_ID,
-            AetherNotification.build(this, title, text),
+            AetherNotification.build(this, title, text, subText),
         )
+    }
+
+    /**
+     * Puts what the tunnel is carrying on the notification, for as long as it
+     * is carrying it.
+     *
+     * The rates down and up, beside the app's name: the one place a person can
+     * see the tunnel working without opening the app, which is what they look
+     * for when a page is slow to load. Every few seconds and only while the
+     * screen is on -- a notification redrawn behind a dark screen is battery
+     * spent on nobody.
+     */
+    private fun showTrafficWhileConnected(mode: EngineMode, text: String) {
+        notificationTraffic?.cancel()
+        val sessionGeneration = generation
+        fun stillConnected() = sessionGeneration == generation &&
+            EngineStatusStore.status.value.stage == EngineStage.CONNECTED
+        notificationTraffic = serviceScope.launch {
+            val power = getSystemService(PowerManager::class.java)
+            while (true) {
+                delay(NOTIFICATION_TRAFFIC_MS)
+                if (!stillConnected()) return@launch
+                if (power?.isInteractive == false) continue
+                withContext(Dispatchers.IO) { TrafficMeter.sampleIfStale(NOTIFICATION_TRAFFIC_MS / 2) }
+                // Again, after a blocking read: a session that ended during it
+                // has already taken its notification down, and posting here
+                // would put back a notification for a tunnel that is gone.
+                if (!stillConnected()) return@launch
+                val (down, up) = notificationRates(TrafficMeter.sample.value) ?: return@launch
+                updateNotification(mode, text, sayNow(R.string.notify_traffic, down, up))
+            }
+        }
     }
 
     private fun connectedMessage(mode: EngineMode, configJson: String): String = when (mode) {
@@ -3213,6 +3258,13 @@ class AetherVpnService : VpnService() {
         // Long enough for a healthy session to unwind, short enough that a
         // wedged one never leaves the user with only force-stop.
         private const val STOP_GRACE_MS = 4_000L
+
+        /**
+         * How often the notification's traffic figures are redrawn. Often
+         * enough to read as live, rarely enough that the system does not
+         * throttle the updates or spend the battery on them.
+         */
+        private const val NOTIFICATION_TRAFFIC_MS = 3_000L
         private const val RECONNECT_DELAY_MS = 3_000L
         private const val MAX_RECONNECT_DELAY_MS = 60_000L
         private const val MAX_RECONNECT_ATTEMPTS = 8
