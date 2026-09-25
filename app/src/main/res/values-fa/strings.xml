@@ -463,7 +463,7 @@
     <string name="carrier_second_none">هیچ‌چیز دیگر</string>
     <string name="carrier_second_none_detail">یک حامل. سریع‌ترین، و چیزی که بیشتر اتصال‌ها می‌خواهند.</string>
     <string name="carrier_swap">ترتیب را جابه‌جا کن</string>
-    <string name="carrier_automatic">خودکار (آزمایشی)</string>
+    <string name="carrier_automatic">خودکار</string>
     <string name="carrier_automatic_detail">برنامه خودش راه‌ها را یکی‌یکی امتحان می‌کند و راهی را که روی هر شبکه کار کرد برای دفعهٔ بعد یادش می‌ماند.</string>
     <string name="carrier_manual">خودم انتخاب می‌کنم</string>
     <string name="carrier_manual_detail">یک حامل، یا دو حامل به ترتیبی که می‌خواهید.</string>
