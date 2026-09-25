@@ -1,6 +1,9 @@
 package com.whitedns.whiteaesther.data
 
 import android.content.Context
+import androidx.datastore.core.DataMigration
+import androidx.datastore.preferences.core.MutablePreferences
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -10,7 +13,37 @@ import com.whitedns.whiteaesther.core.AppLocale
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
-private val Context.settingsDataStore by preferencesDataStore(name = "whiteaesther_settings")
+private val Context.settingsDataStore by preferencesDataStore(
+    name = "whiteaesther_settings",
+    produceMigrations = { listOf(AutomaticCarrierMigration) },
+)
+
+/**
+ * Carries the Automatic switch out of the key every build since 1.6.1 wrote on
+ * every save.
+ *
+ * That key recorded whatever the switch showed when anything at all was saved:
+ * a language, a theme, the answer to the battery prompt. On 1.6.1 the switch
+ * showed off, because Automatic was opt-in there, so a phone that did nothing
+ * more than dismiss a notice stored "off" -- and every build after read it as
+ * somebody having gone to the carrier screen and chosen one carrier. Those
+ * phones never ran Automatic again, and their owners were left finding a way
+ * out by hand.
+ *
+ * Nothing in that key can tell a choice from a leftover, so it is not read as
+ * one. The single case kept is a stored "off" beside a second carrier: a chain
+ * is built only on the manual screen, and Automatic never builds one, so
+ * switching it on would silently take away a hop somebody added on purpose.
+ */
+internal object AutomaticCarrierMigration : DataMigration<Preferences> {
+    override suspend fun shouldMigrate(currentData: Preferences): Boolean =
+        SettingsRepository.LEGACY_CARRIER_AUTOMATIC in currentData
+
+    override suspend fun migrate(currentData: Preferences): Preferences =
+        SettingsRepository.migrateAutomaticCarrier(currentData)
+
+    override suspend fun cleanUp() = Unit
+}
 
 class SettingsRepository(private val context: Context) {
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { preferences ->
@@ -38,11 +71,9 @@ class SettingsRepository(private val context: Context) {
             //
             // Absent means never asked, and never asked should get every way
             // out this build has rather than the one carrier that happens to be
-            // first in the enum. A stored false is left alone: it is the
-            // answer of someone who went to the carrier screen and chose, and
-            // overriding that would route them through Psiphon or tor because
-            // we decided it was good for them.
-            automaticCarrier = preferences[CARRIER_AUTOMATIC] ?: true,
+            // first in the enum. A stored value is a choice, because save()
+            // writes it only when it changes -- see recordAutomaticCarrier.
+            automaticCarrier = automaticCarrierOf(preferences),
             psiphonRegion = preferences[PSIPHON_REGION].orEmpty(),
             torBridge = enumValueOrDefault(preferences[TOR_BRIDGE], TorBridge.NONE),
             torBridges = preferences[TOR_BRIDGES].orEmpty(),
@@ -98,7 +129,7 @@ class SettingsRepository(private val context: Context) {
             } else {
                 preferences[SECOND_CARRIER] = second.name
             }
-            preferences[CARRIER_AUTOMATIC] = settings.automaticCarrier
+            preferences.recordAutomaticCarrier(settings.automaticCarrier)
             preferences[PSIPHON_REGION] = settings.psiphonRegion
             preferences[TOR_BRIDGE] = settings.torBridge.name
             preferences[TOR_BRIDGES] = settings.torBridges
@@ -138,17 +169,54 @@ class SettingsRepository(private val context: Context) {
     private inline fun <reified T : Enum<T>> enumValueOrDefault(value: String?, default: T): T =
         value?.let { runCatching { enumValueOf<T>(it) }.getOrNull() } ?: default
 
-    private companion object {
-        val MODE = stringPreferencesKey("mode")
-        val PROXY_PORT = intPreferencesKey("proxy_port")
-        val TRANSPORT = stringPreferencesKey("transport")
-        val CARRIER = stringPreferencesKey("carrier")
-        val SECOND_CARRIER = stringPreferencesKey("second_carrier")
-        // Not 1.6.0's "carrier_automatic". That build turned Automatic on for
-        // everyone still on the defaults and saved it with every setting
-        // after, so a stored true there does not mean anyone chose it. A key
-        // of its own starts everyone off, and records only a real choice.
-        val CARRIER_AUTOMATIC = booleanPreferencesKey("carrier_automatic_opt_in")
+    internal companion object {
+        private val MODE = stringPreferencesKey("mode")
+        private val PROXY_PORT = intPreferencesKey("proxy_port")
+        private val TRANSPORT = stringPreferencesKey("transport")
+        private val CARRIER = stringPreferencesKey("carrier")
+        private val SECOND_CARRIER = stringPreferencesKey("second_carrier")
+
+        /**
+         * Whether Automatic is on, written only when the user changes it.
+         *
+         * The third key this has had. 1.6.0's "carrier_automatic" was written
+         * on for everyone still on the defaults; 1.6.1's
+         * "carrier_automatic_opt_in" was written with every save, so it held
+         * whatever the switch showed at the time -- see
+         * [AutomaticCarrierMigration]. This one is written by
+         * [recordAutomaticCarrier] and nothing else.
+         */
+        val CARRIER_AUTOMATIC = booleanPreferencesKey("carrier_automatic_choice")
+
+        /** The key [AutomaticCarrierMigration] reads once and removes. */
+        val LEGACY_CARRIER_AUTOMATIC = booleanPreferencesKey("carrier_automatic_opt_in")
+
+        /** On, unless someone switched it off after this key existed. */
+        fun automaticCarrierOf(preferences: Preferences): Boolean =
+            preferences[CARRIER_AUTOMATIC] ?: true
+
+        /**
+         * Stores [chosen] only if it differs from what is stored.
+         *
+         * Every other setting is saved as the whole object the screen holds,
+         * so a value written on each save is a value nobody can later tell
+         * from a choice -- which is how a default from an old build came to be
+         * read as a person's decision. Written only on a change, the key
+         * exists only where somebody moved the switch.
+         */
+        fun MutablePreferences.recordAutomaticCarrier(chosen: Boolean) {
+            if (chosen != automaticCarrierOf(this)) this[CARRIER_AUTOMATIC] = chosen
+        }
+
+        /** What [AutomaticCarrierMigration] leaves behind; see there for why. */
+        fun migrateAutomaticCarrier(stored: Preferences): Preferences {
+            val legacy = stored[LEGACY_CARRIER_AUTOMATIC] ?: return stored
+            return stored.toMutablePreferences().apply {
+                remove(LEGACY_CARRIER_AUTOMATIC)
+                val chainKept = !legacy && SECOND_CARRIER in stored
+                if (chainKept && CARRIER_AUTOMATIC !in stored) this[CARRIER_AUTOMATIC] = false
+            }
+        }
         val PSIPHON_REGION = stringPreferencesKey("psiphon_region")
         val TOR_BRIDGE = stringPreferencesKey("tor_bridge")
         val TOR_BRIDGES = stringPreferencesKey("tor_bridges")

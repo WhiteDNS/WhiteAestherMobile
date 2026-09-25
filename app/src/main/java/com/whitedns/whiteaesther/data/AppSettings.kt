@@ -306,16 +306,15 @@ data class AppSettings(
      */
     val secondCarrier: Carrier? = null,
     /**
-     * Let the app find the way out itself: Aether first, then Psiphon and Tor
-     * side by side, and whatever carried traffic remembered for the network it
+     * Let the app find the way out itself: Aether, Psiphon and Tor raced side
+     * by side, and whatever carried traffic remembered for the network it
      * worked on.
      *
-     * Off until the user turns it on. 1.6.0 turned it on for everyone still on
-     * the defaults, and it was not ready: on filtered networks it gave up on
-     * routes that 1.5.0 connected through. It stays opt-in until it has been
-     * confirmed on those networks. [carrier] and [secondCarrier] are kept while
-     * this is on, as the choice waiting for anyone who turns it off, not as
-     * what a session runs.
+     * On unless the user turns it off. It was opt-in for a while after 1.6.0,
+     * whose sequential plan gave up on routes that 1.5.0 connected through;
+     * the race that replaced that plan is what made it the default again.
+     * [carrier] and [secondCarrier] are kept while this is on, as the choice
+     * waiting for anyone who turns it off, not as what a session runs.
      */
     val automaticCarrier: Boolean = true,
     /**
