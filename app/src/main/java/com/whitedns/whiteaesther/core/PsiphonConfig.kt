@@ -118,7 +118,8 @@ object PsiphonConfig {
     }
 
     /**
-     * How long tunnel-core tries before giving up and letting us decide.
+     * How long tunnel-core tries before giving up and letting us decide, at
+     * the least.
      *
      * Not unlimited, which is its default. An unlimited establish means a
      * carrier that never reports failure, and the service above it can neither
@@ -130,8 +131,29 @@ object PsiphonConfig {
      * through and this app, stopping at 120 seconds and starting again from
      * nothing, never did. A retry here restarts tunnel-core, and everything it
      * was halfway through dialling is thrown away with it.
+     *
+     * A caller that will wait longer gets longer: see [establishTimeoutSeconds].
      */
-    private const val ESTABLISH_TIMEOUT_SECONDS = 300
+    const val ESTABLISH_TIMEOUT_SECONDS = 300
+
+    /** How long before its caller stops waiting tunnel-core should have said it gave up. */
+    private const val REPORT_MARGIN_MS = 30_000L
+
+    /**
+     * tunnel-core's own establish window, for a start that will be waited on
+     * for [waitMs].
+     *
+     * A little inside the wait, so tunnel-core gives up and says why before
+     * the caller stops listening -- and never under [ESTABLISH_TIMEOUT_SECONDS].
+     * A Psiphon chosen by hand is waited on for 330 seconds and keeps its 300.
+     * One racing in Automatic is waited on for as long as the search lasts,
+     * and a fixed five minutes had it give up partway through a wait that was
+     * still going, to be started again from nothing.
+     */
+    fun establishTimeoutSeconds(waitMs: Long): Int =
+        ((waitMs - REPORT_MARGIN_MS) / 1_000)
+            .coerceAtLeast(ESTABLISH_TIMEOUT_SECONDS.toLong())
+            .toInt()
 
     /**
      * How many servers tunnel-core dials at once.
@@ -167,8 +189,15 @@ object PsiphonConfig {
      *   whichever Psiphon considers best. Not a guarantee: tunnel-core treats an
      *   unreachable region as a reason to fail rather than to substitute, which
      *   is why the screen presents it as a preference and defaults to empty.
+     * @param establishSeconds tunnel-core's own window; see
+     *   [establishTimeoutSeconds].
      */
-    fun render(context: Context, egressRegion: String = "", upstreamPort: Int = 0): String {
+    fun render(
+        context: Context,
+        egressRegion: String = "",
+        upstreamPort: Int = 0,
+        establishSeconds: Int = ESTABLISH_TIMEOUT_SECONDS,
+    ): String {
         val json = JSONObject()
         json.put("PropagationChannelId", PROPAGATION_CHANNEL_ID)
         json.put("SponsorId", SPONSOR_ID)
@@ -190,7 +219,10 @@ object PsiphonConfig {
             // cross one rather than failing on the ones that cannot.
             json.put("UpstreamProxyUrl", "socks5://127.0.0.1:$upstreamPort")
         }
-        json.put("EstablishTunnelTimeoutSeconds", ESTABLISH_TIMEOUT_SECONDS)
+        json.put(
+            "EstablishTunnelTimeoutSeconds",
+            establishSeconds.coerceAtLeast(ESTABLISH_TIMEOUT_SECONDS),
+        )
         json.put("ConnectionWorkerPoolSize", CONNECTION_WORKERS)
         // Where the phone is, so the tactics for that network -- which protocols
         // to lead with, how to pad them, which servers to try first -- arrive

@@ -41,8 +41,8 @@ enum class AutoRoute(
     /**
      * The engine on the interface, as a session carried by Aether alone has
      * always run. Never raced -- see [AutoStep.Engine] -- and what every Aether
-     * route is remembered as, so the next connect on that network takes the
-     * direct path.
+     * route that wins is planned as, so the next connect on that network takes
+     * the direct path, carrying what that route carried.
      */
     AETHER("aether", Carrier.AETHER),
 
@@ -100,11 +100,43 @@ enum class AutoRoute(
     /** True for the engine running as a carrier in a race rather than on the interface. */
     val racesEngine: Boolean get() = carrier == Carrier.AETHER && this != AETHER
 
-    /** What a win is remembered as: any Aether route is Aether, next time on the direct path. */
-    val remembersAs: AutoRoute get() = if (carrier == Carrier.AETHER) AETHER else this
+    /**
+     * What a win means for the next plan on that network: any Aether route
+     * sends it down the direct path first.
+     *
+     * Not what is remembered. [RouteMemory] keeps the route itself, because the
+     * framing and the tactic that got out are what the direct path has to
+     * repeat -- see [AutoPlanner.engineConfig].
+     */
+    val plannedAs: AutoRoute get() = if (carrier == Carrier.AETHER) AETHER else this
 
     companion object {
         fun fromWire(name: String?): AutoRoute? = entries.firstOrNull { it.wireName == name }
+
+        /**
+         * The Aether route that describes what an engine configuration ran: its
+         * framing, the tactic it carried, and for H2 how deep it looked.
+         *
+         * Read off the configuration rather than off the route that was asked
+         * for. A rung that sets no tactic leaves the user's own in place, and a
+         * user who turned fragmentation on by hand got out with it -- which is
+         * the thing the next connect has to repeat.
+         */
+        fun ofEngineConfig(configJson: String): AutoRoute {
+            val json = runCatching { JSONObject(configJson) }.getOrNull() ?: return AETHER_AS_SET
+            return when (json.optString("transport")) {
+                "h2" -> when {
+                    json.optBoolean("fragmentTls") -> AETHER_H2_FRAGMENT
+                    json.optString("scanMode") == "turbo" -> AETHER_H2_QUICK
+                    else -> AETHER_H2_FULL
+                }
+                "h3" -> if (json.optBoolean("encryptedHello")) AETHER_H3_ECH else AETHER_H3_QUICK
+                "mim" -> AETHER_MIM
+                // WireGuard or WARP-in-WARP, which the race only ever runs as
+                // the user set them.
+                else -> AETHER_AS_SET
+            }
+        }
     }
 }
 
@@ -128,7 +160,8 @@ sealed interface AutoStep {
 
 /**
  * Routes tried one after another, starting [startAfterMs] into the race -- or
- * sooner, the moment every lane already running has run out.
+ * sooner, the moment every lane already running has run out -- and round
+ * again while the search has time for them; see [AutoPlanner.fitsAgain].
  *
  * Lanes rather than one list because different carriers can be tried at once,
  * while two routes of one carrier cannot: there is one engine and one tor.
@@ -214,6 +247,67 @@ object AutoPlanner {
     const val SECOND_LANE_AFTER_MS = 45_000L
 
     /**
+     * The least time one round of a lane may take before it goes round again.
+     *
+     * A round that fails in seconds is a network refusing every route in it
+     * at once, or an engine whose registration is on hold. Going straight
+     * round again would spin; waiting out the rest of a minute gives the
+     * network, or the hold, the chance to change.
+     */
+    const val LANE_ROUND_FLOOR_MS = 60_000L
+
+    /**
+     * How long a lane waits before going round again, after a round that took
+     * [tookMs] and was the [fastRounds]th in a row to finish inside
+     * [LANE_ROUND_FLOOR_MS].
+     *
+     * Nothing after a round that used its routes' time. After one that failed
+     * in seconds, the rest of a minute -- doubling each time it happens again,
+     * up to eight minutes, so a lane that can only fail fast neither spins nor
+     * fills the diagnostics log with one refusal over and over.
+     */
+    fun pauseAfterRound(tookMs: Long, fastRounds: Int): Long {
+        if (fastRounds <= 0) return 0L
+        val floor = LANE_ROUND_FLOOR_MS shl (fastRounds - 1).coerceIn(0, 3)
+        return (floor - tookMs).coerceAtLeast(0L)
+    }
+
+    /**
+     * Whether [route] keeps trying for as long as the search lasts, rather
+     * than for a window of its own.
+     *
+     * Psiphon. tunnel-core races its own protocols and servers, and what it
+     * learns while it does -- tactics, fresh server lists, which dials got
+     * furthest -- goes when it is stopped, so starting it again is worse than
+     * leaving it running. It used to be given one window of five and a half
+     * minutes and then left idle while the engine's lane ran on for as long
+     * again, while the Psiphon a user picks by hand is waited for eight times
+     * over.
+     */
+    fun holdsForTheSearch(route: AutoRoute): Boolean = route == AutoRoute.PSIPHON
+
+    /**
+     * How long [route] may run when it starts with [remainingMs] of the search
+     * left.
+     *
+     * Its own budget, or for a route that holds, the rest of the search -- but
+     * never less than its own budget. A window cut short is how a carrier that
+     * was about to connect gets thrown away.
+     */
+    fun windowMs(route: AutoRoute, remainingMs: Long): Long =
+        if (holdsForTheSearch(route)) maxOf(budgetMs(route), remainingMs) else budgetMs(route)
+
+    /**
+     * Whether a lane that has been round once may start [route] again with
+     * [remainingMs] of the search left.
+     *
+     * The first time round every route has its turn, as it always did. After
+     * that, only one that can finish in time: the end of the search is what
+     * the person waiting was promised.
+     */
+    fun fitsAgain(route: AutoRoute, remainingMs: Long): Boolean = budgetMs(route) <= remainingMs
+
+    /**
      * The longest one pass of [plan] can take.
      *
      * Lanes run beside each other, so a pass lasts as long as its slowest lane
@@ -251,7 +345,7 @@ object AutoPlanner {
         val offered = offeredRoutes(options)
         // A route remembered from a build or a setup that can no longer offer
         // it -- bridges since deleted, say -- is a memory of nothing.
-        val known = remembered?.remembersAs?.takeIf { it in offered }
+        val known = remembered?.plannedAs?.takeIf { it in offered }
         // Going first is a bet that costs ENGINE_REMEMBERED_MS when it loses,
         // and it used to be placed on evidence that never expired: the engine
         // connecting once, anywhere, set a flag for the life of the install. A
@@ -269,7 +363,7 @@ object AutoPlanner {
             )
         }
 
-        val aether = aetherLane(options)
+        val aether = aetherLane(options, remembered)
         val tor = offered.filter { it.carrier == Carrier.TOR }
         val psiphon = listOf(AutoRoute.PSIPHON)
         val race = if (known?.carrier == Carrier.TOR) {
@@ -333,7 +427,7 @@ object AutoPlanner {
         return if (h3First) listOf("h3", "h2") else listOf("h2", "h3")
     }
 
-    fun aetherLane(options: AutoOptions): List<AutoRoute> {
+    fun aetherLane(options: AutoOptions, remembered: AutoRoute? = null): List<AutoRoute> {
         if (!options.engineCanSearchDeeper) return listOf(AutoRoute.AETHER_AS_SET)
         val h3First =
             framingOrder(options.provenFraming, options.onMobileData).first() == "h3"
@@ -358,7 +452,43 @@ object AutoPlanner {
             listOf(AutoRoute.AETHER_H2_FRAGMENT, AutoRoute.AETHER_H3_ECH)
         }
         val lane = plain + tactics + listOf(AutoRoute.AETHER_H2_FULL, AutoRoute.AETHER_MIM)
-        return preferredFor(lane, options.lastEngineFailure)
+        return preferredFor(provenFirst(lane, remembered), options.lastEngineFailure)
+    }
+
+    /**
+     * The lane with the route that got out on this network last time in front.
+     *
+     * Evidence rather than inference, like the framing order -- but the whole
+     * route rather than its framing. On a network that answers only a split
+     * ClientHello, leading with the framing alone meant leading with the plain
+     * rung that network refuses, and reaching the one it takes two budgets
+     * later, on every connect.
+     */
+    fun provenFirst(lane: List<AutoRoute>, remembered: AutoRoute?): List<AutoRoute> {
+        if (remembered == null || remembered !in lane || lane.first() == remembered) return lane
+        return listOf(remembered) + lane.filterNot { it == remembered }
+    }
+
+    /**
+     * [base] on the framing, carrying the tactic, at the depth [route] asks for.
+     *
+     * [deep] searches as deep as the user chose; otherwise the engine's
+     * quickest. A route that carries a tactic sets it; one that does not
+     * leaves the user's own choice alone, so turning something on by hand is
+     * still worth doing and is not quietly overridden on every rung. A route
+     * with no framing of its own -- the user's fixed transport -- is [base]
+     * as it stands.
+     */
+    fun engineConfig(base: String, route: AutoRoute, deep: Boolean): String {
+        val transport = route.engineTransport ?: return base
+        return runCatching {
+            val json = JSONObject(base)
+            val depth = if (deep) json.optString("scanMode", "balanced") else "turbo"
+            json.put("transport", transport).put("scanMode", depth)
+            route.fragmentTls?.let { json.put("fragmentTls", it) }
+            route.encryptedHello?.let { json.put("encryptedHello", it) }
+            json.toString()
+        }.getOrDefault(base)
     }
 
     /**
@@ -492,12 +622,16 @@ object RouteMemory {
         // The engine winning is the answer to the engine having failed, so the
         // mark goes when it does. Another carrier winning says nothing about
         // the engine and leaves it alone.
-        val engineFailedAt = if (route.remembersAs == AutoRoute.AETHER) {
+        val engineFailedAt = if (route.plannedAs == AutoRoute.AETHER) {
             0L
         } else {
             before?.engineFailedAtMs ?: 0L
         }
-        return encode(entries + (network to Entry(route.remembersAs, nowMs, engineFailedAt)))
+        // The route itself, not what it is planned as. Which framing got out,
+        // carrying which tactic, is what the next connect here has to repeat;
+        // kept as "the engine", a network that answers only a split ClientHello
+        // was greeted with an unsplit one on every connect after the first.
+        return encode(entries + (network to Entry(route, nowMs, engineFailedAt)))
     }
 
     /** [stored] with the engine noted as having failed on [network] just now. */

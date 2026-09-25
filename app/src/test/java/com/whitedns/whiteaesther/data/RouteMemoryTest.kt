@@ -145,9 +145,18 @@ class EngineFailureMemoryTest {
         var stored = RouteMemory.rememberEngineFailure(null, network, now)
         stored = RouteMemory.remember(stored, network, AutoRoute.AETHER_H2_QUICK, now + 1_000)
 
-        // Any Aether route is remembered as the engine, so a win in the race
-        // answers the failure that kept it out of the lead.
+        // Any Aether route is the engine, so a win in the race answers the
+        // failure that kept it out of the lead -- and is remembered as the
+        // route it was, which is what the next connect repeats.
         assertFalse(RouteMemory.engineFailedRecently(stored, network, now + 1_000))
+        assertEquals(AutoRoute.AETHER_H2_QUICK, RouteMemory.recall(stored, network, now + 1_000))
+    }
+
+    @Test
+    fun aMemoryFromBeforeRoutesWereKeptWholeStillReads() {
+        // Written by a build that kept every Aether win as the engine.
+        val stored = """{"$network":{"at":$now,"route":"aether"}}"""
+
         assertEquals(AutoRoute.AETHER, RouteMemory.recall(stored, network, now + 1_000))
     }
 

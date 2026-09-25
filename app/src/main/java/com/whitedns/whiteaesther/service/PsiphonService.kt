@@ -78,6 +78,7 @@ class PsiphonService : Service() {
             ACTION_START -> start(
                 intent.getStringExtra(EXTRA_REGION).orEmpty(),
                 intent.getIntExtra(EXTRA_UPSTREAM, 0),
+                intent.getIntExtra(EXTRA_ESTABLISH_SECONDS, PsiphonConfig.ESTABLISH_TIMEOUT_SECONDS),
             )
             ACTION_STOP -> {
                 stopTunnel()
@@ -96,7 +97,7 @@ class PsiphonService : Service() {
         super.onDestroy()
     }
 
-    private fun start(egressRegion: String, upstreamPort: Int) {
+    private fun start(egressRegion: String, upstreamPort: Int, establishSeconds: Int) {
         if (tunnel != null) return
         state = State.CONNECTING
         failure = null
@@ -118,7 +119,7 @@ class PsiphonService : Service() {
         val host = object : PsiphonTunnel.HostService {
             override fun getContext(): Context = this@PsiphonService
             override fun getPsiphonConfig(): String =
-                PsiphonConfig.render(this@PsiphonService, egressRegion, upstreamPort)
+                PsiphonConfig.render(this@PsiphonService, egressRegion, upstreamPort, establishSeconds)
 
             override fun onAvailableEgressRegions(regions: MutableList<String>?) {
                 // Recorded rather than reported. It changes rarely and nothing
@@ -309,6 +310,9 @@ class PsiphonService : Service() {
         const val ACTION_STOP = "com.whitedns.whiteaesther.PSIPHON_STOP"
         const val EXTRA_REGION = "region"
         const val EXTRA_UPSTREAM = "upstream"
+
+        /** tunnel-core's own establish window, from how long the caller will wait. */
+        const val EXTRA_ESTABLISH_SECONDS = "establishSeconds"
         const val EXTRA_FAILURE = "failure"
         const val EXTRA_NOTICE = "notice"
 

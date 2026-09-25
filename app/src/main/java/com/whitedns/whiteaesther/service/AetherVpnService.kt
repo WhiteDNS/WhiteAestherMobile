@@ -244,6 +244,12 @@ class AetherVpnService : VpnService() {
     private var autoMode: EngineMode? = null
 
     /**
+     * The route that last got out on this pass's network, as it was: framing
+     * and tactic. The direct engine repeats it; see [autoEngineConfig].
+     */
+    private var autoRemembered: AutoRoute? = null
+
+    /**
      * How far each carrier has got this pass, in the order the pass tries them.
      *
      * Replaced rather than mutated: the engine's callback thread reads it when
@@ -263,6 +269,9 @@ class AetherVpnService : VpnService() {
 
     /** An engine session the leash had to leave behind, until it has gone. */
     private var staleEngine: Job? = null
+
+    /** The generation whose engine log is already being copied; see [startEngineLogPump]. */
+    private var logPumpGeneration = -1L
 
     /**
      * Whether the current session can be cancelled rather than waited for.
@@ -625,7 +634,10 @@ class AetherVpnService : VpnService() {
                 is AutoStep.Engine -> {
                     carrier = Carrier.AETHER
                     secondCarrier = null
+                    // Named by what it runs with, so a win here is remembered
+                    // as the framing and the tactic that got out.
                     autoEngineConfig(requestedConfig, step)
+                        .also { autoRunningRoute = AutoRoute.ofEngineConfig(it) }
                 }
             }
         } else {
@@ -1299,6 +1311,7 @@ class AetherVpnService : VpnService() {
                 autoNetworkKey,
                 System.currentTimeMillis(),
             )
+            autoRemembered = remembered
             val options = autoOptions(mode)
             autoSteps = AutoPlanner.plan(remembered, options)
             autoStages = AutoPlanner.offeredRoutes(options)
@@ -1585,14 +1598,26 @@ class AetherVpnService : VpnService() {
     /**
      * The engine's configuration for this rung of an engine step.
      *
-     * The same ladder a user on Automatic transport has always climbed, one
-     * rung per attempt. The last step starts where that ladder does its full
-     * searches, rather than switching to the thorough scan: thorough is slower
-     * than any budget worth giving it, so it was a search cut off before it
-     * could finish.
+     * The first attempt repeats what got out on this network last time, as it
+     * was: its framing and the tactic it carried, at the user's own depth, as
+     * the remembered rung of the ladder always searched. Framing alone was not
+     * enough -- a network that answers only a split ClientHello was greeted
+     * with an unsplit one, the step spent its whole budget failing, and the
+     * race behind it started over from the plain rungs.
+     *
+     * After that, the same ladder a user on Automatic transport has always
+     * climbed, one rung per attempt. The last step starts where that ladder
+     * does its full searches, rather than switching to the thorough scan:
+     * thorough is slower than any budget worth giving it, so it was a search
+     * cut off before it could finish.
      */
-    private fun autoEngineConfig(base: String, step: AutoStep.Engine): String =
-        configForAttempt(base, autoEngineAttempt + if (step.deep) FULL_SEARCH_RUNG else 0)
+    private fun autoEngineConfig(base: String, step: AutoStep.Engine): String {
+        val proven = autoRemembered?.takeIf {
+            it.engineTransport != null && !step.deep && autoEngineAttempt == 0
+        }
+        if (proven != null) return AutoPlanner.engineConfig(base, proven, deep = true)
+        return configForAttempt(base, autoEngineAttempt + if (step.deep) FULL_SEARCH_RUNG else 0)
+    }
 
     private class AutoWinner(val route: AutoRoute, val client: CarrierClient, val port: Int)
 
@@ -1618,6 +1643,10 @@ class AetherVpnService : VpnService() {
         sessionGeneration: Long,
     ) {
         sessionCancellable = true
+        // The engine races here too, and why each of its rungs failed is in
+        // its own log. Nothing copied it on this path, so a report from an
+        // Automatic search that lost every engine rung said only that it had.
+        startEngineLogPump(sessionGeneration)
         if (lockdownHint() != null) {
             EngineLog.record(LogLevel.WARN, "auto", "always-on VPN lockdown is on; Psiphon and Tor may have no network")
         }
@@ -1635,7 +1664,7 @@ class AetherVpnService : VpnService() {
         var handedOff = false
         try {
             publishAutoProgress()
-            val winner = raceLanes(step.lanes, sessionGeneration)
+            val winner = raceLanes(step.lanes, sessionGeneration, autoSearchDeadline())
             if (sessionGeneration != generation) {
                 winner?.let { runCatching { it.client.stop() } }
                 return
@@ -1647,7 +1676,14 @@ class AetherVpnService : VpnService() {
 
             carrier = winner.route.carrier
             secondCarrier = null
-            autoRunningRoute = winner.route
+            // For the engine, what it actually ran with. A rung that carries
+            // no tactic leaves the user's own in place, and whichever one got
+            // out is what the next connect here has to repeat.
+            autoRunningRoute = if (winner.route.racesEngine) {
+                AutoRoute.ofEngineConfig(raceEngineConfig(winner.route))
+            } else {
+                winner.route
+            }
             // The framing that got Aether out, so the direct engine starts on
             // it next time -- the memory sends that connect to the direct path.
             if (winner.route.racesEngine) rememberWorkingTransport(raceEngineConfig(winner.route))
@@ -1705,6 +1741,10 @@ class AetherVpnService : VpnService() {
         }
     }
 
+    /** When this search has to be over by: what the person waiting was promised. */
+    private fun autoSearchDeadline(): Long =
+        (autoSearchStartedAt.takeIf { it > 0L } ?: System.currentTimeMillis()) + MAX_AUTO_SEARCH_MS
+
     /**
      * Runs the lanes, and returns the first route to carry traffic -- or null
      * once every lane has run out.
@@ -1712,8 +1752,20 @@ class AetherVpnService : VpnService() {
      * A lane waits out its head start, or for every lane already running to run
      * out, whichever is first: a second lane sitting out a head start behind a
      * lane that has already failed would only be waiting for a clock.
+     *
+     * A lane that has tried every route goes round again for as long as the
+     * search has time for the next one, rather than stopping there. It used to
+     * stop, and wait for the slowest lane, and the search ended with that lane
+     * -- a network given one look through each route by a search that had
+     * room for several, and a Psiphon given one window by a search that went
+     * on for twice as long. Psiphon now holds for the whole of it; see
+     * [AutoPlanner.holdsForTheSearch].
      */
-    private suspend fun raceLanes(lanes: List<Lane>, sessionGeneration: Long): AutoWinner? {
+    private suspend fun raceLanes(
+        lanes: List<Lane>,
+        sessionGeneration: Long,
+        deadlineMs: Long,
+    ): AutoWinner? {
         val race = ++autoRaceId
         val winner = CompletableDeferred<AutoWinner?>()
         val begun = List(lanes.size) { CompletableDeferred<Unit>() }
@@ -1741,13 +1793,31 @@ class AetherVpnService : VpnService() {
             lanesScope.launch {
                 withTimeoutOrNull(lane.startAfterMs) { begun[index].await() }
                 begun[index].complete(Unit)
-                for (route in lane.routes) {
-                    if (winner.isCompleted || sessionGeneration != generation) break
-                    val found = tryRoute(route, sessionGeneration, race) ?: continue
-                    // Two routes can come good in the same moment. The second
-                    // is stopped rather than left running beside the first.
-                    if (!winner.complete(found)) runCatching { found.client.stop() }
-                    return@launch
+                var round = 0
+                var fastRounds = 0
+                while (!winner.isCompleted && sessionGeneration == generation) {
+                    val roundStarted = System.currentTimeMillis()
+                    var started = 0
+                    for (route in lane.routes) {
+                        if (winner.isCompleted || sessionGeneration != generation) break
+                        val remaining = deadlineMs - System.currentTimeMillis()
+                        if (round > 0 && !AutoPlanner.fitsAgain(route, remaining)) continue
+                        started += 1
+                        val window = AutoPlanner.windowMs(route, remaining)
+                        val found = tryRoute(route, sessionGeneration, race, window) ?: continue
+                        // Two routes can come good in the same moment. The
+                        // second is stopped rather than left running beside
+                        // the first.
+                        if (!winner.complete(found)) runCatching { found.client.stop() }
+                        return@launch
+                    }
+                    if (started == 0) break
+                    round += 1
+                    val took = System.currentTimeMillis() - roundStarted
+                    fastRounds = if (took < AutoPlanner.LANE_ROUND_FLOOR_MS) fastRounds + 1 else 0
+                    val pause = AutoPlanner.pauseAfterRound(took, fastRounds)
+                    val left = deadlineMs - System.currentTimeMillis()
+                    if (pause > 0 && left > 0) delay(minOf(pause, left))
                 }
                 finished[index] = true
                 handOn()
@@ -1781,13 +1851,19 @@ class AetherVpnService : VpnService() {
     }
 
     /**
-     * Starts one route and keeps it only if a real request gets through it.
+     * Starts one route, gives it [windowMs] to come up, and keeps it only if a
+     * real request gets through it.
      *
      * Whatever happens -- failure, a route that connects and carries nothing,
      * or this lane being cancelled because another won -- a route that is not
      * kept is stopped here, so nothing the race started outlives it.
      */
-    private suspend fun tryRoute(route: AutoRoute, sessionGeneration: Long, race: Long): AutoWinner? {
+    private suspend fun tryRoute(
+        route: AutoRoute,
+        sessionGeneration: Long,
+        race: Long,
+        windowMs: Long,
+    ): AutoWinner? {
         if (route.racesEngine) {
             // One engine at a time, as for an engine step: the step before
             // this race may have left one behind.
@@ -1811,7 +1887,7 @@ class AetherVpnService : VpnService() {
         publishAutoProgress()
         var kept = false
         try {
-            val port = client.start(AutoPlanner.budgetMs(route)).getOrElse { error ->
+            val port = client.start(windowMs).getOrElse { error ->
                 EngineLog.record(LogLevel.WARN, "auto", "${route.wireName}: ${error.message}")
                 if (route.racesEngine) lastEngineFailure = error.message
                 return null
@@ -1863,24 +1939,13 @@ class AetherVpnService : VpnService() {
         }
     }
 
-    /** The user's own configuration, on the framing and at the depth [route] asks for. */
-    private fun raceEngineConfig(route: AutoRoute): String {
-        val base = baseConfigJson ?: "{}"
-        val transport = route.engineTransport ?: return base
-        return runCatching {
-            val json = JSONObject(base)
-            // Full is the user's own depth -- balanced unless they chose
-            // otherwise; quick is the engine's quickest.
-            val depth = if (route.fullSearch) json.optString("scanMode", "balanced") else "turbo"
-            json.put("transport", transport).put("scanMode", depth)
-            // A rung that carries a tactic sets it; one that does not leaves
-            // the user's own choice alone, so turning something on by hand is
-            // still worth doing and is not quietly overridden on every rung.
-            route.fragmentTls?.let { json.put("fragmentTls", it) }
-            route.encryptedHello?.let { json.put("encryptedHello", it) }
-            json.toString()
-        }.getOrDefault(base)
-    }
+    /**
+     * The user's own configuration, on the framing and at the depth [route]
+     * asks for: full is the user's own depth -- balanced unless they chose
+     * otherwise -- and quick is the engine's quickest.
+     */
+    private fun raceEngineConfig(route: AutoRoute): String =
+        AutoPlanner.engineConfig(baseConfigJson ?: "{}", route, deep = route.fullSearch)
 
     /**
      * Buys the engine an identity over a carrier that is already working.
@@ -2199,8 +2264,13 @@ class AetherVpnService : VpnService() {
      * failed is in these lines, and a diagnostics report without them says only
      * that it failed. Bounded by the generation so a replaced session stops
      * pumping for one nobody is watching.
+     *
+     * Once per generation. A retry runs under the generation it retries, so
+     * starting one per attempt left several pumps taking turns at one buffer.
      */
     private fun startEngineLogPump(sessionGeneration: Long) {
+        if (logPumpGeneration == sessionGeneration) return
+        logPumpGeneration = sessionGeneration
         serviceScope.launch {
             while (sessionGeneration == generation) {
                 delay(ENGINE_LOG_DRAIN_MS)
@@ -3085,10 +3155,16 @@ class AetherVpnService : VpnService() {
          *
          * A ceiling on what the person waiting experiences rather than on the
          * number of attempts, which is a proxy for it and drifts every time a
-         * rung is added. Checked between passes only: a pass that has started
-         * runs to its end, because the lanes inside it have their own windows
-         * and cutting one in half is how a carrier that was about to connect
-         * gets thrown away.
+         * rung is added. Checked between passes: a pass that has started runs
+         * to its end, because the lanes inside it have their own windows and
+         * cutting one in half is how a carrier that was about to connect gets
+         * thrown away.
+         *
+         * And used, not only enforced. Inside a race each lane goes round
+         * again while its next route can finish before this, and Psiphon
+         * holds until it -- so the time a person is asked to wait is time
+         * every way out spends trying, rather than a first look through each
+         * followed by a wait for the slowest.
          *
          * Sized so one full pass always fits. AutoPlannerTest holds it there.
          */

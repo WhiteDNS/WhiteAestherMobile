@@ -447,12 +447,103 @@ class AutoPlannerTest {
     }
 
     @Test
-    fun anyAetherWinIsRememberedAsTheDirectEngine() {
-        AutoRoute.entries.filter { it.racesEngine }.forEach {
-            assertEquals(AutoRoute.AETHER, it.remembersAs)
+    fun anyAetherWinSendsTheNextConnectDownTheDirectPath() {
+        AutoRoute.entries.filter { it.racesEngine }.forEach { route ->
+            assertEquals(AutoRoute.AETHER, route.plannedAs)
+            val plan = AutoPlanner.plan(route, everything)
+            assertEquals(
+                "a win by $route should lead with the direct engine",
+                AutoStep.Engine(AutoPlanner.ENGINE_REMEMBERED_MS, deep = false),
+                plan[0],
+            )
         }
-        val stored = RouteMemory.remember(null, "wifi:a", AutoRoute.AETHER_H3_QUICK, 1L)
-        assertEquals(AutoRoute.AETHER, RouteMemory.recall(stored, "wifi:a", 2L))
+    }
+
+    /**
+     * What got out is remembered as it was, not as "the engine".
+     *
+     * Kept as the engine, a network that answers only a split ClientHello led
+     * every later connect with an unsplit one: the direct path spent its whole
+     * budget failing, and the race behind it began again from the plain rungs
+     * and reached fragmentation two budgets in.
+     */
+    @Test
+    fun aTacticThatGotOutLeadsTheLaneNextTime() {
+        for (tactic in listOf(AutoRoute.AETHER_H2_FRAGMENT, AutoRoute.AETHER_H3_ECH, AutoRoute.AETHER_MIM)) {
+            val stored = RouteMemory.remember(null, "cell:43211", tactic, 1L)
+            val remembered = RouteMemory.recall(stored, "cell:43211", 2L)
+            assertEquals(tactic, remembered)
+
+            // The engine failed first here since, so this is the race alone.
+            val plan = AutoPlanner.plan(remembered, everything.copy(engineFailedHere = true))
+            val race = plan.single() as AutoStep.Race
+            assertEquals(tactic, race.lanes[0].routes.first())
+            // Moved, not added: every other rung is still behind it.
+            assertEquals(AutoPlanner.aetherLane(everything).toSet(), race.lanes[0].routes.toSet())
+        }
+    }
+
+    /** The direct engine is handed what the remembered route carried. */
+    @Test
+    fun theDirectEngineRepeatsTheRememberedTactic() {
+        val base = """{"transport":"auto","scanMode":"balanced","fragmentTls":false,"encryptedHello":false}"""
+
+        val split = org.json.JSONObject(AutoPlanner.engineConfig(base, AutoRoute.AETHER_H2_FRAGMENT, deep = true))
+        assertEquals("h2", split.getString("transport"))
+        assertTrue(split.getBoolean("fragmentTls"))
+        // At the user's depth: it is already known to work here.
+        assertEquals("balanced", split.getString("scanMode"))
+
+        val hidden = org.json.JSONObject(AutoPlanner.engineConfig(base, AutoRoute.AETHER_H3_ECH, deep = true))
+        assertEquals("h3", hidden.getString("transport"))
+        assertTrue(hidden.getBoolean("encryptedHello"))
+
+        val nested = org.json.JSONObject(AutoPlanner.engineConfig(base, AutoRoute.AETHER_MIM, deep = true))
+        assertEquals("mim", nested.getString("transport"))
+    }
+
+    /**
+     * What an engine ran with names the route that describes it, and back.
+     *
+     * The service names a win by the configuration that carried it, so the
+     * two have to agree for every rung the race can run -- or a win is
+     * remembered as a route that would not repeat it.
+     */
+    @Test
+    fun everyRungIsNamedByWhatItRanWith() {
+        val base = """{"transport":"auto","scanMode":"balanced","fragmentTls":false,"encryptedHello":false}"""
+        AutoRoute.entries.filter { it.racesEngine && it.engineTransport != null }.forEach { route ->
+            val ran = AutoPlanner.engineConfig(base, route, deep = route.fullSearch)
+            assertEquals(route, AutoRoute.ofEngineConfig(ran))
+        }
+    }
+
+    /**
+     * A tactic the user turned on by hand is the one that got out.
+     *
+     * A rung that carries no tactic leaves the user's own in place, so the
+     * plain H2 rung ran split. Naming it by the configuration is what makes
+     * the next connect split too.
+     */
+    @Test
+    fun aTacticSetByHandIsRememberedAsTheTacticThatWorked() {
+        val base = """{"transport":"auto","scanMode":"balanced","fragmentTls":true}"""
+        val ran = AutoPlanner.engineConfig(base, AutoRoute.AETHER_H2_QUICK, deep = false)
+
+        assertEquals(AutoRoute.AETHER_H2_FRAGMENT, AutoRoute.ofEngineConfig(ran))
+    }
+
+    @Test
+    fun aTransportTheUserFixedIsRememberedAsTheirs() {
+        for (fixed in listOf("wg", "wiw")) {
+            assertEquals(
+                AutoRoute.AETHER_AS_SET,
+                AutoRoute.ofEngineConfig("""{"transport":"$fixed","scanMode":"balanced"}"""),
+            )
+        }
+        // And it is handed back as it stands.
+        val base = """{"transport":"wg","scanMode":"balanced"}"""
+        assertEquals(base, AutoPlanner.engineConfig(base, AutoRoute.AETHER_AS_SET, deep = true))
     }
 
     @Test
@@ -552,6 +643,88 @@ class AutoPlannerTest {
     @Test
     fun everyPlanTriesSomething() {
         everyPlan { plan -> assertTrue(plan.isNotEmpty()) }
+    }
+
+    /**
+     * Psiphon holds for as long as the search does.
+     *
+     * It used to get one window of five and a half minutes and then sit idle
+     * while the engine's lane ran on for as long again -- while the Psiphon a
+     * user picks by hand was waited on eight times over, and connected on
+     * networks where Automatic had given up.
+     */
+    @Test
+    fun psiphonKeepsTryingForAsLongAsTheSearchDoes() {
+        val ceiling = 15 * 60 * 1_000L
+
+        assertEquals(ceiling, AutoPlanner.windowMs(AutoRoute.PSIPHON, ceiling))
+        // Never less than its own window, however late it starts.
+        assertEquals(
+            AutoPlanner.budgetMs(AutoRoute.PSIPHON),
+            AutoPlanner.windowMs(AutoRoute.PSIPHON, 60_000L),
+        )
+    }
+
+    @Test
+    fun everyOtherRouteKeepsItsOwnWindow() {
+        AutoRoute.entries.filter { it != AutoRoute.PSIPHON }.forEach { route ->
+            assertFalse(AutoPlanner.holdsForTheSearch(route))
+            assertEquals(AutoPlanner.budgetMs(route), AutoPlanner.windowMs(route, 15 * 60 * 1_000L))
+        }
+    }
+
+    /**
+     * A lane goes round again only with a route that can finish.
+     *
+     * The end of the search is what the person waiting was promised, and a
+     * route started too close to it is a route that will be cut short.
+     */
+    @Test
+    fun aRouteIsStartedAgainOnlyIfItCanFinish() {
+        val quick = AutoRoute.AETHER_H2_QUICK
+
+        assertTrue(AutoPlanner.fitsAgain(quick, AutoPlanner.budgetMs(quick)))
+        assertFalse(AutoPlanner.fitsAgain(quick, AutoPlanner.budgetMs(quick) - 1))
+    }
+
+    /**
+     * One round of the engine's lane leaves time in the search for more of it.
+     *
+     * That time used to be spent waiting for the slowest lane, after which the
+     * search said nothing had worked.
+     */
+    @Test
+    fun aRoundOfTheEngineLaneLeavesRoomToGoRoundAgain() {
+        val ceiling = 15 * 60 * 1_000L
+        val lane = AutoPlanner.aetherLane(everything)
+        val left = ceiling - lane.sumOf { AutoPlanner.budgetMs(it) }
+
+        assertTrue(lane.any { AutoPlanner.fitsAgain(it, left) })
+    }
+
+    /** A round that used its routes' time goes straight round again. */
+    @Test
+    fun aRoundThatTriedGoesRoundAgainAtOnce() {
+        assertEquals(0L, AutoPlanner.pauseAfterRound(400_000L, fastRounds = 0))
+    }
+
+    /**
+     * A round that fails in seconds does not go straight round again.
+     *
+     * A registration on hold fails every engine rung at once, and a lane that
+     * spun on it would fill the diagnostics log with the same refusal. It
+     * waits out the rest of a minute, and longer each time it happens again.
+     */
+    @Test
+    fun aLaneThatFailsFastBacksOff() {
+        assertEquals(55_000L, AutoPlanner.pauseAfterRound(5_000L, fastRounds = 1))
+        assertEquals(115_000L, AutoPlanner.pauseAfterRound(5_000L, fastRounds = 2))
+        assertEquals(235_000L, AutoPlanner.pauseAfterRound(5_000L, fastRounds = 3))
+        // And stops growing, so a network that comes good is still looked at.
+        assertEquals(
+            AutoPlanner.pauseAfterRound(0L, fastRounds = 4),
+            AutoPlanner.pauseAfterRound(0L, fastRounds = 40),
+        )
     }
 
     private fun everyPlan(check: (List<AutoStep>) -> Unit) {
