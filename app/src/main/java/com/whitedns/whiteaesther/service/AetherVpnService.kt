@@ -270,6 +270,9 @@ class AetherVpnService : VpnService() {
     /** An engine session the leash had to leave behind, until it has gone. */
     private var staleEngine: Job? = null
 
+    /** The generation whose engine log is already being copied; see [startEngineLogPump]. */
+    private var logPumpGeneration = -1L
+
     /**
      * Whether the current session can be cancelled rather than waited for.
      *
@@ -1640,6 +1643,10 @@ class AetherVpnService : VpnService() {
         sessionGeneration: Long,
     ) {
         sessionCancellable = true
+        // The engine races here too, and why each of its rungs failed is in
+        // its own log. Nothing copied it on this path, so a report from an
+        // Automatic search that lost every engine rung said only that it had.
+        startEngineLogPump(sessionGeneration)
         if (lockdownHint() != null) {
             EngineLog.record(LogLevel.WARN, "auto", "always-on VPN lockdown is on; Psiphon and Tor may have no network")
         }
@@ -2257,8 +2264,13 @@ class AetherVpnService : VpnService() {
      * failed is in these lines, and a diagnostics report without them says only
      * that it failed. Bounded by the generation so a replaced session stops
      * pumping for one nobody is watching.
+     *
+     * Once per generation. A retry runs under the generation it retries, so
+     * starting one per attempt left several pumps taking turns at one buffer.
      */
     private fun startEngineLogPump(sessionGeneration: Long) {
+        if (logPumpGeneration == sessionGeneration) return
+        logPumpGeneration = sessionGeneration
         serviceScope.launch {
             while (sessionGeneration == generation) {
                 delay(ENGINE_LOG_DRAIN_MS)
