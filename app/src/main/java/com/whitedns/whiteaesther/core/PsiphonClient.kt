@@ -94,7 +94,13 @@ class PsiphonClient(
                 // so a country with no capacity is a slow connect rather than a
                 // different exit than the user asked for.
                 .putExtra(PsiphonService.EXTRA_REGION, egressRegion)
-                .putExtra(PsiphonService.EXTRA_UPSTREAM, upstreamPort),
+                .putExtra(PsiphonService.EXTRA_UPSTREAM, upstreamPort)
+                // As long as this wait, so tunnel-core does not give up on
+                // its own partway through one that is still going.
+                .putExtra(
+                    PsiphonService.EXTRA_ESTABLISH_SECONDS,
+                    PsiphonConfig.establishTimeoutSeconds(timeoutMs),
+                ),
         )
 
         val settled = withTimeoutOrNull(timeoutMs) {

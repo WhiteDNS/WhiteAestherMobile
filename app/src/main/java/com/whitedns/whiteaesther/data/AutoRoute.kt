@@ -160,7 +160,8 @@ sealed interface AutoStep {
 
 /**
  * Routes tried one after another, starting [startAfterMs] into the race -- or
- * sooner, the moment every lane already running has run out.
+ * sooner, the moment every lane already running has run out -- and round
+ * again while the search has time for them; see [AutoPlanner.fitsAgain].
  *
  * Lanes rather than one list because different carriers can be tried at once,
  * while two routes of one carrier cannot: there is one engine and one tor.
@@ -244,6 +245,67 @@ object AutoPlanner {
 
     /** How long Tor waits for the lanes ahead of it before it joins them. */
     const val SECOND_LANE_AFTER_MS = 45_000L
+
+    /**
+     * The least time one round of a lane may take before it goes round again.
+     *
+     * A round that fails in seconds is a network refusing every route in it
+     * at once, or an engine whose registration is on hold. Going straight
+     * round again would spin; waiting out the rest of a minute gives the
+     * network, or the hold, the chance to change.
+     */
+    const val LANE_ROUND_FLOOR_MS = 60_000L
+
+    /**
+     * How long a lane waits before going round again, after a round that took
+     * [tookMs] and was the [fastRounds]th in a row to finish inside
+     * [LANE_ROUND_FLOOR_MS].
+     *
+     * Nothing after a round that used its routes' time. After one that failed
+     * in seconds, the rest of a minute -- doubling each time it happens again,
+     * up to eight minutes, so a lane that can only fail fast neither spins nor
+     * fills the diagnostics log with one refusal over and over.
+     */
+    fun pauseAfterRound(tookMs: Long, fastRounds: Int): Long {
+        if (fastRounds <= 0) return 0L
+        val floor = LANE_ROUND_FLOOR_MS shl (fastRounds - 1).coerceIn(0, 3)
+        return (floor - tookMs).coerceAtLeast(0L)
+    }
+
+    /**
+     * Whether [route] keeps trying for as long as the search lasts, rather
+     * than for a window of its own.
+     *
+     * Psiphon. tunnel-core races its own protocols and servers, and what it
+     * learns while it does -- tactics, fresh server lists, which dials got
+     * furthest -- goes when it is stopped, so starting it again is worse than
+     * leaving it running. It used to be given one window of five and a half
+     * minutes and then left idle while the engine's lane ran on for as long
+     * again, while the Psiphon a user picks by hand is waited for eight times
+     * over.
+     */
+    fun holdsForTheSearch(route: AutoRoute): Boolean = route == AutoRoute.PSIPHON
+
+    /**
+     * How long [route] may run when it starts with [remainingMs] of the search
+     * left.
+     *
+     * Its own budget, or for a route that holds, the rest of the search -- but
+     * never less than its own budget. A window cut short is how a carrier that
+     * was about to connect gets thrown away.
+     */
+    fun windowMs(route: AutoRoute, remainingMs: Long): Long =
+        if (holdsForTheSearch(route)) maxOf(budgetMs(route), remainingMs) else budgetMs(route)
+
+    /**
+     * Whether a lane that has been round once may start [route] again with
+     * [remainingMs] of the search left.
+     *
+     * The first time round every route has its turn, as it always did. After
+     * that, only one that can finish in time: the end of the search is what
+     * the person waiting was promised.
+     */
+    fun fitsAgain(route: AutoRoute, remainingMs: Long): Boolean = budgetMs(route) <= remainingMs
 
     /**
      * The longest one pass of [plan] can take.

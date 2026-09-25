@@ -645,6 +645,88 @@ class AutoPlannerTest {
         everyPlan { plan -> assertTrue(plan.isNotEmpty()) }
     }
 
+    /**
+     * Psiphon holds for as long as the search does.
+     *
+     * It used to get one window of five and a half minutes and then sit idle
+     * while the engine's lane ran on for as long again -- while the Psiphon a
+     * user picks by hand was waited on eight times over, and connected on
+     * networks where Automatic had given up.
+     */
+    @Test
+    fun psiphonKeepsTryingForAsLongAsTheSearchDoes() {
+        val ceiling = 15 * 60 * 1_000L
+
+        assertEquals(ceiling, AutoPlanner.windowMs(AutoRoute.PSIPHON, ceiling))
+        // Never less than its own window, however late it starts.
+        assertEquals(
+            AutoPlanner.budgetMs(AutoRoute.PSIPHON),
+            AutoPlanner.windowMs(AutoRoute.PSIPHON, 60_000L),
+        )
+    }
+
+    @Test
+    fun everyOtherRouteKeepsItsOwnWindow() {
+        AutoRoute.entries.filter { it != AutoRoute.PSIPHON }.forEach { route ->
+            assertFalse(AutoPlanner.holdsForTheSearch(route))
+            assertEquals(AutoPlanner.budgetMs(route), AutoPlanner.windowMs(route, 15 * 60 * 1_000L))
+        }
+    }
+
+    /**
+     * A lane goes round again only with a route that can finish.
+     *
+     * The end of the search is what the person waiting was promised, and a
+     * route started too close to it is a route that will be cut short.
+     */
+    @Test
+    fun aRouteIsStartedAgainOnlyIfItCanFinish() {
+        val quick = AutoRoute.AETHER_H2_QUICK
+
+        assertTrue(AutoPlanner.fitsAgain(quick, AutoPlanner.budgetMs(quick)))
+        assertFalse(AutoPlanner.fitsAgain(quick, AutoPlanner.budgetMs(quick) - 1))
+    }
+
+    /**
+     * One round of the engine's lane leaves time in the search for more of it.
+     *
+     * That time used to be spent waiting for the slowest lane, after which the
+     * search said nothing had worked.
+     */
+    @Test
+    fun aRoundOfTheEngineLaneLeavesRoomToGoRoundAgain() {
+        val ceiling = 15 * 60 * 1_000L
+        val lane = AutoPlanner.aetherLane(everything)
+        val left = ceiling - lane.sumOf { AutoPlanner.budgetMs(it) }
+
+        assertTrue(lane.any { AutoPlanner.fitsAgain(it, left) })
+    }
+
+    /** A round that used its routes' time goes straight round again. */
+    @Test
+    fun aRoundThatTriedGoesRoundAgainAtOnce() {
+        assertEquals(0L, AutoPlanner.pauseAfterRound(400_000L, fastRounds = 0))
+    }
+
+    /**
+     * A round that fails in seconds does not go straight round again.
+     *
+     * A registration on hold fails every engine rung at once, and a lane that
+     * spun on it would fill the diagnostics log with the same refusal. It
+     * waits out the rest of a minute, and longer each time it happens again.
+     */
+    @Test
+    fun aLaneThatFailsFastBacksOff() {
+        assertEquals(55_000L, AutoPlanner.pauseAfterRound(5_000L, fastRounds = 1))
+        assertEquals(115_000L, AutoPlanner.pauseAfterRound(5_000L, fastRounds = 2))
+        assertEquals(235_000L, AutoPlanner.pauseAfterRound(5_000L, fastRounds = 3))
+        // And stops growing, so a network that comes good is still looked at.
+        assertEquals(
+            AutoPlanner.pauseAfterRound(0L, fastRounds = 4),
+            AutoPlanner.pauseAfterRound(0L, fastRounds = 40),
+        )
+    }
+
     private fun everyPlan(check: (List<AutoStep>) -> Unit) {
         val flags = listOf(true, false)
         for (wholeDevice in flags) for (chain in flags) for (transports in flags)
