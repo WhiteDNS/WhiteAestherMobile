@@ -636,7 +636,7 @@ class AetherVpnService : VpnService() {
                     secondCarrier = null
                     // Named by what it runs with, so a win here is remembered
                     // as the framing and the tactic that got out.
-                    autoEngineConfig(requestedConfig, step)
+                    autoEngineConfig(AutoPlanner.automaticBase(requestedConfig), step)
                         .also { autoRunningRoute = AutoRoute.ofEngineConfig(it) }
                 }
             }
@@ -1940,12 +1940,16 @@ class AetherVpnService : VpnService() {
     }
 
     /**
-     * The user's own configuration, on the framing and at the depth [route]
-     * asks for: full is the user's own depth -- balanced unless they chose
-     * otherwise -- and quick is the engine's quickest.
+     * The user's own configuration as Automatic reads it, on the framing and at
+     * the depth [route] asks for: full is the user's own depth -- balanced
+     * unless they chose otherwise, and never deeper -- and quick is the
+     * engine's quickest.
      */
-    private fun raceEngineConfig(route: AutoRoute): String =
-        AutoPlanner.engineConfig(baseConfigJson ?: "{}", route, deep = route.fullSearch)
+    private fun raceEngineConfig(route: AutoRoute): String = AutoPlanner.engineConfig(
+        AutoPlanner.automaticBase(baseConfigJson ?: "{}"),
+        route,
+        deep = route.fullSearch,
+    )
 
     /**
      * Buys the engine an identity over a carrier that is already working.
