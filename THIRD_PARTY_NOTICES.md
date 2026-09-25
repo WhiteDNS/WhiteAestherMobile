@@ -10,8 +10,9 @@ and the GPL-3.0 parts remain GPL-3.0.
 ## Aether — AGPL-3.0
 
 The native engine is vendored from `CluvexStudio/Aether` revision
-`0e6f6a52`, released as `v2.0.0`. The original license and revision record are
-included under `native/aether/`.
+`0e6f6a52`, released as `v2.0.0`, with four changes carried from `v2.1.0`
+(listed in `native/aether/UPSTREAM.md`). The original license and revision
+record are included under `native/aether/`.
 
 The project moved: earlier releases name `MatinSenPai/Aether`, which still
 carries the revision shipped up to v1.2.1 but stops at its own `v1.3.0`. Both
