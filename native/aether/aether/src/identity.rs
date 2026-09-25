@@ -200,6 +200,8 @@ struct Persisted {
     slots: BTreeMap<String, String>,
     #[serde(default)]
     registration: RegistrationBudget,
+    #[serde(default)]
+    registration_via_proxy: RegistrationBudget,
 }
 
 /// Every device this install holds, and which role each one fills.
@@ -207,7 +209,11 @@ struct Persisted {
 pub struct Store {
     devices: BTreeMap<String, Device>,
     slots: BTreeMap<Slot, String>,
+    /// What registrations leaving from this device's own address have spent.
     pub registration: RegistrationBudget,
+    /// The same, for registrations sent through a proxy -- a carrier that is
+    /// already out, or one the user configured -- which leave from its address.
+    pub registration_via_proxy: RegistrationBudget,
 }
 
 /// What repairing the invariants changed, for the log and for the tests.
@@ -366,6 +372,7 @@ impl Store {
             devices: persisted.devices,
             slots,
             registration: persisted.registration,
+            registration_via_proxy: persisted.registration_via_proxy,
         }
     }
 
@@ -379,6 +386,24 @@ impl Store {
                 .map(|(slot, id)| (slot.key().to_string(), id.clone()))
                 .collect(),
             registration: self.registration.clone(),
+            registration_via_proxy: self.registration_via_proxy.clone(),
+        }
+    }
+
+    /// The budget a registration sent now draws on.
+    ///
+    /// Two, because what a wait protects is an address. Cloudflare counts a
+    /// registration against the address it arrived from, so one sent through a
+    /// proxy -- a carrier that is already out -- is spent from the proxy's
+    /// address and not from this device's. With a single budget, failures on a
+    /// network that cannot reach the API at all put the device on hold, and the
+    /// hold then refused the one registration that could have got through:
+    /// the one sent through the carrier that was carrying the user.
+    pub fn registration_budget(&mut self, through_proxy: bool) -> &mut RegistrationBudget {
+        if through_proxy {
+            &mut self.registration_via_proxy
+        } else {
+            &mut self.registration
         }
     }
 
@@ -726,6 +751,56 @@ mod tests {
             restored.device("dev-masque").unwrap().tunnel_type,
         );
         assert_eq!(1_789_000_190, restored.registration.next_attempt_at);
+    }
+
+    /// A wait is about an address, so the two routes keep their own.
+    ///
+    /// Failures on a network that cannot reach the API put this device's
+    /// address on hold; the registration that could still get through is the
+    /// one sent through a carrier that is already out, from the carrier's
+    /// address, and one budget for both refused it too.
+    #[test]
+    fn a_wait_on_one_route_is_not_a_wait_on_the_other() {
+        let mut store = Store::default();
+        store
+            .registration_budget(false)
+            .failed(1_789_000_100, "timed out", None);
+
+        assert!(store
+            .registration_budget(false)
+            .may_attempt(1_789_000_101)
+            .is_err());
+        assert!(store
+            .registration_budget(true)
+            .may_attempt(1_789_000_101)
+            .is_ok());
+
+        store
+            .registration_budget(true)
+            .failed(1_789_000_200, "429", Some(90));
+        let restored = Store::parse(&store.to_text().unwrap()).unwrap();
+        assert_eq!(
+            store.registration.next_attempt_at,
+            restored.registration.next_attempt_at
+        );
+        assert_eq!(
+            1_789_000_290,
+            restored.registration_via_proxy.next_attempt_at
+        );
+    }
+
+    /// A store written before there were two budgets still reads, with
+    /// nothing spent through a proxy.
+    #[test]
+    fn a_store_from_before_the_proxy_budget_reads_as_nothing_spent_through_one() {
+        let text = format!(
+            "version = {STORE_VERSION}\n\n[registration]\nattempts = 2\nlast_attempt_at = 1789000100\nnext_attempt_at = 1789000160\nlast_reason = \"timed out\"\n"
+        );
+
+        let store = Store::parse(&text).unwrap();
+
+        assert_eq!(1_789_000_160, store.registration.next_attempt_at);
+        assert_eq!(0, store.registration_via_proxy.next_attempt_at);
     }
 
     /// Invariant 3, which is the bug that broke 1.8 expressed as data.
