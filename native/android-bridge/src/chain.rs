@@ -32,6 +32,7 @@
 
 use std::collections::VecDeque;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::time::Duration;
@@ -272,18 +273,21 @@ pub fn start_tun(fd: i32, stack: &str, address: &str, dns: &str) -> Result<(), S
     if fd < 0 {
         return Err("the tunnel descriptor is not valid".into());
     }
+    // Consume the descriptor on preflight errors too. Kotlin has relinquished
+    // ownership, but Go has not received it until the call below.
+    let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
     let core = core()?;
-    let (tx, _rx) = mpsc::channel::<String>();
-    let callback = Box::into_raw(Box::new(Callback::Reply(tx))) as *mut c_void;
 
     let stack = CString::new(stack).map_err(|_| "stack contains a null byte".to_string())?;
     let address = CString::new(address).map_err(|_| "address contains a null byte".to_string())?;
     let dns = CString::new(dns).map_err(|_| "dns contains a null byte".to_string())?;
+    let (tx, _rx) = mpsc::channel::<String>();
+    let callback = Box::into_raw(Box::new(Callback::Reply(tx))) as *mut c_void;
 
     unsafe {
         (core.start_tun)(
             callback,
-            fd,
+            owned_fd.into_raw_fd(),
             stack.into_raw(),
             address.into_raw(),
             dns.into_raw(),

@@ -45,6 +45,7 @@ enum class TunnelProtocol(val wireName: String, @StringRes val label: Int) {
      * classified, it is the only MASQUE that gets out.
      */
     MASQUE_IN_MASQUE("mim", R.string.protocol_masque_in_masque),
+    WIREGUARD_OVER_MASQUE("wom", R.string.protocol_wireguard_over_masque),
     ;
 
     /** True when a failed attempt can be retried on the other framing. */
@@ -78,7 +79,7 @@ enum class TunnelProtocol(val wireName: String, @StringRes val label: Int) {
             // Nested MASQUE dials an ordinary MASQUE edge for its outer hop
             // and derives the inner one from it, so it searches the same
             // addresses a single hop does.
-            AUTO, H3, H2, MASQUE_IN_MASQUE -> EndpointFamily.MASQUE
+            AUTO, H3, H2, MASQUE_IN_MASQUE, WIREGUARD_OVER_MASQUE -> EndpointFamily.MASQUE
             WIREGUARD, WARP_IN_WARP -> EndpointFamily.WARP
         }
 }
@@ -372,6 +373,7 @@ data class AppSettings(
     // cost a little on a healthy network and only matter on a filtered one.
     val fragmentTls: Boolean = false,
     val encryptedHello: Boolean = false,
+    val tlsOptions: TlsOptions = TlsOptions(),
     // Which apps the tunnel carries. Presentation and VpnService only: the
     // engine has no idea apps exist, so this is deliberately absent from
     // toNativeJson.
@@ -631,6 +633,11 @@ data class AppSettings(
     fun chainForService(): ChainSettings =
         chain.copy(routeBlock = routeBlock, routeDirect = routeDirect)
 
+    fun connectionChoiceChanged(previous: AppSettings): Boolean =
+        carrier != previous.carrier || secondCarrier != previous.secondCarrier ||
+            automaticCarrier != previous.automaticCarrier || transport != previous.transport ||
+            scanStrategy != previous.scanStrategy || chain.enabled != previous.chain.enabled
+
     fun toNativeJson(context: Context): String {
         val json = JSONObject()
             .put("mode", mode.wireName)
@@ -659,6 +666,7 @@ data class AppSettings(
         if (endpointMode != EndpointMode.AUTOMATIC) {
             EndpointAddress.normalize(customEndpoint)?.let { json.put("peer", it) }
         }
+        tlsOptions.applyTo(json)
         return json.toString()
     }
 }

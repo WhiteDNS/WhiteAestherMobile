@@ -394,6 +394,10 @@ class MainActivity : ComponentActivity() {
             )
             return
         }
+        settings.tlsOptions.validationError(settings.fragmentTls, settings.encryptedHello)?.let { error ->
+            EngineStatusStore.update(EngineStatus(EngineStage.ERROR, settings.mode, message = getString(error)))
+            return
+        }
         pendingSettings = settings
         if (
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&

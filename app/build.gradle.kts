@@ -5,6 +5,7 @@ import org.gradle.api.provider.ValueSourceParameters
 import org.gradle.process.ExecOperations
 import java.io.ByteArrayOutputStream
 import javax.inject.Inject
+import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 
 /**
  * Which architectures this build carries.
@@ -267,7 +268,10 @@ dependencies {
 fun registerCargoNdkTask(name: String, release: Boolean) = tasks.register<Exec>(name) {
     val outputVariant = if (release) "release" else "debug"
     val outputDir = layout.buildDirectory.dir("generated/rustJniLibs/$outputVariant")
-    val androidHome = providers.environmentVariable("ANDROID_HOME")
+    // Resolve the same SDK as AGP (including local.properties). A different
+    // ANDROID_HOME used to switch CMake's compiler under an existing NDK cache.
+    val androidHome = project.extensions.getByType<ApplicationAndroidComponentsExtension>()
+        .sdkComponents.sdkDirectory.map { it.asFile.absolutePath.replace('\\', '/') }
     val ndkHome = providers.environmentVariable("ANDROID_NDK_HOME")
         .orElse(androidHome.map { "$it/ndk/29.0.14206865" })
         .map { it.replace('\\', '/') }

@@ -562,4 +562,20 @@
     <string name="add_a_home_screen_widget">Add a home-screen widget</string>
     <string name="connect_and_disconnect_from_the_home_screen">Connect and disconnect without opening the app.</string>
     <string name="err_no_widget_pin">This launcher will not place it for you. Look for WhiteAesther in its own widget list.</string>
+    <string name="protocol_wireguard_over_masque">WireGuard over MASQUE</string>
+    <string name="warp_wireguard_carried_inside_masque">WARP WireGuard inside a MASQUE tunnel; no personal server needed</string>
+    <string name="tls_records_preset">TLS records preset</string>
+    <string name="tls_compact_preset">Compact preset</string>
+    <string name="tls_custom">Custom</string>
+    <string name="tls_fragment_size">Fragment bytes: one value or range, e.g. 16-32</string>
+    <string name="tls_fragment_delay">Delay in milliseconds: one value or range, e.g. 2-10</string>
+    <string name="tls_split_sni">Split at the server name</string>
+    <string name="tls_fragment_scope">Splitting applies to H2, including the outer H2 tunnel of WireGuard over MASQUE. Automatic keeps the recovery presets available.</string>
+    <string name="tls_ech_config">Base64 ECHConfigList</string>
+    <string name="tls_ech_scope">ECH currently applies to H3. Automatic discovers the configuration; Custom uses the supplied list. The server must accept ECH.</string>
+    <string name="tls_fragment_size_error">Enter fragment bytes from 1 to 16384, as a value or ascending range.</string>
+    <string name="tls_fragment_delay_error">Enter a delay from 0 to 100 ms, as a value or ascending range.</string>
+    <string name="tls_ech_config_error">Paste a valid Base64 ECHConfigList, or select Automatic.</string>
+    <string name="use_carriers_only">Use carriers only</string>
+    <string name="empty_exit_chain_hint">The optional exit-node chain is enabled but has no nodes. Add a subscription, or turn it off to use your selected carriers.</string>
 </resources>

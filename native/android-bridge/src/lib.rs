@@ -22,11 +22,58 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
-const BRIDGE_VERSION: &str = "0.2.0";
+const BRIDGE_VERSION: &str = "0.3.1";
 const PACKET_QUEUE: usize = 1_024;
 const SCAN_RESULT_LIMIT: usize = 6;
 
-static STOP_SENDER: Lazy<Mutex<Option<oneshot::Sender<()>>>> = Lazy::new(|| Mutex::new(None));
+#[derive(Default)]
+struct RunControl {
+    active: bool,
+    stop: Option<oneshot::Sender<()>>,
+}
+
+static RUN_CONTROL: Lazy<Mutex<RunControl>> = Lazy::new(|| Mutex::new(RunControl::default()));
+
+/// Cancellation leaves the slot occupied until the owning native call unwinds.
+struct EngineRunGuard {
+    receiver: Option<oneshot::Receiver<()>>,
+}
+
+impl EngineRunGuard {
+    fn acquire() -> Result<Self, String> {
+        let mut control = RUN_CONTROL.lock();
+        if control.active {
+            return Err("engine is already running".into());
+        }
+        let (sender, receiver) = oneshot::channel();
+        control.active = true;
+        control.stop = Some(sender);
+        Ok(Self {
+            receiver: Some(receiver),
+        })
+    }
+}
+
+impl Drop for EngineRunGuard {
+    fn drop(&mut self) {
+        let mut control = RUN_CONTROL.lock();
+        control.stop.take();
+        control.active = false;
+    }
+}
+
+/// A descriptor detached by Android remains ours until the pump consumes it.
+struct PendingTunDescriptor(Option<i32>);
+
+impl Drop for PendingTunDescriptor {
+    fn drop(&mut self) {
+        if let Some(fd) = self.0.take() {
+            unsafe {
+                libc::close(fd);
+            }
+        }
+    }
+}
 static SCAN_RUNNING: AtomicBool = AtomicBool::new(false);
 static SCAN_CANCELLED: AtomicBool = AtomicBool::new(false);
 static PREPARE_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -135,10 +182,70 @@ struct BridgeConfig {
     /// supports it.
     #[serde(default)]
     encrypted_hello: bool,
+    #[serde(default)]
+    hello_shape: String,
+    #[serde(default)]
+    fragment_size: String,
+    #[serde(default)]
+    fragment_delay: String,
+    #[serde(default = "default_true")]
+    fragment_sni: bool,
+    #[serde(default)]
+    ech_config_list: String,
+    #[serde(default)]
+    custom_ech: bool,
+    /// Bounded discovery on an automatic recovery rung; manual scans keep their budgets.
+    #[serde(default)]
+    fast_connect: bool,
 }
 
 fn default_proxy_port() -> u16 {
     1819
+}
+
+fn validate_fragment_range(
+    raw: &str,
+    minimum: u64,
+    maximum: u64,
+    name: &str,
+) -> Result<(), String> {
+    if raw.is_empty() {
+        return Ok(());
+    }
+    let values: Vec<_> = raw.trim().split('-').collect();
+    let low = values.first().and_then(|v| v.parse::<u64>().ok());
+    let high = values.last().and_then(|v| v.parse::<u64>().ok());
+    match (low, high) {
+        (Some(low), Some(high))
+            if values.len() <= 2 && low >= minimum && high >= low && high <= maximum =>
+        {
+            Ok(())
+        }
+        _ => Err(format!(
+            "{name} must be a value or ascending range within {minimum}..{maximum}"
+        )),
+    }
+}
+
+fn valid_ech_list(bytes: &[u8]) -> bool {
+    if bytes.len() < 7
+        || bytes.len() > 65537
+        || usize::from(u16::from_be_bytes([bytes[0], bytes[1]])) != bytes.len() - 2
+    {
+        return false;
+    }
+    let mut offset = 2;
+    while offset < bytes.len() {
+        let Some(header) = bytes.get(offset..offset + 4) else {
+            return false;
+        };
+        let len = usize::from(u16::from_be_bytes([header[2], header[3]]));
+        if len == 0 {
+            return false;
+        }
+        offset += 4 + len;
+    }
+    offset == bytes.len()
 }
 
 fn default_scan_mode() -> String {
@@ -198,9 +305,23 @@ impl BridgeConfig {
         // becomes a tunnel the engine will not build.
         if !matches!(
             config.transport.as_str(),
-            "h3" | "h2" | "wg" | "wiw" | "mim"
+            "h3" | "h2" | "wg" | "wiw" | "mim" | "wom"
         ) {
-            return Err("transport must be h3, h2, wg, wiw or mim".into());
+            return Err("transport must be h3, h2, wg, wiw, mim or wom".into());
+        }
+        if !matches!(config.hello_shape.as_str(), "" | "records" | "compact") {
+            return Err("helloShape must be empty, records or compact".into());
+        }
+        if config.fragment_tls {
+            validate_fragment_range(&config.fragment_size, 1, 16384, "fragmentSize")?;
+            validate_fragment_range(&config.fragment_delay, 0, 100, "fragmentDelay")?;
+        }
+        if config.encrypted_hello && (config.custom_ech || !config.ech_config_list.is_empty()) {
+            let bytes = aether::tls::decode_ech_config_list(&config.ech_config_list)
+                .map_err(|_| "echConfigList must be a Base64 ECHConfigList".to_string())?;
+            if !valid_ech_list(&bytes) {
+                return Err("echConfigList has an invalid ECHConfigList length".into());
+            }
         }
         if let Some(peer) = config.peer.as_deref() {
             let address = peer
@@ -260,6 +381,7 @@ impl BridgeConfig {
                 "wg" => "wireguard".into(),
                 "wiw" => "warp-in-warp".into(),
                 "mim" => "masque-in-masque".into(),
+                "wom" => "wg-over-masque".into(),
                 other => {
                     return Err(format!(
                         "this build accepts the transport '{other}' but does not know \
@@ -297,7 +419,7 @@ impl BridgeConfig {
         }
 
         std::env::set_var("AETHER_NOIZE", &self.noize);
-        if self.transport == "h2" {
+        if self.transport == "h2" || self.transport == "wom" {
             std::env::set_var("AETHER_MASQUE_HTTP2", "1");
         } else {
             std::env::remove_var("AETHER_MASQUE_HTTP2");
@@ -307,13 +429,32 @@ impl BridgeConfig {
         // the engine resolves candidates itself rather than trusting one name.
 
         std::env::set_var("AETHER_QUICK_RECONNECT", "1");
+        set_or_clear("AETHER_HELLO_SHAPE", &self.hello_shape);
+        set_or_clear("AETHER_MASQUE_H2_FRAGMENT_SIZE", &self.fragment_size);
+        set_or_clear("AETHER_MASQUE_H2_FRAGMENT_DELAY", &self.fragment_delay);
+        std::env::set_var(
+            "AETHER_MASQUE_H2_FRAGMENT_SNI",
+            if self.fragment_sni { "1" } else { "0" },
+        );
+        if self.fast_connect {
+            std::env::set_var("AETHER_CONNECT_FAST", "1");
+        } else {
+            std::env::remove_var("AETHER_CONNECT_FAST");
+        }
         if self.fragment_tls {
             std::env::set_var("AETHER_MASQUE_H2_FRAGMENT", "1");
         } else {
             std::env::remove_var("AETHER_MASQUE_H2_FRAGMENT");
         }
         if self.encrypted_hello {
-            std::env::set_var("AETHER_ECH", "auto");
+            std::env::set_var(
+                "AETHER_ECH",
+                if self.ech_config_list.is_empty() {
+                    "auto"
+                } else {
+                    &self.ech_config_list
+                },
+            );
         } else {
             std::env::remove_var("AETHER_ECH");
         }
@@ -627,7 +768,7 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
     install_logger();
     catch_unwind(AssertUnwindSafe(|| {
         let result = (|| -> Result<String, String> {
-            if STOP_SENDER.lock().is_some() {
+            if RUN_CONTROL.lock().active {
                 return Err("engine is already running".into());
             }
             if SCAN_RUNNING.load(Ordering::SeqCst) {
@@ -698,7 +839,7 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
     install_logger();
     catch_unwind(AssertUnwindSafe(|| {
         let result = (|| -> Result<String, String> {
-            if STOP_SENDER.lock().is_some() {
+            if RUN_CONTROL.lock().active {
                 return Err("engine is already running".into());
             }
             if SCAN_RUNNING.load(Ordering::SeqCst) {
@@ -741,7 +882,7 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
     install_logger();
     catch_unwind(AssertUnwindSafe(|| {
         let result = (|| -> Result<String, String> {
-            if STOP_SENDER.lock().is_some() {
+            if RUN_CONTROL.lock().active {
                 return Err("disconnect before scanning endpoints".into());
             }
             if PREPARE_RUNNING.load(Ordering::SeqCst) {
@@ -787,7 +928,7 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
 ) -> jstring {
     catch_unwind(AssertUnwindSafe(|| {
         let result = (|| -> Result<String, String> {
-            if STOP_SENDER.lock().is_some() || SCAN_RUNNING.load(Ordering::SeqCst) {
+            if RUN_CONTROL.lock().active || SCAN_RUNNING.load(Ordering::SeqCst) {
                 return Err("disconnect and stop scanning before testing an endpoint".into());
             }
             let raw = read_java_string(&mut env, &config)?;
@@ -871,7 +1012,12 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
 ) -> jstring {
     install_logger();
     catch_unwind(AssertUnwindSafe(|| {
+        let mut pending_tun = PendingTunDescriptor((tun_fd >= 0).then_some(tun_fd));
         let result = (|| -> Result<String, String> {
+            let mut run_guard = EngineRunGuard::acquire()?;
+            if PREPARE_RUNNING.load(Ordering::SeqCst) || SCAN_RUNNING.load(Ordering::SeqCst) {
+                return Err("route preparation or scanning is still running".into());
+            }
             let raw = read_java_string(&mut env, &config)?;
             let peer: SocketAddr = read_java_string(&mut env, &prepared_peer)?
                 .parse()
@@ -885,24 +1031,23 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
                     .map_err(|error| error.to_string())?,
             );
             let runtime = runtime()?;
-            let (stop_tx, stop_rx) = oneshot::channel();
-            {
-                let mut sender = STOP_SENDER.lock();
-                if sender.is_some() {
-                    return Err("engine is already running".into());
-                }
-                *sender = Some(stop_tx);
-            }
+            let stop_rx = run_guard
+                .receiver
+                .take()
+                .expect("new run owns its receiver");
 
             let (endpoint, pump) = if config.mode == "tun" {
                 if tun_fd < 0 {
-                    STOP_SENDER.lock().take();
                     return Err("TUN mode requires a valid file descriptor".into());
                 }
                 let (device_tx, device_rx) = mpsc::channel(PACKET_QUEUE);
                 let (tunnel_tx, tunnel_rx) = mpsc::channel(PACKET_QUEUE);
-                let pump = tun::TunPump::start(tun_fd, device_tx, tunnel_rx)
-                    .map_err(|error| format!("failed to start TUN pump: {error}"))?;
+                let pump = tun::TunPump::start(
+                    pending_tun.0.take().expect("validated descriptor"),
+                    device_tx,
+                    tunnel_rx,
+                )
+                .map_err(|error| format!("failed to start TUN pump: {error}"))?;
                 (
                     aether::EmbeddedEndpoint::Tun {
                         device_to_tunnel: device_rx,
@@ -911,9 +1056,7 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
                     Some(pump),
                 )
             } else {
-                if tun_fd >= 0 {
-                    unsafe { libc::close(tun_fd) };
-                }
+                drop(PendingTunDescriptor(pending_tun.0.take()));
                 (aether::EmbeddedEndpoint::Socks, None)
             };
 
@@ -922,21 +1065,22 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
                 let mut engine = Box::pin(aether::run_embedded(embedded, endpoint, Some(ready_tx)));
                 let mut stop_rx = Box::pin(stop_rx);
                 tokio::select! {
-                    result = &mut engine => result.map_err(|error| error.to_string()),
+                    biased;
                     _ = &mut stop_rx => Ok(()),
+                    result = &mut engine => result.map_err(|error| error.to_string()),
                     ready = &mut ready_rx => {
                         if ready.is_ok() {
                             call_engine_ready(&vm, &listener)
                                 .map_err(|error| error.to_string())?;
                         }
                         tokio::select! {
-                            result = &mut engine => result.map_err(|error| error.to_string()),
+                            biased;
                             _ = &mut stop_rx => Ok(()),
+                            result = &mut engine => result.map_err(|error| error.to_string()),
                         }
                     }
                 }
             });
-            STOP_SENDER.lock().take();
             drop(runtime);
             if let Some(pump) = pump {
                 pump.stop();
@@ -944,10 +1088,7 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
             outcome?;
             Ok(response(true, serde_json::json!({"stopped": true})))
         })()
-        .unwrap_or_else(|error| {
-            STOP_SENDER.lock().take();
-            error_response(error)
-        });
+        .unwrap_or_else(error_response);
         java_string(env, &result)
     }))
     .unwrap_or(std::ptr::null_mut())
@@ -958,8 +1099,9 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jboolean {
-    STOP_SENDER
+    RUN_CONTROL
         .lock()
+        .stop
         .take()
         .map(|sender| {
             let _ = sender.send(());
@@ -1153,6 +1295,7 @@ mod tests {
         assert_eq!(embedded("wg").unwrap(), "wireguard");
         assert_eq!(embedded("wiw").unwrap(), "warp-in-warp");
         assert_eq!(embedded("mim").unwrap(), "masque-in-masque");
+        assert_eq!(embedded("wom").unwrap(), "wg-over-masque");
 
         // Refused, not quietly turned into something else.
         let refused = embedded("quantum-tunnel").unwrap_err();
@@ -1166,5 +1309,77 @@ mod tests {
         // diagnostics and its update notice, and an engine bump that nobody
         // noticed is one nobody tested on a phone either.
         assert_eq!(aether::version(), "2.0.0");
+    }
+
+    #[test]
+    fn cancelling_an_engine_keeps_its_slot_until_its_own_cleanup_finishes() {
+        let mut old = EngineRunGuard::acquire().unwrap();
+        assert!(EngineRunGuard::acquire().is_err());
+        assert!(
+            RUN_CONTROL.lock().stop.is_some(),
+            "a rejected run must not clear the active stop handle"
+        );
+        RUN_CONTROL.lock().stop.take().unwrap().send(()).unwrap();
+        assert_eq!(old.receiver.as_mut().unwrap().try_recv(), Ok(()));
+        assert!(
+            EngineRunGuard::acquire().is_err(),
+            "stop signals cancellation, not completion"
+        );
+        drop(old);
+        let next = EngineRunGuard::acquire().unwrap();
+        assert!(RUN_CONTROL.lock().stop.is_some());
+        drop(next);
+        fn failed_setup() -> Result<(), &'static str> {
+            let _owner = EngineRunGuard::acquire().unwrap();
+            Err("setup failed")
+        }
+        let failed = failed_setup();
+        assert!(failed.is_err());
+        assert!(
+            !RUN_CONTROL.lock().active,
+            "setup errors release their own slot"
+        );
+        assert!(EngineRunGuard::acquire().is_ok());
+    }
+
+    #[test]
+    fn custom_tls_inputs_are_bounded_and_ech_lists_are_validated() {
+        assert!(BridgeConfig::parse(&config(r#", "fragmentTls":true,"fragmentSize":"16-32","fragmentDelay":"0-1","fragmentSni":false"#)).is_ok());
+        for value in ["0", "32-16", "1-999999", "1-2-3"] {
+            assert!(BridgeConfig::parse(&config(&format!(
+                r#", "fragmentTls":true,"fragmentSize":"{value}""#
+            )))
+            .is_err());
+        }
+        assert!(
+            BridgeConfig::parse(&config(r#", "fragmentTls":true,"fragmentDelay":"101""#)).is_err()
+        );
+        assert!(BridgeConfig::parse(&config(
+            r#", "encryptedHello":true,"customEch":true,"echConfigList":"AAAA""#
+        ))
+        .is_err());
+        assert!(
+            BridgeConfig::parse(&config(r#", "encryptedHello":true,"customEch":true"#)).is_err()
+        );
+        assert!(valid_ech_list(&[0, 5, 0xfe, 13, 0, 1, 1]));
+        assert!(!valid_ech_list(&[0, 6, 0xfe, 13, 0, 1, 1]));
+    }
+
+    #[test]
+    fn recovery_shapes_are_explicit_and_legacy_configs_keep_normal_discovery() {
+        let legacy = BridgeConfig::parse(r#"{"mode":"proxy","configPath":"aether.toml"}"#).unwrap();
+        assert!(legacy.hello_shape.is_empty());
+        assert!(!legacy.fast_connect);
+        for shape in ["records", "compact"] {
+            let config = BridgeConfig::parse(&format!(
+                r#"{{"mode":"proxy","configPath":"aether.toml","transport":"h2","helloShape":"{shape}","fastConnect":true}}"#
+            )).unwrap();
+            assert_eq!(config.hello_shape, shape);
+            assert!(config.fast_connect);
+        }
+        assert!(BridgeConfig::parse(
+            r#"{"mode":"proxy","configPath":"aether.toml","helloShape":"unknown"}"#
+        )
+        .is_err());
     }
 }

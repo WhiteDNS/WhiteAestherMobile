@@ -202,7 +202,7 @@ impl ScanMode {
     }
 
     fn strategy(&self) -> Strategy {
-        match self {
+        let mut strategy = match self {
             ScanMode::Turbo => Strategy {
                 concurrency: 20,
                 per_probe_timeout: Duration::from_millis(6000),
@@ -253,7 +253,15 @@ impl ScanMode {
                 full_subnet: false,
                 sample_per_cidr: 140,
             },
+        };
+        if matches!(self, ScanMode::Turbo)
+            && std::env::var("AETHER_CONNECT_FAST").as_deref() == Ok("1")
+        {
+            strategy.overall_deadline = Duration::from_secs(12);
+            strategy.per_probe_timeout = Duration::from_secs(3);
+            strategy.concurrency = 8;
         }
+        strategy
     }
 }
 

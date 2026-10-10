@@ -79,6 +79,7 @@ import com.whitedns.whiteaesther.data.LocalAddress
 import com.whitedns.whiteaesther.data.ScanStrategy
 import com.whitedns.whiteaesther.data.ThemeMode
 import com.whitedns.whiteaesther.data.TunnelProtocol
+import com.whitedns.whiteaesther.data.TlsFragmentMode
 import com.whitedns.whiteaesther.data.UpdateChecker
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.HopStatus
@@ -1298,6 +1299,16 @@ fun RoutesScreen(
                 modifier = chainModifier.testTag("routes-chain"),
                 onClick = onGoToChain,
             )
+            if (settings.chain.enabled && !settings.chain.hasNodes) {
+                Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Note(stringResource(R.string.empty_exit_chain_hint))
+                    OutlineButton(
+                        text = stringResource(R.string.use_carriers_only),
+                        modifier = Modifier.fillMaxWidth().testTag("use-carriers-only"),
+                        onClick = { onSettingsChange(settings.copy(chain = settings.chain.copy(enabled = false))) },
+                    )
+                }
+            }
             Divider()
             RowCard(
                 icon = AetherIcons.Routes,
@@ -1339,6 +1350,7 @@ fun RoutesScreen(
                                 // it looks like ordinary HTTPS from outside
                                 // while a single MASQUE session no longer does.
                                 TunnelProtocol.MASQUE_IN_MASQUE -> stringResource(R.string.two_masque_hops_where_one_is_recognised)
+                                TunnelProtocol.WIREGUARD_OVER_MASQUE -> stringResource(R.string.warp_wireguard_carried_inside_masque)
                             },
                             selected = settings.transport == transport,
                             onClick = { onSettingsChange(settings.copy(transport = transport)) },
@@ -1941,6 +1953,33 @@ fun TrafficScreen(
                     onCheckedChange = { onSettingsChange(settings.copy(fragmentTls = it)) },
                     modifier = Modifier.testTag("fragment-tls-switch"),
                 )
+                if (settings.fragmentTls) {
+                    Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        TlsFragmentMode.entries.forEach { mode ->
+                            CheckRow(stringResource(mode.label), "", settings.tlsOptions.fragmentMode == mode) {
+                                onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(fragmentMode = mode)))
+                            }
+                        }
+                        if (settings.tlsOptions.fragmentMode == TlsFragmentMode.CUSTOM) {
+                            var size by remember { mutableStateOf(settings.tlsOptions.fragmentSize) }
+                            var delay by remember { mutableStateOf(settings.tlsOptions.fragmentDelay) }
+                            Text(stringResource(R.string.tls_fragment_size), style = AetherTheme.type.Small, color = colors.text2)
+                            PlainField(size, "fragment-size-field") {
+                                size = it
+                                onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(fragmentSize = it)))
+                            }
+                            Text(stringResource(R.string.tls_fragment_delay), style = AetherTheme.type.Small, color = colors.text2)
+                            PlainField(delay, "fragment-delay-field") {
+                                delay = it
+                                onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(fragmentDelay = it)))
+                            }
+                            CheckRow(stringResource(R.string.tls_split_sni), "", settings.tlsOptions.splitSni) {
+                                onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(splitSni = !settings.tlsOptions.splitSni)))
+                            }
+                        }
+                        Note(stringResource(R.string.tls_fragment_scope))
+                    }
+                }
 
                 Divider()
                 ToggleSettingRow(
@@ -1950,6 +1989,28 @@ fun TrafficScreen(
                     onCheckedChange = { onSettingsChange(settings.copy(encryptedHello = it)) },
                     modifier = Modifier.testTag("ech-switch"),
                 )
+                if (settings.encryptedHello) {
+                    Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        CheckRow(stringResource(R.string.protocol_automatic), "", !settings.tlsOptions.customEch) {
+                            onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(customEch = false)))
+                        }
+                        CheckRow(stringResource(R.string.tls_custom), "", settings.tlsOptions.customEch) {
+                            onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(customEch = true)))
+                        }
+                        if (settings.tlsOptions.customEch) {
+                            var ech by remember { mutableStateOf(settings.tlsOptions.echConfigList) }
+                            Text(stringResource(R.string.tls_ech_config), style = AetherTheme.type.Small, color = colors.text2)
+                            PlainField(ech, "ech-config-field") {
+                                ech = it
+                                onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(echConfigList = it)))
+                            }
+                        }
+                        Note(stringResource(R.string.tls_ech_scope))
+                    }
+                }
+                settings.tlsOptions.validationError(settings.fragmentTls, settings.encryptedHello)?.let {
+                    Note(stringResource(it))
+                }
 
                 Divider()
                 // Read-only on purpose: the resolvers are fixed inside the engine

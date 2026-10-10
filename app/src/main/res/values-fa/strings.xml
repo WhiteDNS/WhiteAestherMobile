@@ -556,4 +556,20 @@
     <string name="add_a_home_screen_widget">افزودن ابزارک صفحهٔ اصلی</string>
     <string name="connect_and_disconnect_from_the_home_screen">اتصال و قطع اتصال بدون باز کردن اپ.</string>
     <string name="err_no_widget_pin">این لانچر خودش ابزارک را اضافه نمی‌کند. وایت‌ایستر را در فهرست ابزارک‌های خودش پیدا کنید.</string>
+    <string name="protocol_wireguard_over_masque">وایرگارد روی MASQUE</string>
+    <string name="warp_wireguard_carried_inside_masque">وایرگارد وارپ داخل تونل MASQUE؛ بدون نیاز به سرور شخصی</string>
+    <string name="tls_records_preset">پیش‌تنظیم رکوردهای TLS</string>
+    <string name="tls_compact_preset">پیش‌تنظیم فشرده</string>
+    <string name="tls_custom">سفارشی</string>
+    <string name="tls_fragment_size">اندازه قطعه به بایت: عدد یا بازه، مانند 16-32</string>
+    <string name="tls_fragment_delay">تأخیر به میلی‌ثانیه: عدد یا بازه، مانند 2-10</string>
+    <string name="tls_split_sni">تقسیم در محل نام سرور</string>
+    <string name="tls_fragment_scope">تقسیم برای H2، از جمله تونل بیرونی H2 در وایرگارد روی MASQUE اعمال می‌شود. حالت خودکار پیش‌تنظیم‌های بازیابی را نگه می‌دارد.</string>
+    <string name="tls_ech_config">ECHConfigList با کدگذاری Base64</string>
+    <string name="tls_ech_scope">ECH فعلاً برای H3 است. حالت خودکار تنظیمات را دریافت می‌کند؛ حالت سفارشی از فهرست واردشده استفاده می‌کند. سرور باید ECH را بپذیرد.</string>
+    <string name="tls_fragment_size_error">اندازه قطعه را از ۱ تا ۱۶۳۸۴، به صورت عدد یا بازه صعودی وارد کنید.</string>
+    <string name="tls_fragment_delay_error">تأخیر را از ۰ تا ۱۰۰ میلی‌ثانیه، به صورت عدد یا بازه صعودی وارد کنید.</string>
+    <string name="tls_ech_config_error">یک ECHConfigList معتبر با کدگذاری Base64 وارد کنید یا حالت خودکار را انتخاب کنید.</string>
+    <string name="use_carriers_only">فقط مسیرهای انتخاب‌شده</string>
+    <string name="empty_exit_chain_hint">زنجیره خروجی اختیاری روشن است اما هیچ نودی ندارد. اشتراک اضافه کنید یا آن را خاموش کنید تا فقط مسیرهای انتخاب‌شده استفاده شوند.</string>
 </resources>

@@ -13,7 +13,7 @@ class TunnelProtocolTest {
         // connect; adding one without it used to be a silent downgrade to
         // MASQUE, which is why the bridge no longer has a catch-all.
         assertEquals(
-            listOf("auto", "h3", "h2", "wg", "wiw", "mim"),
+            listOf("auto", "h3", "h2", "wg", "wiw", "mim", "wom"),
             TunnelProtocol.entries.map(TunnelProtocol::wireName),
         )
     }

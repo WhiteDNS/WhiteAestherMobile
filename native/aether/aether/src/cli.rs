@@ -50,6 +50,7 @@ Protocol:
                            of the way gool does, on the same carrier for both
                            hops (HTTP/3 in HTTP/3, or --h2 for HTTP/2 in HTTP/2)
   --protocol <name>        masque | wg | gool | mim
+  --wg-over-masque        WARP WireGuard inside MASQUE (H3, or --h2)
 
 WARP-in-WARP endpoints:
   Both hops are found by the scan unless you name them here. The port is
@@ -371,6 +372,7 @@ pub fn parse_args(args: Vec<String>) -> crate::error::Result<Parsed> {
             "--wiw-scan" | "--gool-scan" => set("AETHER_WIW_PEERS", "auto"),
 
             "--masque" => set("AETHER_PROTOCOL", "masque"),
+            "--wg-over-masque" => set("AETHER_PROTOCOL", "wg-over-masque"),
             "--wg" | "--wireguard" | "--warp" => set("AETHER_PROTOCOL", "wg"),
             "--gool" | "--wiw" => set("AETHER_PROTOCOL", "gool"),
             "--mim" | "--masque-in-masque" => set("AETHER_PROTOCOL", "mim"),

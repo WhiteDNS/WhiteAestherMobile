@@ -36,7 +36,7 @@ class ChainController(private val context: Context) {
      *   happens inside this call travels through it.
      * @return null on success, or why it failed.
      */
-    fun start(settings: ChainSettings, socksPort: Int?, tunFd: Int): String? {
+    internal fun start(settings: ChainSettings, socksPort: Int?, tun: TunnelHandoff): String? = tun.use {
         if (!isAvailable) return "The exit chain is not available in this build"
         settings.startupError()?.let { return it }
 
@@ -52,7 +52,7 @@ class ChainController(private val context: Context) {
             startLogging()
 
             val failure = NativeChainBridge.startTun(
-                fd = tunFd,
+                fd = tun.take(),
                 stack = ChainConfig.TUN_STACK,
                 address = "${ChainConfig.TUN_IPV4},${ChainConfig.TUN_IPV6}",
                 dns = ChainConfig.TUN_DNS,
@@ -82,13 +82,14 @@ class ChainController(private val context: Context) {
      * @param udp whether the carrier forwards datagrams.
      * @return null on success, or why it failed.
      */
-    fun startCarrier(
+    internal fun startCarrier(
         settings: ChainSettings,
         socksPort: Int,
         udp: Boolean,
-        tunFd: Int,
-    ): String? {
+        tun: TunnelHandoff,
+    ): String? = tun.use {
         if (!isAvailable) return "This build cannot route a carrier: the chain library is missing"
+        settings.startupError()?.let { return it }
 
         return runCatching {
             if (settings.enabled) {
@@ -115,7 +116,7 @@ class ChainController(private val context: Context) {
             startLogging()
 
             val failure = NativeChainBridge.startTun(
-                fd = tunFd,
+                fd = tun.take(),
                 stack = ChainConfig.TUN_STACK,
                 address = "${ChainConfig.TUN_IPV4},${ChainConfig.TUN_IPV6}",
                 dns = ChainConfig.TUN_DNS,

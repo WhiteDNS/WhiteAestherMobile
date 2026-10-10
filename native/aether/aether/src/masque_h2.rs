@@ -166,14 +166,26 @@ fn build_tls(cfg: &H2TunnelConfig) -> Result<boring::ssl::ConnectConfiguration> 
         .set_max_proto_version(Some(SslVersion::TLS1_3))
         .map_err(|e| AetherError::Tls(e.to_string()))?;
 
-    builder.set_grease_enabled(true);
+    let shaped = crate::hello_shape::HelloShape::from_env().is_some();
+    builder.set_grease_enabled(!shaped);
+    if shaped {
+        // A deterministic compatibility hello, keeping TLS 1.3 and h2. This is
+        // a BoringSSL profile, not a claim to reproduce Go's "unsafe" hello.
+        builder.set_permute_extensions(false);
+        builder.set_cipher_list("ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305")
+            .map_err(|e| AetherError::Tls(e.to_string()))?;
+    }
 
     let groups = std::env::var("AETHER_TLS_GROUPS").ok();
     let groups = groups
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or(CHROME_GROUPS);
+        .unwrap_or(if shaped {
+            "X25519:P-256:P-384"
+        } else {
+            CHROME_GROUPS
+        });
     builder
         .set_curves_list(groups)
         .map_err(|e| AetherError::Tls(e.to_string()))?;

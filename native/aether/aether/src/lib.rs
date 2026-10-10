@@ -16,6 +16,7 @@ pub mod error;
 // engine, so carrying it would mean carrying a build failure for an interface
 // we do not ship.
 pub mod fragment;
+mod hello_shape;
 pub mod identity;
 pub mod lastconn;
 pub mod masque;
@@ -36,6 +37,7 @@ pub mod tls;
 pub mod tor;
 pub mod tunnelping;
 pub mod upstream;
+mod wg_masque;
 pub mod wg_prober;
 pub mod wireguard;
 pub mod zerotrust;
@@ -225,6 +227,24 @@ pub async fn run_with(args: Vec<String>) -> Result<()> {
             let ech = attempt_ech().await;
             let lastconn_path = lastconn_path(&config_path);
             run_masque(identity, ech, listen, lastconn_path).await
+        }
+        Protocol::WireGuardOverMasque => {
+            select_masque_transport().await;
+            let mut embedded = EmbeddedConfig {
+                config_path: base_config,
+                listen,
+                peer: env_value("AETHER_PEER")
+                    .map(|p| parse_endpoint(&p))
+                    .transpose()?,
+                peer_fallback: true,
+                scan_mode: env_value("AETHER_SCAN").unwrap_or_else(|| "balanced".into()),
+                ip_scan: env_value("AETHER_IP").unwrap_or_else(|| "both".into()),
+                protocol: "wg-over-masque".into(),
+                access: socks::Access::default(),
+            };
+            let prepared = prepare_embedded(&embedded).await?;
+            embedded.peer = Some(prepared.peer);
+            run_embedded(embedded, EmbeddedEndpoint::Socks, None).await
         }
         Protocol::WireGuard => {
             let site = identity_site(&base_config, identity::Slot::Wireguard);
@@ -517,7 +537,9 @@ impl EmbeddedConfig {
     /// APIs, so they cannot share a file. Switching protocol keeps both.
     fn identity_path(&self) -> String {
         match self.protocol() {
-            Protocol::Masque | Protocol::MasqueInMasque => masque_config_path(&self.config_path),
+            Protocol::Masque | Protocol::MasqueInMasque | Protocol::WireGuardOverMasque => {
+                masque_config_path(&self.config_path)
+            }
             Protocol::WireGuard | Protocol::WarpInWarp => warp_config_path(&self.config_path),
         }
     }
@@ -527,7 +549,7 @@ impl EmbeddedConfig {
     /// Two accounts, not one used twice: the inner tunnel handshakes through the
     /// outer one, and Cloudflare would see the same device connecting to itself.
     fn secondary_identity_path(&self) -> String {
-        derive_sibling_path(&self.identity_path(), "secondary")
+        self.secondary_identity_site().path
     }
 
     /// The outer account's slot, and where this install keeps it.
@@ -535,7 +557,9 @@ impl EmbeddedConfig {
         identity_site(
             &self.config_path,
             match self.protocol() {
-                Protocol::Masque | Protocol::MasqueInMasque => identity::Slot::Masque,
+                Protocol::Masque | Protocol::MasqueInMasque | Protocol::WireGuardOverMasque => {
+                    identity::Slot::Masque
+                }
                 Protocol::WireGuard | Protocol::WarpInWarp => identity::Slot::Wireguard,
             },
         )
@@ -547,6 +571,7 @@ impl EmbeddedConfig {
             &self.config_path,
             match self.protocol() {
                 Protocol::Masque | Protocol::MasqueInMasque => identity::Slot::MasqueInner,
+                Protocol::WireGuardOverMasque => identity::Slot::WireguardInner,
                 Protocol::WireGuard | Protocol::WarpInWarp => identity::Slot::WireguardInner,
             },
         )
@@ -676,6 +701,7 @@ fn record(
             device.registered_at = existing.registered_at;
         }
         device.refused_at = existing.refused_at;
+        device.warp_enabled = existing.warp_enabled;
         // A certificate that has arrived is the answer to the enrolment that
         // was in flight. One that has not leaves the question standing.
         device.enrolment_pending_since = if device.has_certificate() {
@@ -894,7 +920,7 @@ pub async fn provision_embedded(config: &EmbeddedConfig) -> Result<Vec<String>> 
 
     let mut devices = vec![
         match config.protocol() {
-            Protocol::Masque | Protocol::MasqueInMasque => {
+            Protocol::Masque | Protocol::MasqueInMasque | Protocol::WireGuardOverMasque => {
                 load_or_provision_masque(&config.identity_site()).await?
             }
             Protocol::WireGuard | Protocol::WarpInWarp => {
@@ -924,7 +950,7 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
     // kept should be refused at the start, not discovered at the handshake.
     if matches!(
         config.protocol(),
-        Protocol::Masque | Protocol::MasqueInMasque
+        Protocol::Masque | Protocol::MasqueInMasque | Protocol::WireGuardOverMasque
     ) {
         ech_policy_satisfied().await?;
     }
@@ -935,7 +961,7 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
     // nobody asked for, without saying so. Now the next protocol upstream adds
     // is a compile error here instead of a silent one.
     let identity = match config.protocol() {
-        Protocol::Masque | Protocol::MasqueInMasque => {
+        Protocol::Masque | Protocol::MasqueInMasque | Protocol::WireGuardOverMasque => {
             load_or_provision_masque(&config.identity_site()).await?
         }
         Protocol::WireGuard | Protocol::WarpInWarp => {
@@ -946,7 +972,7 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
     // the tunnel is built rather than chosen here, so preparing a nested tunnel
     // costs exactly what preparing a single one does.
     let peer = match config.protocol() {
-        Protocol::Masque | Protocol::MasqueInMasque => {
+        Protocol::Masque | Protocol::MasqueInMasque | Protocol::WireGuardOverMasque => {
             select_embedded_peer(&identity, config, &config_path).await?
         }
         Protocol::WireGuard | Protocol::WarpInWarp => {
@@ -959,6 +985,15 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
     // Nested, the interface is addressed for the inner account: that is the one
     // whose packets reach the internet, and addressing it as the outer would
     // give every connection the wrong source.
+    if config.protocol() == Protocol::WireGuardOverMasque {
+        let inner = wg_masque::prepare(&config, &identity, peer).await?;
+        return Ok(EmbeddedPrepared {
+            ipv4: inner.ipv4,
+            ipv6: inner.ipv6,
+            peer,
+        });
+    }
+
     if config.protocol() == Protocol::MasqueInMasque {
         let secondary = load_or_provision_masque(&config.secondary_identity_site()).await?;
         return Ok(EmbeddedPrepared {
@@ -1062,7 +1097,10 @@ pub async fn scan_embedded(
     limit: usize,
     cancelled: &AtomicBool,
 ) -> Result<Vec<EmbeddedScanResult>> {
-    if !matches!(config.protocol(), Protocol::Masque) {
+    if matches!(
+        config.protocol(),
+        Protocol::WireGuard | Protocol::WarpInWarp
+    ) {
         return scan_embedded_wg(config, limit, cancelled).await;
     }
     let identity = load_or_provision_masque(&config.identity_site()).await?;
@@ -1087,7 +1125,10 @@ pub async fn test_embedded_peer(config: &EmbeddedConfig) -> Result<EmbeddedScanR
     let peer = config
         .peer
         .ok_or_else(|| AetherError::Other("custom endpoint is required".into()))?;
-    if !matches!(config.protocol(), Protocol::Masque) {
+    if matches!(
+        config.protocol(),
+        Protocol::WireGuard | Protocol::WarpInWarp
+    ) {
         let identity = load_or_provision_warp(&config.identity_site()).await?;
         // Every profile, because an endpoint that refuses one may answer
         // another, and reporting the first refusal as "dead" would be wrong.
@@ -1176,6 +1217,17 @@ pub async fn run_embedded(
         attempt_proof(masque_framing()),
         &mut ready,
     );
+
+    if config.protocol() == Protocol::WireGuardOverMasque {
+        return wg_masque::run(
+            &config,
+            &identity,
+            peer,
+            endpoint.take().expect("endpoint available"),
+            ready.take(),
+        )
+        .await;
+    }
 
     if config.protocol() == Protocol::MasqueInMasque {
         // A second account, not the same one twice: the inner tunnel
@@ -1606,7 +1658,9 @@ async fn select_embedded_peer(
     config_path: &str,
 ) -> Result<SocketAddr> {
     if let Some(peer) = config.peer {
-        if quick_verify_masque_peer(identity, peer).await {
+        if peer_matches_ip_scan(peer, &config.ip_scan)
+            && quick_verify_masque_peer(identity, peer).await
+        {
             return Ok(peer);
         }
         if !config.peer_fallback {
@@ -1621,7 +1675,9 @@ async fn select_embedded_peer(
         .ok()
         .and_then(|value| value.parse::<SocketAddr>().ok())
     {
-        if quick_verify_masque_peer(identity, assigned).await {
+        if peer_matches_ip_scan(assigned, &config.ip_scan)
+            && quick_verify_masque_peer(identity, assigned).await
+        {
             return Ok(assigned);
         }
     }
@@ -1632,7 +1688,9 @@ async fn select_embedded_peer(
         // it costs a check at the front of every connect.
         if cached.applies_to(&attempt_proof(masque_framing())) {
             if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
-                if quick_verify_masque_peer(identity, peer).await {
+                if peer_matches_ip_scan(peer, &config.ip_scan)
+                    && quick_verify_masque_peer(identity, peer).await
+                {
                     return Ok(peer);
                 }
             }
@@ -1658,8 +1716,20 @@ async fn select_embedded_peer(
     // Measured against a live account: the assigned endpoint answered in 253ms
     // over H2 and 543ms over QUIC, while an address from the hard-coded pool
     // refused every protocol.
+    if let Some(peer) = stored_masque_peer(identity) {
+        if peer_matches_ip_scan(peer, &config.ip_scan)
+            && quick_verify_masque_peer(identity, peer).await
+        {
+            return Ok(peer);
+        }
+    }
     for peer in assigned_masque_peers(identity).await {
-        if quick_verify_masque_peer(identity, peer).await {
+        if Some(peer) == stored_masque_peer(identity) {
+            continue;
+        }
+        if peer_matches_ip_scan(peer, &config.ip_scan)
+            && quick_verify_masque_peer(identity, peer).await
+        {
             log::info!("[+] the endpoint Cloudflare assigned this device answered: {peer}");
             return Ok(peer);
         }
@@ -1686,6 +1756,28 @@ async fn select_embedded_peer(
 /// is asked for only when that fails -- one API call, skipped silently when it
 /// cannot be answered, because the search still works afterwards. Slowly, which
 /// is the whole reason this exists.
+fn peer_matches_ip_scan(peer: SocketAddr, scan: &str) -> bool {
+    let scan = prober::IpScan::parse(scan);
+    if peer.is_ipv4() {
+        scan.want_v4()
+    } else {
+        scan.want_v6()
+    }
+}
+
+fn stored_masque_peer(identity: &account::Identity) -> Option<SocketAddr> {
+    let host = identity.assigned_endpoint.trim();
+    if host.is_empty() {
+        return None;
+    }
+    let ip = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+        .ok()?;
+    Some(SocketAddr::new(ip, 443))
+}
+
 async fn assigned_masque_peers(identity: &account::Identity) -> Vec<SocketAddr> {
     fn on_443(host: &str) -> Option<SocketAddr> {
         let host = host.trim();
@@ -2780,7 +2872,9 @@ async fn load_or_provision_masque(site: &IdentitySite) -> Result<account::Identi
 
 async fn select_peer(identity: &account::Identity, protocol: Protocol) -> Result<SocketAddr> {
     let force_peer = match protocol {
-        Protocol::Masque | Protocol::MasqueInMasque => std::env::var("AETHER_PEER").ok(),
+        Protocol::Masque | Protocol::MasqueInMasque | Protocol::WireGuardOverMasque => {
+            std::env::var("AETHER_PEER").ok()
+        }
         Protocol::WireGuard | Protocol::WarpInWarp => std::env::var("AETHER_WG_PEER")
             .ok()
             .or_else(|| std::env::var("AETHER_PEER").ok()),
@@ -2800,7 +2894,7 @@ async fn select_peer(identity: &account::Identity, protocol: Protocol) -> Result
     let ip = select_ip_version().await;
 
     match protocol {
-        Protocol::Masque | Protocol::MasqueInMasque => {
+        Protocol::Masque | Protocol::MasqueInMasque | Protocol::WireGuardOverMasque => {
             log::info!("[*] hunting for a working MASQUE gateway (deep connect-ip verification)");
             let mode = prober::ScanMode::parse(&mode_str);
             let probe = prober::MasqueProbe {
@@ -2932,22 +3026,23 @@ pub async fn attempt_ech() -> Option<Vec<u8>> {
     }
 
     let mut held = ech_cache().lock().await;
+    let policy = std::env::var("AETHER_ECH").unwrap_or_default();
 
-    if let Some((at, value)) = held.as_ref() {
-        if at.elapsed() < ECH_CACHE_FOR {
+    if let Some((at, cached_policy, value)) = held.as_ref() {
+        if *cached_policy == policy && at.elapsed() < ECH_CACHE_FOR {
             return value.clone();
         }
     }
 
     let resolved = resolve_ech().await;
-    *held = Some((std::time::Instant::now(), resolved.clone()));
+    *held = Some((std::time::Instant::now(), policy, resolved.clone()));
     resolved
 }
 
 /// How long one resolved ECHConfigList is reused across probes and the connect.
 const ECH_CACHE_FOR: std::time::Duration = std::time::Duration::from_secs(600);
 
-type EchCache = tokio::sync::Mutex<Option<(std::time::Instant, Option<Vec<u8>>)>>;
+type EchCache = tokio::sync::Mutex<Option<(std::time::Instant, String, Option<Vec<u8>>)>>;
 
 fn ech_cache() -> &'static EchCache {
     static CACHED: std::sync::OnceLock<EchCache> = std::sync::OnceLock::new();
@@ -5140,12 +5235,14 @@ enum Protocol {
     WireGuard,
     WarpInWarp,
     MasqueInMasque,
+    WireGuardOverMasque,
 }
 
 impl Protocol {
     fn parse(s: &str) -> Protocol {
         match s.trim().to_lowercase().as_str() {
             "wg" | "wireguard" => Protocol::WireGuard,
+            "wg-over-masque" | "wom" => Protocol::WireGuardOverMasque,
             "gool" | "wiw" | "warp-in-warp" | "warpinwarp" => Protocol::WarpInWarp,
             "mim" | "m2" | "masque-in-masque" | "masqueinmasque" => Protocol::MasqueInMasque,
             _ => Protocol::Masque,
@@ -5158,6 +5255,7 @@ impl Protocol {
             Protocol::WireGuard => "WireGuard",
             Protocol::WarpInWarp => "WARP-in-WARP (gool)",
             Protocol::MasqueInMasque => "MASQUE-in-MASQUE",
+            Protocol::WireGuardOverMasque => "WireGuard over MASQUE",
         }
     }
 }
@@ -6839,6 +6937,19 @@ mod ech_tests {
         with_policy(Some("off"), false).await;
         assert!(attempt_ech().await.is_none());
         assert!(ech_policy_satisfied().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn changing_ech_policy_does_not_reuse_the_previous_profiles_cached_list() {
+        let _serial = one_at_a_time();
+        with_policy(Some("q83vAAAA"), false).await;
+        let first = attempt_ech().await.expect("manual list");
+        std::env::set_var("AETHER_ECH", "AQIDBA==");
+        let second = attempt_ech().await.expect("new manual list");
+        assert_ne!(first, second);
+        std::env::remove_var("AETHER_ECH");
+        assert!(attempt_ech().await.is_none());
+        with_policy(None, false).await;
     }
 
     /// Required means refused, not quietly downgraded.

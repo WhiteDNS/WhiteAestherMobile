@@ -500,7 +500,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var chainJob: Job? = null
 
     fun save(settings: AppSettings) {
-        viewModelScope.launch { repository.save(settings) }
+        viewModelScope.launch {
+            val previous = repository.settings.first()
+            repository.save(settings)
+            if (settings.connectionChoiceChanged(previous) &&
+                EngineStatusStore.status.value.stage in setOf(EngineStage.PREPARING, EngineStage.CONNECTING, EngineStage.CONNECTED) &&
+                settings.endpointValidationError() == null &&
+                settings.tlsOptions.validationError(settings.fragmentTls, settings.encryptedHello) == null
+            ) {
+                val context = getApplication<Application>()
+                AetherVpnService.start(
+                    context, settings.toNativeJson(context), settings.chainForService().encode(),
+                    settings.splitTunnel.encode(), settings.killSwitch, settings.strictKillSwitch,
+                    settings.carrier, settings.secondCarrier, settings.torBridge, settings.torBridges,
+                    settings.psiphonRegion, settings.automaticCarrier,
+                )
+            }
+        }
     }
 
     /**
@@ -867,6 +883,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // are H3 unless the whole profile is H2. So the sweep worth
                 // making after it is the TCP one, over the same edges.
                 TunnelProtocol.MASQUE_IN_MASQUE -> TunnelProtocol.H2
+                // The Android nested mode uses H2 for its outer hop. A QUIC-only
+                // endpoint found in a second sweep cannot serve that profile.
+                TunnelProtocol.WIREGUARD_OVER_MASQUE -> null
                 // Neither WireGuard nor its nested form has another framing to
                 // sweep. Their endpoints are their own, so falling back to
                 // MASQUE would list addresses the chosen protocol cannot use.
