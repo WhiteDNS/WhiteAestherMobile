@@ -46,7 +46,7 @@ class ChainProviderCacheTest {
         chain.start(
             settings = ChainSettings(enabled = true, sources = listOf(second)),
             socksPort = null,
-            tunFd = -1,
+            tun = TunnelHandoff({ -1 }, {}),
         )
 
         assertFalse(
@@ -73,7 +73,7 @@ class ChainProviderCacheTest {
         chain.start(
             settings = ChainSettings(enabled = true, sources = listOf(first, second)),
             socksPort = null,
-            tunFd = -1,
+            tun = TunnelHandoff({ -1 }, {}),
         )
 
         // Re-fetching what has not changed would cost the user a download on
@@ -95,7 +95,7 @@ class ChainProviderCacheTest {
                 sources = listOf(first.copy(enabled = false), second),
             ),
             socksPort = null,
-            tunFd = -1,
+            tun = TunnelHandoff({ -1 }, {}),
         )
 
         assertFalse("a disabled subscription kept its cache", disabled.exists())
