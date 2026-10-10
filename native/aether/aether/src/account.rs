@@ -742,6 +742,39 @@ pub async fn provision_wg(model: &str, locale: &str, jwt: Option<&str>) -> Resul
     finish_provision(reg, wg_private)
 }
 
+/// Activates a registered WARP device without replacing its WireGuard key.
+pub async fn enable_warp(device_id: &str, token: &str) -> Result<()> {
+    let path = format!("/{}/reg/{}", consts::API_VERSION, device_id);
+    let url = format!("{}{}", consts::API_URL, path);
+    let body = serde_json::json!({ "warp_enabled": true });
+    let direct = send_with_retry("WARP activation", || {
+        Ok(http_client()?
+            .patch(&url)
+            .headers(base_headers())
+            .bearer_auth(token)
+            .json(&body))
+    })
+    .await;
+    match direct {
+        Ok(_) => Ok(()),
+        Err(AetherError::IdentityRefused(reason)) => Err(AetherError::IdentityRefused(reason)),
+        Err(error @ AetherError::RateLimited { .. }) => Err(error),
+        Err(_) => {
+            let encoded = serde_json::to_vec(&body).map_err(|e| AetherError::Api(e.to_string()))?;
+            fallback_call(
+                "WARP activation",
+                "PATCH",
+                &path,
+                Some(encoded),
+                Some(token),
+                None,
+            )
+            .await?;
+            Ok(())
+        }
+    }
+}
+
 pub async fn fetch_device(device_id: &str, token: &str) -> Result<AccountData> {
     let path = format!("/{}/reg/{}", consts::API_VERSION, device_id);
     let url = format!("{}{}", consts::API_URL, path);

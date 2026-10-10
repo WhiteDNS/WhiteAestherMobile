@@ -14,6 +14,14 @@ The native engine is vendored from `CluvexStudio/Aether` revision
 (listed in `native/aether/UPSTREAM.md`). The original license and revision
 record are included under `native/aether/`.
 
+The WARP WireGuard-over-MASQUE orchestration is adapted from
+[`patterniha/Aether`](https://github.com/patterniha/Aether/tree/512726803eb7245802d0d877eb9682243a31bac5),
+version 2.3.0, under AGPL-3.0-only. It is integrated with this project's
+Android bridge and identity store, rather than replacing the engine baseline.
+The original Rust TLS record splitting follows the behaviour documented and
+implemented by [`patterniha/Xray-core`](https://github.com/patterniha/Xray-core/tree/aa7886b51c14)
+(MPL-2.0); no Xray binary or Go TLS implementation is added to the app.
+
 The project moved: earlier releases name `MatinSenPai/Aether`, which still
 carries the revision shipped up to v1.2.1 but stops at its own `v1.3.0`. Both
 hold identical objects for the tags they share.

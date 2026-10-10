@@ -37,6 +37,8 @@ enum class AutoRoute(
      * inspector that reassembles nothing, ECH hides it from one that does.
      */
     val encryptedHello: Boolean? = null,
+    val helloShape: String? = null,
+    val engineIpScan: String? = null,
 ) {
     /**
      * The engine on the interface, as a session carried by Aether alone has
@@ -74,6 +76,11 @@ enum class AutoRoute(
         engineTransport = "h3",
         encryptedHello = true,
     ),
+
+    AETHER_H2_RECORDS("aether-h2-records", Carrier.AETHER, engineTransport = "h2", fragmentTls = true, helloShape = "records"),
+    AETHER_H2_COMPACT("aether-h2-compact", Carrier.AETHER, engineTransport = "h2", fragmentTls = true, helloShape = "compact"),
+    AETHER_H2_IPV6("aether-h2-ipv6", Carrier.AETHER, engineTransport = "h2", engineIpScan = "v6"),
+    AETHER_WOM("aether-wom", Carrier.AETHER, engineTransport = "wom"),
 
     /** One deep search, kept for the network whose answer really is in the pool. */
     AETHER_H2_FULL("aether-h2-full", Carrier.AETHER, engineTransport = "h2", fullSearch = true),
@@ -126,12 +133,16 @@ enum class AutoRoute(
             val json = runCatching { JSONObject(configJson) }.getOrNull() ?: return AETHER_AS_SET
             return when (json.optString("transport")) {
                 "h2" -> when {
+                    json.optString("ipScan") == "v6" -> AETHER_H2_IPV6
+                    json.optString("helloShape") == "records" -> AETHER_H2_RECORDS
+                    json.optString("helloShape") == "compact" -> AETHER_H2_COMPACT
                     json.optBoolean("fragmentTls") -> AETHER_H2_FRAGMENT
                     json.optString("scanMode") == "turbo" -> AETHER_H2_QUICK
                     else -> AETHER_H2_FULL
                 }
                 "h3" -> if (json.optBoolean("encryptedHello")) AETHER_H3_ECH else AETHER_H3_QUICK
                 "mim" -> AETHER_MIM
+                "wom" -> AETHER_WOM
                 // WireGuard or WARP-in-WARP, which the race only ever runs as
                 // the user set them.
                 else -> AETHER_AS_SET
@@ -206,6 +217,7 @@ data class AutoOptions(
      * is spending two and a half minutes on it before anything else starts.
      */
     val engineFailedHere: Boolean = false,
+    val allowIpv6: Boolean = true,
 )
 
 /**
@@ -234,17 +246,16 @@ object AutoPlanner {
     const val ENGINE_QUICK_MS = 60_000L
 
     /**
-     * The engine first, where it has worked before: the framing that connected
-     * last, at the user's search depth. A balanced search is two minutes on its
-     * own (`budget=120s`), so this is that and the connect after it.
+     * A short first attempt at the route that worked before. Deep discovery
+     * belongs in the later rung, so stale success cannot delay other carriers.
      */
-    const val ENGINE_REMEMBERED_MS = 150_000L
+    const val ENGINE_REMEMBERED_MS = 30_000L
 
     /** The engine on its own as the last thing left: its full searches, one per framing. */
     const val ENGINE_DEEP_MS = 300_000L
 
     /** How long Tor waits for the lanes ahead of it before it joins them. */
-    const val SECOND_LANE_AFTER_MS = 45_000L
+    const val SECOND_LANE_AFTER_MS = 15_000L
 
     /**
      * The least time one round of a lane may take before it goes round again.
@@ -450,8 +461,11 @@ object AutoPlanner {
         } else {
             listOf(AutoRoute.AETHER_H2_FRAGMENT, AutoRoute.AETHER_H3_ECH)
         }
+        val recovery = listOf(AutoRoute.AETHER_H2_RECORDS, AutoRoute.AETHER_H2_COMPACT) +
+            listOf(AutoRoute.AETHER_H2_IPV6).filter { options.allowIpv6 }
         val lane = if (options.engineCanSearchDeeper) {
-            plain + tactics + listOf(AutoRoute.AETHER_H2_FULL, AutoRoute.AETHER_MIM)
+            plain + listOf(AutoRoute.AETHER_H2_RECORDS) + tactics + recovery.drop(1) +
+                listOf(AutoRoute.AETHER_WOM, AutoRoute.AETHER_H2_FULL, AutoRoute.AETHER_MIM)
         } else {
             // A transport the user fixed -- WireGuard, say -- leads, searched
             // as they set it: it is what they have said about their network.
@@ -460,7 +474,7 @@ object AutoPlanner {
             // plain and carrying their tactics; the long searches are left
             // out, the fixed transport having had one, so that a round still
             // fits inside the search with the direct engine's step before it.
-            listOf(AutoRoute.AETHER_AS_SET) + plain + tactics
+            listOf(AutoRoute.AETHER_AS_SET) + plain + tactics + recovery
         }
         return preferredFor(provenFirst(lane, remembered), options.lastEngineFailure)
     }
@@ -523,10 +537,23 @@ object AutoPlanner {
             val json = JSONObject(base)
             val depth = if (deep) json.optString("scanMode", "balanced") else "turbo"
             json.put("transport", transport).put("scanMode", depth)
+            json.put("fastConnect", !deep && !route.fullSearch)
+            // Automatic shapes vary by rung; a manual preset or custom split stays as entered.
+            if (json.optString("fragmentMode", "auto") == "auto") {
+                json.put("helloShape", route.helloShape.orEmpty())
+            }
+            route.engineIpScan?.let { json.put("ipScan", it) }
             route.fragmentTls?.let { json.put("fragmentTls", it) }
             route.encryptedHello?.let { json.put("encryptedHello", it) }
             json.toString()
         }.getOrDefault(base)
+    }
+
+    /** The same recovery choices for proxy-only and device-wide sessions. */
+    fun recoveryAttemptConfig(base: String, options: AutoOptions, remembered: AutoRoute?, attempt: Int): String {
+        val lane = aetherLane(options, remembered)
+        val route = lane[attempt.coerceAtLeast(0) % lane.size]
+        return engineConfig(base, route, deep = route.fullSearch)
     }
 
     /**
@@ -576,7 +603,7 @@ object AutoPlanner {
     /**
      * How long one route gets before it counts as failed.
      *
-     * The engine's from its own search deadlines -- 45 s quick, 120 s balanced
+     * Recovery discovery uses 12 s quick; full searches retain 120 s balanced
      * -- plus registration and the connect after the search. Psiphon keeps
      * tunnel-core's own window: it races a dozen protocols and, on a first run
      * with no tactics stored, needs them to open its in-proxy path at all.
@@ -586,10 +613,12 @@ object AutoPlanner {
      */
     fun budgetMs(route: AutoRoute): Long = when (route) {
         AutoRoute.AETHER -> ENGINE_QUICK_MS
-        AutoRoute.AETHER_H3_QUICK, AutoRoute.AETHER_H2_QUICK -> 75_000L
+        AutoRoute.AETHER_H3_QUICK, AutoRoute.AETHER_H2_QUICK -> 45_000L
         // A tactic rung is a different handshake, not a deeper search, so it
         // costs what a quick rung costs.
-        AutoRoute.AETHER_H2_FRAGMENT, AutoRoute.AETHER_H3_ECH -> 75_000L
+        AutoRoute.AETHER_H2_FRAGMENT, AutoRoute.AETHER_H3_ECH,
+        AutoRoute.AETHER_H2_RECORDS, AutoRoute.AETHER_H2_COMPACT, AutoRoute.AETHER_H2_IPV6 -> 45_000L
+        AutoRoute.AETHER_WOM -> 120_000L
         AutoRoute.AETHER_H2_FULL -> 180_000L
         // An outer tunnel, then up to six inner handshakes at twelve seconds
         // each. The search for the outer edge is the quick one, so this is

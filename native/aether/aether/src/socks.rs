@@ -272,8 +272,25 @@ fn bind_hint(error: &std::io::Error) -> &'static str {
 }
 
 pub async fn serve(listener: TcpListener, stack: StackHandle) -> Result<()> {
+    serve_with_access(listener, stack, access()).await
+}
+
+/// A transient internal proxy, isolated from the user's LAN sharing password.
+pub(crate) async fn serve_private(listener: TcpListener, stack: StackHandle) -> Result<()> {
+    if !listener.local_addr()?.ip().is_loopback() {
+        return Err(AetherError::Other(
+            "internal SOCKS listener must bind to loopback".into(),
+        ));
+    }
+    serve_with_access(listener, stack, Access::default()).await
+}
+
+async fn serve_with_access(
+    listener: TcpListener,
+    stack: StackHandle,
+    access: Access,
+) -> Result<()> {
     let listen = listener.local_addr()?;
-    let access = access();
     let bind_ip = listen.ip();
     log::info!(
         "[+] socks5 server listening on {listen} ({}, {})",

@@ -106,9 +106,11 @@ class AutoPlannerTest {
      * than being added beside it.
      */
     @Test
-    fun theEngineLaneCostsNoMoreThanItUsedTo() {
+    fun additionalRecoveryRoutesFitWhileTheFirstChoicesFailFaster() {
         val total = AutoPlanner.aetherLane(everything).sumOf { AutoPlanner.budgetMs(it) }
-        assertTrue("the lane grew to ${total / 1000}s", total <= 690_000L)
+        assertTrue("the lane grew to ${total / 1000}s", total + AutoPlanner.ENGINE_REMEMBERED_MS <= 900_000L)
+        val firstChoices = AutoPlanner.aetherLane(everything).take(4).sumOf { AutoPlanner.budgetMs(it) }
+        assertTrue("initial recovery choices take ${firstChoices / 1000}s", firstChoices <= 180_000L)
     }
 
     /**
@@ -394,8 +396,12 @@ class AutoPlannerTest {
             listOf(
                 AutoRoute.AETHER_H3_QUICK,
                 AutoRoute.AETHER_H2_QUICK,
+                AutoRoute.AETHER_H2_RECORDS,
                 AutoRoute.AETHER_H3_ECH,
                 AutoRoute.AETHER_H2_FRAGMENT,
+                AutoRoute.AETHER_H2_COMPACT,
+                AutoRoute.AETHER_H2_IPV6,
+                AutoRoute.AETHER_WOM,
                 AutoRoute.AETHER_H2_FULL,
                 AutoRoute.AETHER_MIM,
             ),
@@ -683,9 +689,9 @@ class AutoPlannerTest {
         // Its own deadlines: 45 s quick, 120 s balanced, before registration
         // and the connect after. 1.6.0 cut a 300 s thorough search off at
         // 180 s, so its last step could never find anything.
-        assertTrue(AutoPlanner.budgetMs(AutoRoute.AETHER_H3_QUICK) >= 60_000L)
+        assertTrue(AutoPlanner.budgetMs(AutoRoute.AETHER_H3_QUICK) >= 12_000L + 30_000L)
         assertTrue(AutoPlanner.budgetMs(AutoRoute.AETHER_H2_FULL) >= 150_000L)
-        assertTrue(AutoPlanner.ENGINE_REMEMBERED_MS >= 150_000L)
+        assertTrue(AutoPlanner.ENGINE_REMEMBERED_MS <= 30_000L)
         // tunnel-core's own window, which a cold Psiphon needs.
         assertTrue(AutoPlanner.budgetMs(AutoRoute.PSIPHON) >= 300_000L)
         AutoRoute.entries.forEach { assertTrue(AutoPlanner.budgetMs(it) > 0) }
@@ -789,4 +795,49 @@ class AutoPlannerTest {
                     }
                 }
     }
+    @Test
+    fun recoveryProfilesAreRememberedAndDoNotContaminateTheNextRung() {
+        val base = """{"transport":"auto","ipScan":"both","scanMode":"balanced"}"""
+        for (route in listOf(AutoRoute.AETHER_H2_RECORDS, AutoRoute.AETHER_H2_COMPACT)) {
+            val configured = AutoPlanner.engineConfig(base, route, deep = false)
+            assertEquals(route, AutoRoute.ofEngineConfig(configured))
+            val shaped = org.json.JSONObject(configured)
+            assertTrue(shaped.getBoolean("fragmentTls"))
+            assertTrue(shaped.getBoolean("fastConnect"))
+            val plain = org.json.JSONObject(AutoPlanner.engineConfig(configured, AutoRoute.AETHER_H2_QUICK, deep = false))
+            assertEquals("", plain.getString("helloShape"))
+        }
+    }
+
+    @Test
+    fun ipv4OnlyNetworksKeepTheirAddressPolicyDuringRecovery() {
+        assertFalse(AutoRoute.AETHER_H2_IPV6 in AutoPlanner.aetherLane(everything.copy(allowIpv6 = false)))
+        val base = """{"transport":"auto","ipScan":"both"}"""
+        val ipv6 = AutoPlanner.engineConfig(base, AutoRoute.AETHER_H2_IPV6, deep = false)
+        assertEquals("v6", org.json.JSONObject(ipv6).getString("ipScan"))
+        assertEquals(AutoRoute.AETHER_H2_IPV6, AutoRoute.ofEngineConfig(ipv6))
+    }
+
+    @Test
+    fun deepSearchStillHasItsFullBudgetAfterFastRungs() {
+        val base = """{"transport":"auto","scanMode":"balanced","ipScan":"both"}"""
+        val fast = AutoPlanner.engineConfig(base, AutoRoute.AETHER_H2_RECORDS, deep = false)
+        val deep = org.json.JSONObject(AutoPlanner.engineConfig(base, AutoRoute.AETHER_H2_FULL, deep = true))
+        assertTrue(org.json.JSONObject(fast).getBoolean("fastConnect"))
+        assertFalse(deep.getBoolean("fastConnect"))
+        assertEquals("balanced", deep.getString("scanMode"))
+    }
+
+    @Test
+    fun standaloneAutomaticConnectionsCanReachEveryRecoveryProfile() {
+        val base = """{"transport":"auto","ipScan":"both","scanMode":"balanced"}"""
+        val lane = AutoPlanner.aetherLane(everything)
+        val attempted = lane.indices.map { index ->
+            AutoRoute.ofEngineConfig(AutoPlanner.recoveryAttemptConfig(base, everything, null, index))
+        }
+        assertEquals(lane, attempted)
+        val remembered = AutoPlanner.recoveryAttemptConfig(base, everything, AutoRoute.AETHER_H2_RECORDS, 0)
+        assertEquals(AutoRoute.AETHER_H2_RECORDS, AutoRoute.ofEngineConfig(remembered))
+    }
+
 }

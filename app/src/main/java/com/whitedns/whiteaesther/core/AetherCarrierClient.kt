@@ -152,8 +152,11 @@ class AetherCarrierClient(
         runCatching { NativeAetherBridge.cancelPrepare() }
         runCatching { NativeAetherBridge.stop() }
         engine?.cancel()
-        engine = null
         mutableState.value = CarrierSnapshot(stage = CarrierStage.STOPPED)
+    }
+
+    suspend fun awaitStopped() {
+        engine?.join()
     }
 
     private fun failed(reason: String): Result<Int> {

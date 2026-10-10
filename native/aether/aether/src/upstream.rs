@@ -70,7 +70,20 @@ impl std::fmt::Debug for Upstream {
 ///
 /// Parsing a short string per connection costs less than being wrong about it.
 pub fn configured() -> Option<Upstream> {
-    Upstream::from_env()
+    SCOPED_UPSTREAM
+        .try_with(Clone::clone)
+        .ok()
+        .or_else(Upstream::from_env)
+}
+
+tokio::task_local! {
+    static SCOPED_UPSTREAM: Upstream;
+}
+
+/// Routes only this operation through a tunnel, without changing the process's
+/// outer carrier or the sockets of concurrently running tasks.
+pub async fn through<T>(proxy: Upstream, operation: impl std::future::Future<Output = T>) -> T {
+    SCOPED_UPSTREAM.scope(proxy, operation).await
 }
 
 /// Whether this setting has changed since it was last reported.
@@ -819,6 +832,30 @@ mod tests {
     }
 
     use super::*;
+
+    #[tokio::test]
+    async fn scoped_registration_proxies_are_isolated_and_restored() {
+        let first = Upstream::parse("socks5h://127.0.0.1:18001").unwrap();
+        let second = Upstream::parse("socks5h://127.0.0.1:18002").unwrap();
+        let (a, b) = tokio::join!(
+            through(first.clone(), async {
+                tokio::task::yield_now().await;
+                assert_eq!(configured(), Some(first.clone()));
+                through(second.clone(), async {
+                    assert_eq!(configured(), Some(second.clone()));
+                })
+                .await;
+                configured()
+            }),
+            through(second.clone(), async {
+                tokio::task::yield_now().await;
+                configured()
+            }),
+        );
+        assert_eq!(a, Some(first));
+        assert_eq!(b, Some(second));
+        assert!(SCOPED_UPSTREAM.try_with(|_| ()).is_err());
+    }
 
     #[test]
     fn a_bare_host_and_port_is_taken_as_socks5() {

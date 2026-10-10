@@ -131,6 +131,9 @@ pub struct Device {
     /// refused instead of showing an install that merely looks new.
     #[serde(default)]
     pub refused_at: u64,
+    /// Set only after Cloudflare acknowledges WARP activation.
+    #[serde(default)]
+    pub warp_enabled: bool,
 }
 
 /// What this address has spent, and when it may spend again.
@@ -478,6 +481,7 @@ pub fn device_from(identity: &Identity, registered_at: u64) -> Device {
         key_pem: persisted.key_pem,
         cert_issued_at: persisted.cert_issued_at,
         refused_at: 0,
+        warp_enabled: false,
     }
 }
 
