@@ -204,6 +204,7 @@ enum class ScanStrategy(val wireName: String, @StringRes val label: Int) {
     BALANCED("balanced", R.string.scan_balanced),
     THOROUGH("thorough", R.string.scan_thorough),
     STEALTH("stealth", R.string.scan_stealth),
+    VERIFIED("verified", R.string.scan_verified),
     IRONCLAD("ironclad", R.string.scan_ironclad),
 }
 

@@ -99,6 +99,11 @@ MASQUE transport:
                            networks that block QUIC v1 but let QUIC v2 through)
   --h2-peer <ip:port>      override the peer used for the HTTP/2 transport
   --ech <auto|base64>      enable Encrypted Client Hello
+  --ech-dns <url>          resolver for ECH: udp://, tcp:// or https://
+  --ech-domain <name>      domain whose HTTPS record holds the ECH key
+  --tls-ciphers <list>     TLS 1.2 cipher list (BoringSSL names, ':' separated)
+  --disable-grease         omit GREASE from TLS handshakes
+  --enroll-address <host>  WARP registration address, with optional :port
   --no-data-check          skip the end-to-end data-plane validation
   --validate-secs <n>      seconds to wait for data-plane validation (default 10)
   --startup-secs <n>       total MASQUE startup deadline (default 30)
@@ -396,6 +401,11 @@ pub fn parse_args(args: Vec<String>) -> crate::error::Result<Parsed> {
             "--no-quic-v2" => set("AETHER_QUIC_V2", "0"),
             "--h2-peer" => set("AETHER_MASQUE_H2_PEER", next_value!()),
             "--ech" => set("AETHER_ECH", next_value!()),
+            "--ech-dns" => set("AETHER_ECH_DNS", next_value!()),
+            "--ech-domain" => set("AETHER_ECH_DOMAIN", next_value!()),
+            "--tls-ciphers" => set("AETHER_TLS_CIPHERS", next_value!()),
+            "--disable-grease" => set("AETHER_DISABLE_GREASE", "1"),
+            "--enroll-address" => set("AETHER_ENROLL_ADDRESS", next_value!()),
             "--no-data-check" => {
                 set("AETHER_MASQUE_NO_DATA_CHECK", "1");
                 set("AETHER_WG_NO_DATA_CHECK", "1");

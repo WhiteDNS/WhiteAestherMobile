@@ -88,7 +88,9 @@ jobs:
       # A tag build verifies itself rather than trusting that main was green.
       # Nothing is published unless these pass.
       - name: Test the native bridge
-        run: cargo test --manifest-path native/android-bridge/Cargo.toml --locked
+        run: |
+          cargo test --manifest-path native/aether/aether/Cargo.toml --locked --lib -- --test-threads=1
+          cargo test --manifest-path native/android-bridge/Cargo.toml --locked
 
       # AGP only generates unit-test tasks for the testBuildType, which is
       # debug, so there is no testStableReleaseUnitTest to run. The sources
@@ -172,6 +174,8 @@ jobs:
             apk="${apk_dir}/app-stable-${abi}-release.apk"
             test -f "$apk"
             "$signer" verify --verbose "$apk"
+            python3 tools/verify_native_dependencies.py \
+              --ndk "${ANDROID_HOME}/ndk/29.0.14206865" "$apk"
             jar tf "$apk" | grep -F "lib/${abi}/libwhiteaesther_core.so"
             test "$(jar tf "$apk" | grep -c '^lib/.*/libwhiteaesther_core\.so$')" -eq 1
             # An APK missing this installs and runs perfectly, with the exit
@@ -193,6 +197,8 @@ jobs:
           universal="${apk_dir}/app-stable-universal-release.apk"
           test -f "$universal"
           "$signer" verify --verbose "$universal"
+          python3 tools/verify_native_dependencies.py \
+            --ndk "${ANDROID_HOME}/ndk/29.0.14206865" "$universal"
           # Every engine, once per ABI. The per-ABI loop above checks the
           # split builds; this is the one people download when they are not
           # sure which phone they have, and it is assembled separately -- a
@@ -224,6 +230,8 @@ jobs:
           aab="app/build/outputs/bundle/stableRelease/app-stable-release.aab"
           test -f "$aab"
           jarsigner -verify "$aab"
+          python3 tools/verify_native_dependencies.py \
+            --ndk "${ANDROID_HOME}/ndk/29.0.14206865" "$aab"
           for lib in libwhiteaesther_core libwhiteaestherchain libgojni libtor liblyrebird libsnowflake; do
             test "$(unzip -l "$aab" | grep -c "base/lib/.*/${lib}\.so$")" -eq 3
           done

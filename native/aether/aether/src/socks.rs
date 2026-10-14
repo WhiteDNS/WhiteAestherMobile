@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -115,7 +115,7 @@ fn is_local_network(ip: IpAddr) -> bool {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Target {
     Ip(IpAddr),
     Domain(String),
@@ -607,9 +607,32 @@ async fn resolve(stack: &StackHandle, target: Target) -> Result<IpAddr> {
 pub(crate) async fn dns_resolve(stack: &StackHandle, name: &str) -> Result<IpAddr> {
     let udp = stack.open_udp().await?;
     let (sender, mut from_stack) = udp.into_split();
-    let outcome = dns_exchange(&sender, &mut from_stack, name).await;
+    let outcome = resolve_preferring_v4(&sender, &mut from_stack, name).await;
     sender.close().await;
     outcome
+}
+
+async fn resolve_preferring_v4(
+    sender: &UdpSender,
+    from_stack: &mut mpsc::Receiver<(SocketAddr, Vec<u8>)>,
+    name: &str,
+) -> Result<IpAddr> {
+    match dns_exchange(sender, from_stack, name, QTYPE_A).await? {
+        DnsAnswer::Found(ip) => Ok(ip),
+        DnsAnswer::NoSuchName => Err(AetherError::Other(format!("{name} does not exist"))),
+        DnsAnswer::NoRecord => match dns_exchange(sender, from_stack, name, QTYPE_AAAA).await? {
+            DnsAnswer::Found(ip) => Ok(ip),
+            _ => Err(AetherError::Other(format!(
+                "no A or AAAA record for {name}"
+            ))),
+        },
+    }
+}
+
+enum DnsAnswer {
+    Found(IpAddr),
+    NoRecord,
+    NoSuchName,
 }
 
 pub(crate) fn resolver_addresses() -> Vec<SocketAddr> {
@@ -645,11 +668,12 @@ async fn dns_exchange(
     sender: &UdpSender,
     from_stack: &mut mpsc::Receiver<(SocketAddr, Vec<u8>)>,
     name: &str,
-) -> Result<IpAddr> {
+    qtype: u16,
+) -> Result<DnsAnswer> {
     let mut last = AetherError::Other("dns timeout".into());
 
     for server in resolver_addresses() {
-        let (query, id) = build_dns_query(name, QTYPE_A);
+        let (query, id) = build_dns_query(name, qtype);
         if let Err(error) = sender.send_to(server, query).await {
             last = error;
             continue;
@@ -667,13 +691,16 @@ async fn dns_exchange(
                 }
             };
 
-            if !dns_response_matches(&resp.1, id, name, QTYPE_A) {
+            if !dns_response_matches(&resp.1, id, name, qtype) {
                 continue;
             }
-            if let Some(ip) = parse_dns_a(&resp.1) {
-                return Ok(ip);
+            if let Some(ip) = parse_dns_answer(&resp.1, qtype) {
+                return Ok(DnsAnswer::Found(ip));
             }
-            return Err(AetherError::Other(format!("no A record for {name}")));
+            if dns_rcode(&resp.1) == Some(RCODE_NXDOMAIN) {
+                return Ok(DnsAnswer::NoSuchName);
+            }
+            return Ok(DnsAnswer::NoRecord);
         }
     }
 
@@ -681,6 +708,12 @@ async fn dns_exchange(
 }
 
 const QTYPE_A: u16 = 1;
+const QTYPE_AAAA: u16 = 28;
+const RCODE_NXDOMAIN: u8 = 3;
+
+fn dns_rcode(resp: &[u8]) -> Option<u8> {
+    resp.get(3).map(|flags| flags & 0x0f)
+}
 
 fn build_dns_query(name: &str, qtype: u16) -> (Vec<u8>, u16) {
     let mut q = Vec::with_capacity(32 + name.len());
@@ -752,7 +785,7 @@ pub(crate) fn dns_response_matches(
     u16::from_be_bytes([resp[pos], resp[pos + 1]]) == expected_qtype
 }
 
-fn parse_dns_a(resp: &[u8]) -> Option<IpAddr> {
+fn parse_dns_answer(resp: &[u8], qtype: u16) -> Option<IpAddr> {
     if resp.len() < 12 {
         return None;
     }
@@ -776,13 +809,18 @@ fn parse_dns_a(resp: &[u8]) -> Option<IpAddr> {
         if pos + rdlen > resp.len() {
             return None;
         }
-        if rtype == 1 && rdlen == 4 {
+        if rtype == qtype && qtype == QTYPE_A && rdlen == 4 {
             return Some(IpAddr::V4(Ipv4Addr::new(
                 resp[pos],
                 resp[pos + 1],
                 resp[pos + 2],
                 resp[pos + 3],
             )));
+        }
+        if rtype == qtype && qtype == QTYPE_AAAA && rdlen == 16 {
+            let mut octets = [0u8; 16];
+            octets.copy_from_slice(&resp[pos..pos + 16]);
+            return Some(IpAddr::V6(Ipv6Addr::from(octets)));
         }
         pos += rdlen;
     }
@@ -966,7 +1004,7 @@ pub(crate) async fn serve_connector<F, Fut, S>(
 ) -> Result<()>
 where
     F: Fn(String, u16) -> Fut + Clone + Send + Sync + 'static,
-    Fut: Future<Output = std::io::Result<S>> + Send,
+    Fut: Future<Output = std::io::Result<S>> + Send + 'static,
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     let listen = listener.local_addr()?;
@@ -986,8 +1024,8 @@ where
 
 async fn serve_one_through<F, Fut, S>(mut sock: TcpStream, connect: F) -> Result<()>
 where
-    F: Fn(String, u16) -> Fut,
-    Fut: Future<Output = std::io::Result<S>>,
+    F: Fn(String, u16) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = std::io::Result<S>> + Send + 'static,
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     // No password on this one: it is not a listener the user shares, it is how
@@ -1001,10 +1039,14 @@ where
         AetherError::Other("the client did not finish the socks5 handshake in time".into())
     })??;
 
+    if cmd == CMD_UDP_ASSOCIATE {
+        return handle_udp_over_connector(sock, connect, target).await;
+    }
+
     if cmd != CMD_CONNECT {
         let _ = reply(&mut sock, REP_NOT_SUPPORTED).await;
         return Err(AetherError::Other(
-            "only connect is carried on this listener".into(),
+            "only connect and udp associate are carried on this listener".into(),
         ));
     }
 
@@ -1026,6 +1068,143 @@ where
     }
 }
 
+const DNS_PORT: u16 = 53;
+const DNS_OVER_TCP_TIMEOUT: Duration = Duration::from_secs(20);
+const DNS_MAX_IN_FLIGHT: usize = 32;
+
+async fn dns_over_stream<S>(mut stream: S, query: Vec<u8>) -> std::io::Result<Vec<u8>>
+where
+    S: AsyncRead + AsyncWrite + Send + Unpin,
+{
+    if query.len() > u16::MAX as usize {
+        return Err(std::io::Error::other("dns query is too long to frame"));
+    }
+
+    let mut framed = Vec::with_capacity(query.len() + 2);
+    framed.extend_from_slice(&(query.len() as u16).to_be_bytes());
+    framed.extend_from_slice(&query);
+    stream.write_all(&framed).await?;
+    stream.flush().await?;
+
+    let mut len = [0u8; 2];
+    stream.read_exact(&mut len).await?;
+    let mut answer = vec![0u8; u16::from_be_bytes(len) as usize];
+    stream.read_exact(&mut answer).await?;
+    Ok(answer)
+}
+
+async fn handle_udp_over_connector<F, Fut, S>(
+    mut sock: TcpStream,
+    connect: F,
+    requested: Target,
+) -> Result<()>
+where
+    F: Fn(String, u16) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = std::io::Result<S>> + Send + 'static,
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
+    let control_peer = sock.peer_addr()?;
+    let expected_ip = expected_udp_source(control_peer, &requested);
+    let bind_ip = sock.local_addr()?.ip();
+
+    let relay = UdpSocket::bind(SocketAddr::new(bind_ip, 0)).await?;
+    let relay_addr = relay.local_addr()?;
+    reply_bound(&mut sock, relay_addr).await?;
+
+    let (answers_tx, mut answers_rx) = mpsc::channel::<(SocketAddr, Vec<u8>)>(64);
+    let in_flight = Arc::new(Semaphore::new(DNS_MAX_IN_FLIGHT));
+
+    let mut client: Option<SocketAddr> = None;
+    let mut refused: u64 = 0;
+    let mut dropped_udp: u64 = 0;
+    let mut cbuf = vec![0u8; 65535];
+    let mut ctrl = [0u8; 256];
+
+    loop {
+        tokio::select! {
+            r = relay.recv_from(&mut cbuf) => {
+                let (n, from) = match r { Ok(v) => v, Err(_) => break };
+                if !udp_source_allowed(expected_ip, client, from) {
+                    refused += 1;
+                    if refused == 1 || refused.is_multiple_of(64) {
+                        log::warn!(
+                            "[-] udp relay {relay_addr} dropped a datagram from {from}; \
+                             this association only serves {expected_ip} (refused={refused})"
+                        );
+                    }
+                    continue;
+                }
+                if client.is_none() {
+                    log::debug!("udp relay {relay_addr} latched to client {from}");
+                    client = Some(from);
+                }
+
+                let Some((dst, (dst_port, payload))) = parse_udp_request(&cbuf[..n]) else {
+                    continue;
+                };
+
+                if dst_port != DNS_PORT {
+                    dropped_udp += 1;
+                    if dropped_udp == 1 || dropped_udp.is_multiple_of(64) {
+                        log::debug!(
+                            "[-] udp to {dst}:{dst_port} cannot be carried: this listener \
+                             reaches the internet over tcp only (dropped={dropped_udp})"
+                        );
+                    }
+                    continue;
+                }
+
+                let resolver = match dst {
+                    Target::Ip(ip) => SocketAddr::new(ip, dst_port),
+                    Target::Domain(name) => {
+                        log::debug!("[-] dns resolver given as the name {name}; give an address instead");
+                        continue;
+                    }
+                };
+
+                let permit = match in_flight.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        log::debug!("[-] too many dns lookups are already in flight; dropping one");
+                        continue;
+                    }
+                };
+
+                let connect = connect.clone();
+                let answers_tx = answers_tx.clone();
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    let exchange = async {
+                        let stream = connect(resolver.ip().to_string(), resolver.port()).await?;
+                        dns_over_stream(stream, payload).await
+                    };
+                    match tokio::time::timeout(DNS_OVER_TCP_TIMEOUT, exchange).await {
+                        Ok(Ok(answer)) => {
+                            let _ = answers_tx.send((resolver, answer)).await;
+                        }
+                        Ok(Err(e)) => log::debug!("dns over tcp to {resolver} failed: {e}"),
+                        Err(_) => log::debug!("dns over tcp to {resolver} timed out"),
+                    }
+                });
+            }
+
+            maybe = answers_rx.recv() => {
+                let Some((src, answer)) = maybe else { break };
+                if let Some(c) = client {
+                    let pkt = build_udp_reply(src, &answer);
+                    let _ = relay.send_to(&pkt, c).await;
+                }
+            }
+
+            r = sock.read(&mut ctrl) => {
+                match r { Ok(0) | Err(_) => break, Ok(_) => {} }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn relay_generic<A, B>(client: A, remote: B, linger: Duration)
 where
     A: AsyncRead + AsyncWrite + Send + Unpin,
@@ -1036,12 +1215,12 @@ where
     let activity = Activity::new();
 
     let upload = async {
-        let _ = pump(&mut client_rd, &mut remote_wr, &activity).await;
+        let _ = pump(&mut client_rd, &mut remote_wr, &activity, Way::Up).await;
         let _ = remote_wr.shutdown().await;
     };
 
     let download = async {
-        if pump(&mut remote_rd, &mut client_wr, &activity)
+        if pump(&mut remote_rd, &mut client_wr, &activity, Way::Down)
             .await
             .is_ok()
         {
@@ -1131,6 +1310,7 @@ pub(crate) async fn relay_tunneled(
                     if sender.send(buf[..n].to_vec()).await.is_err() {
                         return;
                     }
+                    crate::stats::add_up(n);
                     activity.touch();
                 }
             }
@@ -1143,6 +1323,7 @@ pub(crate) async fn relay_tunneled(
             if wr.write_all(&chunk).await.is_err() {
                 return;
             }
+            crate::stats::add_down(chunk.len());
             activity.touch();
         }
         let _ = wr.shutdown().await;
@@ -1157,12 +1338,12 @@ async fn relay_direct(client: TcpStream, remote: TcpStream, linger: Duration) {
     let activity = Activity::new();
 
     let upload = async {
-        let _ = pump(&mut client_rd, &mut remote_wr, &activity).await;
+        let _ = pump(&mut client_rd, &mut remote_wr, &activity, Way::Up).await;
         let _ = remote_wr.shutdown().await;
     };
 
     let download = async {
-        if pump(&mut remote_rd, &mut client_wr, &activity)
+        if pump(&mut remote_rd, &mut client_wr, &activity, Way::Down)
             .await
             .is_ok()
         {
@@ -1173,7 +1354,13 @@ async fn relay_direct(client: TcpStream, remote: TcpStream, linger: Duration) {
     relay_halves(upload, download, &activity, linger).await;
 }
 
-async fn pump<R, W>(from: &mut R, to: &mut W, activity: &Activity) -> std::io::Result<()>
+#[derive(Clone, Copy)]
+enum Way {
+    Up,
+    Down,
+}
+
+async fn pump<R, W>(from: &mut R, to: &mut W, activity: &Activity, way: Way) -> std::io::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -1186,6 +1373,10 @@ where
         }
         to.write_all(&buf[..n]).await?;
         to.flush().await?;
+        match way {
+            Way::Up => crate::stats::add_up(n),
+            Way::Down => crate::stats::add_down(n),
+        }
         activity.touch();
     }
 }
@@ -1401,7 +1592,7 @@ async fn handle_udp_associate(
                 let (n, from) = match r { Ok(v) => v, Err(_) => break };
                 if !udp_source_allowed(expected_ip, client, from) {
                     refused += 1;
-                    if refused == 1 || refused % 64 == 0 {
+                    if refused == 1 || refused.is_multiple_of(64) {
                         log::warn!(
                             "[-] udp relay {relay_addr} dropped a datagram from {from}; \
                              this association only serves {expected_ip} (refused={refused})"
@@ -2089,6 +2280,202 @@ mod tests {
             ));
         }
     }
+
+    const V6_ONLY: &str = "2001:470:1:18::125";
+
+    fn answer(id: u16, name: &str, qtype: u16, rcode: u8, records: &[(u16, Vec<u8>)]) -> Vec<u8> {
+        let mut msg = Vec::new();
+        msg.extend_from_slice(&id.to_be_bytes());
+        msg.push(0x81);
+        msg.push(0x80 | rcode);
+        msg.extend_from_slice(&1u16.to_be_bytes());
+        msg.extend_from_slice(&(records.len() as u16).to_be_bytes());
+        msg.extend_from_slice(&[0, 0, 0, 0]);
+        for label in name.split('.') {
+            msg.push(label.len() as u8);
+            msg.extend_from_slice(label.as_bytes());
+        }
+        msg.push(0);
+        msg.extend_from_slice(&qtype.to_be_bytes());
+        msg.extend_from_slice(&1u16.to_be_bytes());
+        for (rtype, data) in records {
+            msg.extend_from_slice(&[0xc0, 0x0c]);
+            msg.extend_from_slice(&rtype.to_be_bytes());
+            msg.extend_from_slice(&1u16.to_be_bytes());
+            msg.extend_from_slice(&300u32.to_be_bytes());
+            msg.extend_from_slice(&(data.len() as u16).to_be_bytes());
+            msg.extend_from_slice(data);
+        }
+        msg
+    }
+
+    #[test]
+    fn an_aaaa_answer_is_read_for_an_aaaa_question() {
+        let v6: Ipv6Addr = V6_ONLY.parse().unwrap();
+        let msg = answer(
+            1,
+            "ip6only.me",
+            QTYPE_AAAA,
+            0,
+            &[(QTYPE_AAAA, v6.octets().to_vec())],
+        );
+        assert_eq!(parse_dns_answer(&msg, QTYPE_AAAA), Some(IpAddr::V6(v6)));
+        assert_eq!(parse_dns_answer(&msg, QTYPE_A), None);
+    }
+
+    #[test]
+    fn an_alias_ahead_of_the_address_is_skipped() {
+        let v6: Ipv6Addr = V6_ONLY.parse().unwrap();
+        let alias = vec![3, b'w', b'w', b'w', 0xc0, 0x0c];
+        let msg = answer(
+            1,
+            "ip6only.me",
+            QTYPE_AAAA,
+            0,
+            &[(5, alias), (QTYPE_AAAA, v6.octets().to_vec())],
+        );
+        assert_eq!(parse_dns_answer(&msg, QTYPE_AAAA), Some(IpAddr::V6(v6)));
+    }
+
+    #[test]
+    fn a_name_that_does_not_exist_is_told_apart_from_a_missing_record() {
+        let gone = answer(1, "nothing.example", QTYPE_A, RCODE_NXDOMAIN, &[]);
+        let empty = answer(1, "ip6only.me", QTYPE_A, 0, &[]);
+        assert_eq!(dns_rcode(&gone), Some(RCODE_NXDOMAIN));
+        assert_eq!(dns_rcode(&empty), Some(0));
+        assert_eq!(parse_dns_answer(&empty, QTYPE_A), None);
+    }
+
+    async fn fake_resolver(
+        mut from_stack: mpsc::Receiver<Vec<u8>>,
+        to_stack: mpsc::Sender<Vec<u8>>,
+        asked: std::sync::Arc<std::sync::Mutex<Vec<(String, u16)>>>,
+    ) {
+        use smoltcp::phy::ChecksumCapabilities;
+        use smoltcp::wire::{IpAddress, IpProtocol, Ipv4Packet, Ipv4Repr, UdpPacket, UdpRepr};
+
+        let caps = ChecksumCapabilities::default();
+        while let Some(pkt) = from_stack.recv().await {
+            let Ok(ip) = Ipv4Packet::new_checked(&pkt[..]) else {
+                continue;
+            };
+            let Ok(ip_repr) = Ipv4Repr::parse(&ip, &caps) else {
+                continue;
+            };
+            if ip_repr.next_header != IpProtocol::Udp {
+                continue;
+            }
+            let src = IpAddress::Ipv4(ip_repr.src_addr);
+            let dst = IpAddress::Ipv4(ip_repr.dst_addr);
+            let Ok(udp) = UdpPacket::new_checked(ip.payload()) else {
+                continue;
+            };
+            let Ok(udp_repr) = UdpRepr::parse(&udp, &src, &dst, &caps) else {
+                continue;
+            };
+
+            let query = udp.payload();
+            let mut pos = 12;
+            let mut labels = Vec::new();
+            while pos < query.len() && query[pos] != 0 {
+                let n = query[pos] as usize;
+                labels.push(String::from_utf8_lossy(&query[pos + 1..pos + 1 + n]).to_string());
+                pos += 1 + n;
+            }
+            let name = labels.join(".");
+            let qtype = u16::from_be_bytes([query[pos + 1], query[pos + 2]]);
+            let id = u16::from_be_bytes([query[0], query[1]]);
+            asked.lock().unwrap().push((name.clone(), qtype));
+
+            let v6: Ipv6Addr = V6_ONLY.parse().unwrap();
+            let dual_v6: Ipv6Addr = "2606:2800:220:1::1".parse().unwrap();
+            let reply = match (name.as_str(), qtype) {
+                ("dualstack.example", QTYPE_A) => {
+                    answer(id, &name, qtype, 0, &[(QTYPE_A, vec![93, 184, 216, 34])])
+                }
+                ("dualstack.example", QTYPE_AAAA) => answer(
+                    id,
+                    &name,
+                    qtype,
+                    0,
+                    &[(QTYPE_AAAA, dual_v6.octets().to_vec())],
+                ),
+                ("ip6only.me", QTYPE_AAAA) => {
+                    answer(id, &name, qtype, 0, &[(QTYPE_AAAA, v6.octets().to_vec())])
+                }
+                ("ip6only.me", _) => answer(id, &name, qtype, 0, &[]),
+                _ => answer(id, &name, qtype, RCODE_NXDOMAIN, &[]),
+            };
+
+            let out_udp = UdpRepr {
+                src_port: 53,
+                dst_port: udp_repr.src_port,
+            };
+            let out_ip = Ipv4Repr {
+                src_addr: ip_repr.dst_addr,
+                dst_addr: ip_repr.src_addr,
+                next_header: IpProtocol::Udp,
+                payload_len: 8 + reply.len(),
+                hop_limit: 64,
+            };
+            let mut buf = vec![0u8; out_ip.buffer_len() + out_ip.payload_len];
+            let mut packet = Ipv4Packet::new_unchecked(&mut buf[..]);
+            out_ip.emit(&mut packet, &caps);
+            let mut datagram = UdpPacket::new_unchecked(packet.payload_mut());
+            out_udp.emit(
+                &mut datagram,
+                &dst,
+                &src,
+                reply.len(),
+                |b| b.copy_from_slice(&reply),
+                &caps,
+            );
+            let _ = to_stack.send(buf).await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_name_with_only_an_ipv6_address_resolves_through_the_tunnel() {
+        let (to_stack, stack_in) = mpsc::channel(64);
+        let (stack_out, from_stack) = mpsc::channel(64);
+        let stack = crate::netstack::spawn(
+            "172.16.0.2",
+            "2606:4700:110:8a36::1",
+            1280,
+            stack_in,
+            stack_out,
+        )
+        .unwrap();
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        tokio::spawn(fake_resolver(from_stack, to_stack, asked.clone()));
+
+        assert_eq!(
+            dns_resolve(&stack, "dualstack.example").await.unwrap(),
+            IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))
+        );
+        assert_eq!(
+            resolve(&stack, Target::Domain("ip6only.me".into()))
+                .await
+                .unwrap(),
+            IpAddr::V6(V6_ONLY.parse().unwrap())
+        );
+        let missing = dns_resolve(&stack, "nothing.example")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("does not exist"), "{missing}");
+
+        let asked = asked.lock().unwrap().clone();
+        assert_eq!(
+            asked,
+            vec![
+                ("dualstack.example".to_string(), QTYPE_A),
+                ("ip6only.me".to_string(), QTYPE_A),
+                ("ip6only.me".to_string(), QTYPE_AAAA),
+                ("nothing.example".to_string(), QTYPE_A),
+            ]
+        );
+    }
 }
 
 const HTTP_HEAD_LIMIT: usize = 16 * 1024;
@@ -2111,6 +2498,112 @@ pub async fn serve_http(listener: TcpListener, stack: StackHandle) -> Result<()>
         }
     })
     .await
+}
+
+pub(crate) async fn serve_http_connector<F, Fut, S>(
+    listener: TcpListener,
+    kind: &'static str,
+    connect: F,
+) -> Result<()>
+where
+    F: Fn(String, u16) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = std::io::Result<S>> + Send + 'static,
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
+    let listen = listener.local_addr()?;
+    log::info!("[+] {kind} listening on {listen}");
+    warn_if_world_reachable(kind, listen, false);
+
+    accept_clients(listener, kind, client_limit(), move |sock, peer| {
+        let connect = connect.clone();
+        async move {
+            if let Err(e) = handle_http_through(sock, connect).await {
+                log::debug!("{kind} client {peer} ended: {e}");
+            }
+        }
+    })
+    .await
+}
+
+async fn handle_http_through<F, Fut, S>(mut sock: TcpStream, connect: F) -> Result<()>
+where
+    F: Fn(String, u16) -> Fut,
+    Fut: Future<Output = std::io::Result<S>>,
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
+    let (head, early) = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_head(&mut sock))
+        .await
+        .map_err(|_| {
+            AetherError::Other("the client did not send a request head in time".into())
+        })??;
+    let text = String::from_utf8_lossy(&head).to_string();
+    let first_line = text.lines().next().unwrap_or_default();
+
+    let request = match parse_request_line(first_line) {
+        Some(value) => value,
+        None => {
+            let _ = sock
+                .write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+                .await;
+            return Err(AetherError::Other(format!(
+                "unsupported http proxy request: {first_line}"
+            )));
+        }
+    };
+
+    let target = match request.authority.parse::<IpAddr>() {
+        Ok(ip) => Target::Ip(ip),
+        Err(_) => Target::Domain(request.authority.clone()),
+    };
+
+    match routes().decide(host_of(&target), request.port) {
+        Action::Block => {
+            log::debug!("[route] block http {}:{}", request.authority, request.port);
+            let _ = sock
+                .write_all(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+                .await;
+            return Ok(());
+        }
+        Action::Direct => {
+            log::debug!("[route] direct http {}:{}", request.authority, request.port);
+            return relay_http_direct(sock, &request, &head, &early).await;
+        }
+        Action::Proxy => {}
+    }
+
+    let remote = match connect(request.authority.clone(), request.port).await {
+        Ok(remote) => remote,
+        Err(error) => {
+            let _ = sock
+                .write_all(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
+                .await;
+            return Err(AetherError::Other(format!(
+                "{}:{}: {error}",
+                request.authority, request.port
+            )));
+        }
+    };
+
+    let mut remote = remote;
+
+    match &request.rewritten {
+        Some(line) => {
+            let rest = text.split_once("\r\n").map(|(_, tail)| tail).unwrap_or("");
+            remote.write_all(format!("{line}{rest}").as_bytes()).await?;
+        }
+        None => {
+            sock.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                .await?;
+        }
+    }
+
+    if !early.is_empty() {
+        remote.write_all(&early).await?;
+    }
+    remote.flush().await?;
+
+    relay_generic(sock, remote, half_close_linger()).await;
+    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq)]

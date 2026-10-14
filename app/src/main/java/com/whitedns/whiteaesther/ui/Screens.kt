@@ -1376,6 +1376,7 @@ fun RoutesScreen(
                                 ScanStrategy.BALANCED -> stringResource(R.string.default_a_good_result_in_a_few)
                                 ScanStrategy.THOROUGH -> stringResource(R.string.tests_more_endpoints_before_choosing)
                                 ScanStrategy.STEALTH -> stringResource(R.string.quieter_probing_on_watchful_networks)
+                                ScanStrategy.VERIFIED -> stringResource(R.string.scan_verified_description)
                                 ScanStrategy.IRONCLAD -> stringResource(R.string.slowest_and_most_stubborn)
                             },
                             selected = settings.scanStrategy == strategy,
@@ -2005,8 +2006,36 @@ fun TrafficScreen(
                                 onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(echConfigList = it)))
                             }
                         }
+                        Text(stringResource(R.string.tls_ech_dns), style = AetherTheme.type.Small, color = colors.text2)
+                        SettingsPlainField(settings.tlsOptions.echDns, "ech-dns-field") {
+                            onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(echDns = it)))
+                        }
+                        Text(stringResource(R.string.tls_ech_domain), style = AetherTheme.type.Small, color = colors.text2)
+                        SettingsPlainField(settings.tlsOptions.echDomain, "ech-domain-field") {
+                            onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(echDomain = it)))
+                        }
                         Note(stringResource(R.string.tls_ech_scope))
                     }
+                }
+
+                Divider()
+                Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Text(stringResource(R.string.tls_ciphers), style = AetherTheme.type.Small, color = colors.text2)
+                    SettingsPlainField(settings.tlsOptions.tlsCiphers, "tls-ciphers-field") {
+                        onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(tlsCiphers = it)))
+                    }
+                    Text(stringResource(R.string.tls_key_groups), style = AetherTheme.type.Small, color = colors.text2)
+                    SettingsPlainField(settings.tlsGroups, "tls-groups-field") {
+                        onSettingsChange(settings.copy(tlsGroups = it))
+                    }
+                    CheckRow(stringResource(R.string.tls_disable_grease), "", settings.tlsOptions.disableGrease) {
+                        onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(disableGrease = !settings.tlsOptions.disableGrease)))
+                    }
+                    Text(stringResource(R.string.tls_enroll_address), style = AetherTheme.type.Small, color = colors.text2)
+                    SettingsPlainField(settings.tlsOptions.enrollAddress, "enroll-address-field") {
+                        onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(enrollAddress = it)))
+                    }
+                    Note(stringResource(R.string.tls_fingerprint_scope))
                 }
                 settings.tlsOptions.validationError(settings.fragmentTls, settings.encryptedHello)?.let {
                     Note(stringResource(it))
@@ -2116,6 +2145,26 @@ private fun RateColumn(
     }
 }
 
+/** Keep typing synchronous while DataStore acknowledges earlier saves asynchronously. */
+@Composable
+private fun SettingsPlainField(
+    value: String,
+    tag: String,
+    onValueChange: (String) -> Unit,
+) {
+    var text by rememberSaveable(tag) { mutableStateOf(value) }
+    var editing by remember { mutableStateOf(false) }
+    // An acknowledgement can contain a prefix of what is now being typed.
+    // Accept external changes when idle without replacing an active edit.
+    LaunchedEffect(value, editing) {
+        if (!editing) text = value
+    }
+    PlainField(text, tag, Modifier.onFocusChanged { editing = it.isFocused }) { entered ->
+        text = entered
+        onValueChange(entered)
+    }
+}
+
 /**
  * A single-line text field bound to a caller-held value.
  *
@@ -2127,6 +2176,7 @@ private fun RateColumn(
 private fun PlainField(
     value: String,
     tag: String,
+    modifier: Modifier = Modifier,
     onValueChange: (String) -> Unit,
 ) {
     val colors = AetherTheme.colors
@@ -2134,7 +2184,7 @@ private fun PlainField(
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .tvTextFieldSupport(interaction)
             .testTag(tag),

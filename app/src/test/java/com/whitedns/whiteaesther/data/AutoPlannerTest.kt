@@ -398,6 +398,7 @@ class AutoPlannerTest {
                 AutoRoute.AETHER_H2_QUICK,
                 AutoRoute.AETHER_H2_RECORDS,
                 AutoRoute.AETHER_H3_ECH,
+                AutoRoute.AETHER_H2_ECH,
                 AutoRoute.AETHER_H2_FRAGMENT,
                 AutoRoute.AETHER_H2_COMPACT,
                 AutoRoute.AETHER_H2_IPV6,

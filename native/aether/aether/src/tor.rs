@@ -43,6 +43,14 @@ pub fn listen_address() -> SocketAddr {
         .unwrap_or_else(|| "127.0.0.1:1820".parse().expect("a literal address"))
 }
 
+pub fn http_listen_address() -> Option<SocketAddr> {
+    std::env::var("AETHER_TOR_HTTP")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && value != "off")
+        .and_then(|value| value.parse().ok())
+}
+
 pub fn state_dir(base_config: &str) -> PathBuf {
     if let Some(dir) = std::env::var("AETHER_TOR_DIR")
         .ok()
@@ -70,9 +78,69 @@ pub enum Bridges {
     Auto { forced: bool },
 }
 
+pub fn bridges_from_file() -> Vec<String> {
+    let path = match std::env::var("AETHER_TOR_BRIDGE_FILE") {
+        Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
+        _ => return Vec::new(),
+    };
+
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) => {
+            log::warn!("[-] cannot read the bridge file {path}: {e}");
+            return Vec::new();
+        }
+    };
+
+    let lines = read_bridge_lines(&text);
+    if lines.is_empty() {
+        log::warn!("[-] the bridge file {path} held no bridge line");
+    } else {
+        log::info!("[+] {} bridge(s) read from {path}", lines.len());
+    }
+    lines
+}
+
+pub fn read_bridge_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            line.strip_prefix("Bridge ")
+                .or_else(|| line.strip_prefix("bridge "))
+                .unwrap_or(line)
+                .trim()
+                .to_string()
+        })
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
 pub fn bridges() -> Bridges {
+    let from_file = bridges_from_file();
     let raw = std::env::var("AETHER_TOR_BRIDGES").unwrap_or_default();
     let trimmed = raw.trim();
+
+    if !from_file.is_empty() {
+        let mut lines = from_file;
+        if !matches!(
+            trimmed.to_lowercase().as_str(),
+            "" | "off"
+                | "no"
+                | "0"
+                | "false"
+                | "none"
+                | "auto"
+                | "on"
+                | "1"
+                | "yes"
+                | "true"
+                | "force"
+        ) {
+            lines.extend(read_bridge_lines(&trimmed.replace(';', "\n")));
+        }
+        return Bridges::Manual(lines);
+    }
 
     match trimmed.to_lowercase().as_str() {
         "" => Bridges::Auto { forced: false },
@@ -255,9 +323,9 @@ mod with_tor {
         }
     }
 
-    async fn auto_plan(state: &Path) -> Plan {
-        let (lines, source) = crate::bridges::fetch(state).await;
-        let lines = crate::bridges::keep_reachable(lines).await;
+    async fn auto_plan(state: &Path, through: Option<SocketAddr>) -> Plan {
+        let (lines, source) = crate::bridges::fetch(state, through).await;
+        let lines = crate::bridges::keep_reachable(lines, through).await;
         let plan = crate::bridges::plan(lines, source, manual_transports());
         announce(&plan);
         plan
@@ -288,11 +356,18 @@ mod with_tor {
             .storage()
             .state_dir(CfgPath::new(data.to_string_lossy().to_string()));
 
-        if let Some(proxy) = through {
+        // Without a tunnel to dial through, tor leaves through the upstream proxy, if there is one.
+        if let Some(proxy) = through.or_else(upstream_socks) {
             let parsed: ProxyProtocol = format!("socks5://{proxy}")
                 .parse()
                 .map_err(|e| AetherError::Other(format!("tor cannot dial through {proxy}: {e}")))?;
             builder.channel().outbound_proxy(parsed);
+        } else if let Some(proxy) = crate::upstream::configured() {
+            // Connecting directly would leave outside the proxy aether was told to dial through.
+            return Err(AetherError::Other(format!(
+                "tor cannot dial through the upstream proxy at {}: it takes a socks5 address without a password",
+                proxy.endpoint()
+            )));
         }
 
         if let Some(plan) = plan {
@@ -577,10 +652,13 @@ mod with_tor {
         }
 
         if through.is_some() {
-            log::warn!("[-] a pluggable transport dials for itself, outside the tunnel");
+            log::warn!(
+                "[-] a pluggable transport dials for itself, outside the tunnel; plain bridges go \
+                 through it, so they are the ones that work on a network which blocks tor outright"
+            );
         }
 
-        let plan = auto_plan(state).await;
+        let plan = auto_plan(state, through).await;
         if plan.is_empty() {
             return Err(AetherError::Other(format!(
                 "tor is blocked on this network and no pluggable transport is installed, so no \
@@ -687,8 +765,14 @@ mod with_tor {
         Ok(None)
     }
 
+    fn announce_exit(proxy: SocketAddr, what: &'static str) {
+        tokio::spawn(async move {
+            crate::exitloc::report_through_socks(proxy, what).await;
+        });
+    }
+
     async fn serve(listener: TcpListener, client: Client, kind: &'static str) -> Result<()> {
-        crate::socks::serve_connector(listener, kind, move |host, port| {
+        let connector = move |host: String, port: u16| {
             let client = client.clone();
             async move {
                 client
@@ -700,8 +784,58 @@ mod with_tor {
                     })
                     .map_err(std::io::Error::other)
             }
-        })
-        .await
+        };
+
+        let http_task = match http_listen_address() {
+            Some(address) => {
+                let http_listener = crate::socks::bind_listener("tor http proxy", address).await?;
+                let connector = connector.clone();
+                Some(tokio::spawn(async move {
+                    if let Err(e) = crate::socks::serve_http_connector(
+                        http_listener,
+                        "tor http proxy",
+                        connector,
+                    )
+                    .await
+                    {
+                        log::error!("[-] the tor http proxy stopped: {e}");
+                    }
+                }))
+            }
+            None => None,
+        };
+
+        let outcome = crate::socks::serve_connector(listener, kind, connector).await;
+
+        if let Some(task) = http_task {
+            task.abort();
+        }
+
+        outcome
+    }
+
+    /// The upstream proxy tor dials through when no tunnel carries it, see
+    /// [crate::upstream::Upstream::socks_address].
+    fn upstream_socks() -> Option<SocketAddr> {
+        crate::upstream::configured()?.socks_address()
+    }
+
+    /// Says how tor reaches the network when no tunnel carries it: through the upstream proxy, or
+    /// directly when there is none; with one tor cannot dial through, tor does not start.
+    fn announce_upstream() {
+        let Some(proxy) = crate::upstream::configured() else {
+            return;
+        };
+        match proxy.socks_address() {
+            Some(address) => {
+                log::info!("[*] tor dials out through the upstream proxy at {address}")
+            }
+            None => log::warn!(
+                "[-] tor cannot dial through the upstream proxy at {}, which is no socks5 address \
+                 without a password; it does not connect directly instead",
+                proxy.endpoint()
+            ),
+        }
     }
 
     async fn wait_for_proxy(through: SocketAddr) {
@@ -728,6 +862,7 @@ mod with_tor {
 
         let client = establish(&state, Some(through), FOREVER).await?;
         log::info!("[+] tor is ready; {listen} leaves through tor, carried by the tunnel");
+        announce_exit(listen, "tor through the tunnel");
 
         serve(listener, client, "tor socks5").await
     }
@@ -737,9 +872,11 @@ mod with_tor {
         let listener = crate::socks::bind_listener("tor socks5", listen).await?;
 
         log::info!("[*] bootstrapping tor with no tunnel underneath it");
+        announce_upstream();
 
         let client = establish(&state, None, FOREVER).await?;
         log::info!("[+] tor is ready; {listen} leaves through tor");
+        announce_exit(listen, "tor");
 
         serve(listener, client, "tor socks5").await
     }
@@ -750,9 +887,12 @@ mod with_tor {
         let listener = crate::socks::bind_listener("tor socks5", listen).await?;
 
         log::info!("[*] bootstrapping tor; the tunnel will be dialled through it");
+        // The upstream is still the proxy aether was given: the caller points it at tor once tor is up.
+        announce_upstream();
 
         let client = establish(&state, None, REVERSE_ATTEMPTS).await?;
         log::info!("[+] tor is ready; the tunnel goes out through {listen}");
+        announce_exit(listen, "tor");
 
         tokio::spawn(async move {
             if let Err(e) = serve(listener, client, "tor socks5").await {
@@ -782,6 +922,30 @@ mod with_tor {
 mod tests {
     use super::*;
 
+    /// The hold on the tor settings of a test: the variables are the whole process's, and the
+    /// tests run side by side, so each test holds them first, or one clearing them would wipe a
+    /// value another had just set. They start out clear, and are cleared again as the hold is
+    /// let go, also by a test that failed half way.
+    struct SettingsHeld(std::sync::MutexGuard<'static, ()>);
+
+    impl Drop for SettingsHeld {
+        fn drop(&mut self) {
+            clear();
+        }
+    }
+
+    /// Waits for the hold on the tor settings, see `SettingsHeld`. A test that failed while it
+    /// held them poisoned the lock, but cleared them all the same, so the lock is taken anyway.
+    fn hold_settings() -> SettingsHeld {
+        static SETTINGS: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        let held = SETTINGS
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clear();
+        SettingsHeld(held)
+    }
+
     fn clear() {
         std::env::remove_var("AETHER_TOR");
         std::env::remove_var("AETHER_TOR_DIR");
@@ -792,7 +956,7 @@ mod tests {
 
     #[test]
     fn every_mode_has_a_spelling() {
-        clear();
+        let _settings = hold_settings();
         assert_eq!(mode(), Mode::Off);
         for written in ["1", "on", "chain", "yes"] {
             std::env::set_var("AETHER_TOR", written);
@@ -810,12 +974,11 @@ mod tests {
             std::env::set_var("AETHER_TOR", written);
             assert_eq!(mode(), Mode::Off, "{written}");
         }
-        clear();
     }
 
     #[test]
     fn the_state_dir_sits_beside_the_identity_file() {
-        clear();
+        let _settings = hold_settings();
         assert_eq!(state_dir("aether.toml"), PathBuf::from("aether-tor"));
         assert_eq!(
             state_dir("/etc/aether/aether.toml"),
@@ -826,21 +989,19 @@ mod tests {
             state_dir("aether.toml"),
             PathBuf::from("/var/lib/aether-tor")
         );
-        clear();
     }
 
     #[test]
     fn the_tor_listener_has_a_default_of_its_own() {
-        clear();
+        let _settings = hold_settings();
         assert_eq!(listen_address(), "127.0.0.1:1820".parse().unwrap());
         std::env::set_var("AETHER_TOR_BIND", "127.0.0.1:9150");
         assert_eq!(listen_address(), "127.0.0.1:9150".parse().unwrap());
-        clear();
     }
 
     #[test]
     fn bridges_are_read_one_per_entry() {
-        clear();
+        let _settings = hold_settings();
         assert!(bridge_lines().is_empty());
         std::env::set_var(
             "AETHER_TOR_BRIDGES",
@@ -850,12 +1011,11 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with("obfs4 192.0.2.55"));
         assert!(lines[1].starts_with("obfs4 198.51.100.25"));
-        clear();
     }
 
     #[test]
     fn a_transport_may_be_named_or_assumed_to_be_obfs4() {
-        clear();
+        let _settings = hold_settings();
         assert!(transports().is_empty());
         std::env::set_var("AETHER_TOR_PT", "/usr/bin/lyrebird");
         assert_eq!(
@@ -876,6 +1036,31 @@ mod tests {
                 ),
             ]
         );
-        clear();
+    }
+}
+
+#[cfg(test)]
+mod bridge_file_tests {
+    use super::*;
+
+    #[test]
+    fn a_torrc_shaped_file_reads_line_by_line() {
+        let text = "\
+# my bridges
+Bridge obfs4 1.2.3.4:443 ABCD cert=xx iat-mode=0
+
+bridge obfs4 5.6.7.8:80 EF01 cert=yy iat-mode=0
+9.9.9.9:443 0123456789012345678901234567890123456789
+";
+        let lines = read_bridge_lines(text);
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].starts_with("obfs4 1.2.3.4:443"));
+        assert!(lines[1].starts_with("obfs4 5.6.7.8:80"));
+        assert!(lines[2].starts_with("9.9.9.9:443"));
+    }
+
+    #[test]
+    fn comments_and_blank_lines_carry_nothing() {
+        assert!(read_bridge_lines("\n  \n# only a comment\n").is_empty());
     }
 }

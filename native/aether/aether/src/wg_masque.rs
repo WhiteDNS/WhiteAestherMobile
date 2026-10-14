@@ -22,7 +22,7 @@ async fn outer(primary: &account::Identity, peer: SocketAddr) -> Result<MasqueHo
     establish_masque(
         primary,
         dial,
-        attempt_ech().await,
+        attempt_ech().await?,
         h2,
         masque_tunnel_mtu(),
         quic::MAX_DATAGRAM_SIZE,

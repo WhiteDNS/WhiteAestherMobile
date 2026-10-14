@@ -85,7 +85,8 @@ These customize the existing H2 TCP-write fragmentation. The two record presets
 use the bounded TLS-record shaping described above. Automatic recovery preserves
 explicit manual overrides. ECH offers automatic discovery or a supplied Base64
 ECHConfigList, checked for encoding and list boundaries before connecting.
-ECH applies to H3 in this engine; H2 and Android WOM do not currently send ECH.
+In 1.11.0, ECH applied only to H3. The Aether 2.3.0 integration also sends ECH
+on H2, the outer WOM tunnel and WARP registration; see `AETHER_2_3_MERGE.md`.
 The ECH cache is keyed by the configured policy so a profile change takes effect
 without waiting for cache expiration. Preferences retain custom text when its
 switch is disabled, and disabled overrides are omitted from active configuration.

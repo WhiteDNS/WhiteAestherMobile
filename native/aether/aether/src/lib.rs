@@ -15,8 +15,10 @@ pub mod error;
 // spawn_job wrapper around run_with does not satisfy Send for our merged
 // engine, so carrying it would mean carrying a build failure for an interface
 // we do not ship.
+pub mod exitloc;
 pub mod fragment;
 mod hello_shape;
+pub mod https;
 pub mod identity;
 pub mod lastconn;
 pub mod masque;
@@ -24,8 +26,10 @@ pub mod masque_h2;
 pub mod netstack;
 pub mod noize;
 pub mod prober;
+pub mod psiphon;
 pub mod quic;
 pub mod routing;
+pub mod stats;
 // Ours: the VpnService callback that keeps a socket out of the tunnel.
 pub mod sniff;
 mod socketprotect;
@@ -224,7 +228,7 @@ pub async fn run_with(args: Vec<String>) -> Result<()> {
                 identity.ipv4,
                 identity.ipv6
             );
-            let ech = attempt_ech().await;
+            let ech = attempt_ech().await?;
             let lastconn_path = lastconn_path(&config_path);
             run_masque(identity, ech, listen, lastconn_path).await
         }
@@ -293,7 +297,7 @@ pub async fn run_with(args: Vec<String>) -> Result<()> {
                 secondary.device_id,
                 secondary.ipv4
             );
-            let ech = attempt_ech().await;
+            let ech = attempt_ech().await?;
             run_mim(primary, secondary, ech, listen).await
         }
     }
@@ -913,6 +917,19 @@ struct ExportEnvelope {
 /// Costs nothing when the identities are already held: both loaders answer from
 /// the store without a round trip.
 pub async fn provision_embedded(config: &EmbeddedConfig) -> Result<Vec<String>> {
+    tls::check_tls_options()?;
+    account::check_enroll_address()?;
+    let _ech_session = tls::EchSession::start(
+        if matches!(
+            config.protocol(),
+            Protocol::Masque | Protocol::MasqueInMasque | Protocol::WireGuardOverMasque
+        ) {
+            attempt_ech().await?
+        } else {
+            None
+        },
+    );
+
     let nested = matches!(
         config.protocol(),
         Protocol::MasqueInMasque | Protocol::WarpInWarp
@@ -946,6 +963,19 @@ pub async fn provision_embedded(config: &EmbeddedConfig) -> Result<Vec<String>> 
 }
 
 pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepared> {
+    tls::check_tls_options()?;
+    account::check_enroll_address()?;
+    let _ech_session = tls::EchSession::start(
+        if matches!(
+            config.protocol(),
+            Protocol::Masque | Protocol::MasqueInMasque | Protocol::WireGuardOverMasque
+        ) {
+            attempt_ech().await?
+        } else {
+            None
+        },
+    );
+
     // Before anything is registered or searched for: a promise that cannot be
     // kept should be refused at the start, not discovered at the handshake.
     if matches!(
@@ -1047,7 +1077,7 @@ async fn select_embedded_wg_peer(
     }
 
     if let Some(cached) = lastconn::load(&lastconn_path(config_path)) {
-        if cached.applies_to(&attempt_proof("wg")) {
+        for cached in cached.candidates(&attempt_proof("wg")) {
             if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
                 let profile = aethernoize::from_profile(&cached.profile);
                 if verify_wg_peer(identity, peer, &profile).await.is_ok() {
@@ -1097,6 +1127,19 @@ pub async fn scan_embedded(
     limit: usize,
     cancelled: &AtomicBool,
 ) -> Result<Vec<EmbeddedScanResult>> {
+    tls::check_tls_options()?;
+    account::check_enroll_address()?;
+    let _ech_session = tls::EchSession::start(
+        if matches!(
+            config.protocol(),
+            Protocol::Masque | Protocol::MasqueInMasque | Protocol::WireGuardOverMasque
+        ) {
+            attempt_ech().await?
+        } else {
+            None
+        },
+    );
+
     if matches!(
         config.protocol(),
         Protocol::WireGuard | Protocol::WarpInWarp
@@ -1104,7 +1147,7 @@ pub async fn scan_embedded(
         return scan_embedded_wg(config, limit, cancelled).await;
     }
     let identity = load_or_provision_masque(&config.identity_site()).await?;
-    let probe = masque_probe(&identity, prober::IpScan::parse(&config.ip_scan)).await;
+    let probe = masque_probe(&identity, prober::IpScan::parse(&config.ip_scan)).await?;
     let results = prober::scan_gateways(
         &probe,
         prober::ScanMode::parse(&config.scan_mode),
@@ -1122,6 +1165,19 @@ pub async fn scan_embedded(
 }
 
 pub async fn test_embedded_peer(config: &EmbeddedConfig) -> Result<EmbeddedScanResult> {
+    tls::check_tls_options()?;
+    account::check_enroll_address()?;
+    let _ech_session = tls::EchSession::start(
+        if matches!(
+            config.protocol(),
+            Protocol::Masque | Protocol::MasqueInMasque | Protocol::WireGuardOverMasque
+        ) {
+            attempt_ech().await?
+        } else {
+            None
+        },
+    );
+
     let peer = config
         .peer
         .ok_or_else(|| AetherError::Other("custom endpoint is required".into()))?;
@@ -1151,6 +1207,19 @@ pub async fn run_embedded(
     endpoint: EmbeddedEndpoint,
     mut ready: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> Result<()> {
+    tls::check_tls_options()?;
+    account::check_enroll_address()?;
+    let _ech_session = tls::EchSession::start(
+        if matches!(
+            config.protocol(),
+            Protocol::Masque | Protocol::MasqueInMasque | Protocol::WireGuardOverMasque
+        ) {
+            attempt_ech().await?
+        } else {
+            None
+        },
+    );
+
     // Before any listener is bound. Every tunnel below reaches socks::serve by
     // its own path, and none of them carries this.
     socks::configure_access(config.access.clone());
@@ -1206,7 +1275,7 @@ pub async fn run_embedded(
     }
 
     let identity = load_or_provision_masque(&config.identity_site()).await?;
-    let ech = attempt_ech().await;
+    let ech = attempt_ech().await?;
     let mut endpoint = Some(endpoint);
     // The endpoint is remembered when the tunnel confirms it carries data, not
     // when it is chosen. Nested, this is the outer edge -- the one that came
@@ -1659,7 +1728,7 @@ async fn select_embedded_peer(
 ) -> Result<SocketAddr> {
     if let Some(peer) = config.peer {
         if peer_matches_ip_scan(peer, &config.ip_scan)
-            && quick_verify_masque_peer(identity, peer).await
+            && quick_verify_masque_peer(identity, peer, attempt_ech().await?).await
         {
             return Ok(peer);
         }
@@ -1676,7 +1745,7 @@ async fn select_embedded_peer(
         .and_then(|value| value.parse::<SocketAddr>().ok())
     {
         if peer_matches_ip_scan(assigned, &config.ip_scan)
-            && quick_verify_masque_peer(identity, assigned).await
+            && quick_verify_masque_peer(identity, assigned, attempt_ech().await?).await
         {
             return Ok(assigned);
         }
@@ -1686,19 +1755,18 @@ async fn select_embedded_peer(
         // Only when it was earned by the attempt being made now. A gateway that
         // answered over TCP says nothing about a QUIC attempt, and leading with
         // it costs a check at the front of every connect.
-        if cached.applies_to(&attempt_proof(masque_framing())) {
+        let candidates = cached.candidates(&attempt_proof(masque_framing()));
+        if candidates.is_empty() {
+            log::debug!("[*] no remembered endpoint matches this attempt's settings");
+        }
+        for cached in candidates {
             if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
                 if peer_matches_ip_scan(peer, &config.ip_scan)
-                    && quick_verify_masque_peer(identity, peer).await
+                    && quick_verify_masque_peer(identity, peer, attempt_ech().await?).await
                 {
                     return Ok(peer);
                 }
             }
-        } else {
-            log::debug!(
-                "[*] the remembered endpoint was proven over {}, not this attempt's shape",
-                cached.proof.transport
-            );
         }
     }
 
@@ -1718,7 +1786,7 @@ async fn select_embedded_peer(
     // refused every protocol.
     if let Some(peer) = stored_masque_peer(identity) {
         if peer_matches_ip_scan(peer, &config.ip_scan)
-            && quick_verify_masque_peer(identity, peer).await
+            && quick_verify_masque_peer(identity, peer, attempt_ech().await?).await
         {
             return Ok(peer);
         }
@@ -1728,7 +1796,7 @@ async fn select_embedded_peer(
             continue;
         }
         if peer_matches_ip_scan(peer, &config.ip_scan)
-            && quick_verify_masque_peer(identity, peer).await
+            && quick_verify_masque_peer(identity, peer, attempt_ech().await?).await
         {
             log::info!("[+] the endpoint Cloudflare assigned this device answered: {peer}");
             return Ok(peer);
@@ -1922,7 +1990,7 @@ async fn run_masque_tunnel_embedded(
         path: quic::default_path().to_string(),
         cert_pem: identity.cert_pem.clone(),
         key_pem: identity.key_pem.clone(),
-        ech_config_list: ech,
+        ech_config_list: ech.clone(),
         noize: if shape.obfuscate {
             noize_config()
         } else {
@@ -1963,6 +2031,7 @@ async fn run_masque_tunnel_embedded(
                 .iter()
                 .map(|pin| pin.to_vec())
                 .collect(),
+            ech_config_list: ech.clone(),
         };
         log::info!(
             "[+] [{}] MASQUE transport: HTTP/2 to {peer} (inner mtu {})",
@@ -2903,7 +2972,7 @@ async fn select_peer(identity: &account::Identity, protocol: Protocol) -> Result
                 path: quic::default_path().to_string(),
                 cert_pem: std::sync::Arc::from(identity.cert_pem.clone()),
                 key_pem: std::sync::Arc::from(identity.key_pem.clone()),
-                ech_config_list: attempt_ech().await.map(std::sync::Arc::from),
+                ech_config_list: attempt_ech().await?.map(std::sync::Arc::from),
                 noize: noize_config(),
                 ports: prober::MASQUE_PORTS.to_vec(),
                 ip,
@@ -2998,10 +3067,14 @@ async fn select_wg_peers(
         );
     }
 
-    Ok(picked
+    let mut peers: Vec<_> = picked
         .into_iter()
         .map(|pr| SocketAddr::new(pr.ip, pr.port))
-        .collect())
+        .collect();
+    if mode == wg_prober::WgScanMode::Verified {
+        spread_hops(&mut peers);
+    }
+    Ok(peers)
 }
 
 /// The ECHConfigList this attempt uses, resolved once and shared.
@@ -3018,25 +3091,30 @@ async fn select_wg_peers(
 /// once. Short enough that a rotated configuration is picked up on the next
 /// connect rather than the next launch.
 ///
-/// Nothing on the HTTP/2 framing: that transport carries no ECH, so fetching
-/// one there is a DNS round trip spent on something nothing reads.
-pub async fn attempt_ech() -> Option<Vec<u8>> {
-    if masque_h2::enabled() {
-        return None;
-    }
-
+/// HTTP/2 and HTTP/3 share this policy; every outer handshake offers the key.
+pub async fn attempt_ech() -> Result<Option<Vec<u8>>> {
     let mut held = ech_cache().lock().await;
-    let policy = std::env::var("AETHER_ECH").unwrap_or_default();
+    let policy = format!(
+        "{}|{}|{}",
+        std::env::var("AETHER_ECH").unwrap_or_default(),
+        std::env::var("AETHER_ECH_DNS").unwrap_or_default(),
+        std::env::var("AETHER_ECH_DOMAIN").unwrap_or_default()
+    );
 
     if let Some((at, cached_policy, value)) = held.as_ref() {
         if *cached_policy == policy && at.elapsed() < ECH_CACHE_FOR {
-            return value.clone();
+            return Ok(if value.is_some() {
+                tls::session_ech().or_else(|| value.clone())
+            } else {
+                None
+            });
         }
     }
 
-    let resolved = resolve_ech().await;
+    let resolved = resolve_ech().await?;
+    tls::use_ech(resolved.clone());
     *held = Some((std::time::Instant::now(), policy, resolved.clone()));
-    resolved
+    Ok(resolved)
 }
 
 /// How long one resolved ECHConfigList is reused across probes and the connect.
@@ -3049,10 +3127,25 @@ fn ech_cache() -> &'static EchCache {
     CACHED.get_or_init(|| tokio::sync::Mutex::new(None))
 }
 
+/// Retain a server's retry key for later Android attempts with the same policy.
+/// A nonblocking lock avoids reversing the cache/TLS lock order during probes.
+pub(crate) fn remember_ech_retry(retry: &[u8]) {
+    if let Ok(mut cache) = ech_cache().try_lock() {
+        if let Some((at, _, key)) = cache.as_mut() {
+            if key.is_some() {
+                *at = Instant::now();
+                *key = Some(retry.to_vec());
+            }
+        }
+    }
+}
+
 /// Forgets the resolved ECHConfigList, so a test can set the policy and ask again.
 #[cfg(test)]
 async fn forget_ech() {
     *ech_cache().lock().await = None;
+    account::forget_api_ech();
+    tls::use_ech(None);
 }
 
 /// Whether ECH is a requirement rather than a preference.
@@ -3074,7 +3167,7 @@ fn ech_required() -> bool {
 /// Checked once, where a connect begins, rather than at each of the places that
 /// would otherwise carry on regardless.
 pub async fn ech_policy_satisfied() -> Result<()> {
-    if !ech_required() || attempt_ech().await.is_some() {
+    if !ech_required() || attempt_ech().await?.is_some() {
         return Ok(());
     }
     Err(AetherError::Ech(if masque_h2::enabled() {
@@ -3099,6 +3192,23 @@ fn attempt_proof(transport: &str) -> lastconn::Proof {
             std::env::var("AETHER_ECH").as_deref(),
             Err(_) | Ok("") | Ok("off")
         ),
+        fingerprint: {
+            let names = [
+                "AETHER_TLS_CIPHERS",
+                "AETHER_TLS_GROUPS",
+                "AETHER_DISABLE_GREASE",
+                "AETHER_HELLO_SHAPE",
+                "AETHER_MASQUE_H2_FRAGMENT_SIZE",
+                "AETHER_MASQUE_H2_FRAGMENT_DELAY",
+                "AETHER_MASQUE_H2_FRAGMENT_SNI",
+                "AETHER_ECH",
+                "AETHER_ECH_DNS",
+                "AETHER_ECH_DOMAIN",
+            ];
+            let settings = names.map(|name| (name, std::env::var(name).unwrap_or_default()));
+            let encoded = serde_json::to_vec(&settings).expect("string settings are serializable");
+            hex::encode(ring::digest::digest(&ring::digest::SHA256, &encoded))
+        },
     }
 }
 
@@ -3195,40 +3305,25 @@ pub fn migrate_running_tunnel() -> bool {
     }
 }
 
-async fn resolve_ech() -> Option<Vec<u8>> {
-    match std::env::var("AETHER_ECH") {
-        Ok(v) if v.eq_ignore_ascii_case("auto") || v.eq_ignore_ascii_case("require") => {
-            match dns::fetch_ech_config().await {
-                Ok(raw) => {
-                    log::info!(
-                        "[+] fetched ECHConfigList automatically ({} bytes)",
-                        raw.len()
-                    );
-                    Some(raw)
-                }
-                Err(e) => {
-                    log::warn!("[-] ECH auto-fetch failed ({e}); continuing without ECH");
-                    None
-                }
-            }
-        }
-        Ok(b64) if !b64.is_empty() && !b64.eq_ignore_ascii_case("off") => {
-            match tls::decode_ech_config_list(&b64) {
-                Ok(v) => {
-                    log::info!("[+] using ECHConfigList from AETHER_ECH");
-                    Some(v)
-                }
-                Err(e) => {
-                    log::warn!("[-] bad AETHER_ECH: {e}; continuing without ECH");
-                    None
-                }
-            }
-        }
-        _ => {
-            log::info!("[+] ECH disabled (warp masque endpoint does not accept ECH); SNI sent in cleartext");
-            None
+async fn resolve_ech() -> Result<Option<Vec<u8>>> {
+    let setting = std::env::var(tls::SESSION_ECH_OPTION.variable).ok();
+    if setting.as_deref().is_some_and(|value| !value.is_empty()) {
+        if let Some(key) = account::api_ech_in_use() {
+            log::info!(
+                "[+] offering the ECHConfigList the WARP API took ({} bytes)",
+                key.len()
+            );
+            return Ok(Some(key));
         }
     }
+    let key = tls::ech_key(&tls::SESSION_ECH_OPTION, setting.as_deref(), || {
+        dns::fetch_ech_config(&dns::SESSION_ECH)
+    })
+    .await?;
+    if key.is_none() {
+        log::info!("[+] ECH off; the server name goes out in cleartext");
+    }
+    Ok(key)
 }
 
 fn masque_reconnect_delay() -> std::time::Duration {
@@ -3260,7 +3355,7 @@ async fn hunt_masque_peer(
         "[*] hunting for a working MASQUE gateway (deep connect-ip + data-plane verification)"
     );
     let mode = prober::ScanMode::parse(mode_str);
-    let probe = masque_probe(identity, ip).await;
+    let probe = masque_probe(identity, ip).await?;
 
     let best = prober::hunt_best_gateway(&probe, mode).await?;
     log::info!(
@@ -3272,19 +3367,22 @@ async fn hunt_masque_peer(
     Ok(SocketAddr::new(best.ip, best.port))
 }
 
-async fn masque_probe(identity: &account::Identity, ip: prober::IpScan) -> prober::MasqueProbe {
-    prober::MasqueProbe {
+async fn masque_probe(
+    identity: &account::Identity,
+    ip: prober::IpScan,
+) -> Result<prober::MasqueProbe> {
+    Ok(prober::MasqueProbe {
         sni: consts::CONNECT_SNI.to_string(),
         authority: quic::default_authority().to_string(),
         path: quic::default_path().to_string(),
         cert_pem: std::sync::Arc::from(identity.cert_pem.clone()),
         key_pem: std::sync::Arc::from(identity.key_pem.clone()),
-        ech_config_list: attempt_ech().await.map(std::sync::Arc::from),
+        ech_config_list: attempt_ech().await?.map(std::sync::Arc::from),
         noize: noize_config(),
         ports: prober::MASQUE_PORTS.to_vec(),
         ip,
         local_ipv4: parse_local_v4(&identity.ipv4),
-    }
+    })
 }
 
 /// Where the last working endpoint for one protocol is remembered.
@@ -3306,8 +3404,12 @@ fn lastconn_path(config_path: &str) -> String {
     derive_sibling_path(config_path, "lastconn")
 }
 
-async fn quick_verify_masque_peer(identity: &account::Identity, peer: SocketAddr) -> bool {
-    verify_masque_peer(identity, peer).await.is_ok()
+async fn quick_verify_masque_peer(
+    identity: &account::Identity,
+    peer: SocketAddr,
+    ech: Option<Vec<u8>>,
+) -> bool {
+    verify_masque_with_ech(identity, peer, ech).await.is_ok()
 }
 
 /// The parameters [`verify_masque_peer`] would dial with, without dialling.
@@ -3323,7 +3425,7 @@ async fn verify_params_for_test(
         path: quic::default_path().to_string(),
         cert_pem: identity.cert_pem.clone(),
         key_pem: identity.key_pem.clone(),
-        ech_config_list: attempt_ech().await,
+        ech_config_list: attempt_ech().await.expect("valid ECH policy"),
         noize: noize_config(),
         timeout: std::time::Duration::from_secs(5),
         local_ipv4: parse_local_v4(&identity.ipv4),
@@ -3334,6 +3436,14 @@ async fn verify_masque_peer(
     identity: &account::Identity,
     peer: SocketAddr,
 ) -> Result<std::time::Duration> {
+    verify_masque_with_ech(identity, peer, attempt_ech().await?).await
+}
+
+async fn verify_masque_with_ech(
+    identity: &account::Identity,
+    peer: SocketAddr,
+    ech: Option<Vec<u8>>,
+) -> Result<std::time::Duration> {
     let vp = quic::VerifyParams {
         peer,
         sni: consts::CONNECT_SNI.to_string(),
@@ -3341,7 +3451,7 @@ async fn verify_masque_peer(
         path: quic::default_path().to_string(),
         cert_pem: identity.cert_pem.clone(),
         key_pem: identity.key_pem.clone(),
-        ech_config_list: attempt_ech().await,
+        ech_config_list: ech.clone(),
         noize: noize_config(),
         timeout: std::time::Duration::from_secs(5),
         local_ipv4: parse_local_v4(&identity.ipv4),
@@ -3359,6 +3469,7 @@ async fn verify_masque_peer(
             quiet: true,
             pin_endpoint: true,
             expected_pins: consts::masque_pins().iter().map(|p| p.to_vec()).collect(),
+            ech_config_list: ech.clone(),
         };
         return masque_h2::verify_h2(&cfg, std::time::Duration::from_secs(5))
             .await
@@ -3404,7 +3515,7 @@ async fn run_masque(
             .and_then(|value| value.parse::<SocketAddr>().ok())
         {
             log::info!("[*] verifying the endpoint the organization assigned: {assigned}");
-            if quick_verify_masque_peer(&identity, assigned).await {
+            if quick_verify_masque_peer(&identity, assigned, attempt_ech().await?).await {
                 log::info!("[+] the assigned endpoint {assigned} works; skipping the scan");
                 quick_peer = Some(assigned);
             } else {
@@ -3416,15 +3527,18 @@ async fn run_masque(
     }
 
     if forced.is_none() && quick_peer.is_none() {
-        if let Some(cached) = lastconn::load(&lastconn_path) {
-            if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
-                if want_quick_reconnect(&cached).await {
-                    log::info!("[*] verifying cached gateway {peer} before reuse");
-                    if quick_verify_masque_peer(&identity, peer).await {
-                        log::info!("[+] cached gateway {peer} still works; skipping scan");
-                        quick_peer = Some(peer);
-                    } else {
-                        log::warn!("[-] cached gateway {peer} no longer works; scanning fresh");
+        if let Some(history) = lastconn::load(&lastconn_path) {
+            for cached in history.candidates(&attempt_proof(masque_framing())) {
+                if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
+                    if want_quick_reconnect(&cached).await {
+                        log::info!("[*] verifying cached gateway {peer} before reuse");
+                        if quick_verify_masque_peer(&identity, peer, attempt_ech().await?).await {
+                            log::info!("[+] cached gateway {peer} still works; skipping scan");
+                            quick_peer = Some(peer);
+                            break;
+                        } else {
+                            log::warn!("[-] cached gateway {peer} no longer works; scanning fresh");
+                        }
                     }
                 }
             }
@@ -3448,7 +3562,7 @@ async fn run_masque(
             let retried = match last_good_peer {
                 Some(p) => {
                     log::info!("[*] retrying last known-good gateway {p} before rescanning");
-                    if quick_verify_masque_peer(&identity, p).await {
+                    if quick_verify_masque_peer(&identity, p, attempt_ech().await?).await {
                         Some(p)
                     } else {
                         log::warn!(
@@ -3569,6 +3683,7 @@ async fn establish_masque(
             quiet: false,
             pin_endpoint: true,
             expected_pins: consts::masque_pins().iter().map(|p| p.to_vec()).collect(),
+            ech_config_list: ech.clone(),
         };
         log::info!("[+] [{label}] MASQUE transport: HTTP/2 (TCP) to {peer} (inner mtu {mtu})");
         tokio::spawn(masque_h2::run(
@@ -3585,7 +3700,7 @@ async fn establish_masque(
             path: quic::default_path().to_string(),
             cert_pem: identity.cert_pem.clone(),
             key_pem: identity.key_pem.clone(),
-            ech_config_list: ech,
+            ech_config_list: ech.clone(),
             noize: if obfuscate {
                 noize_config()
             } else {
@@ -3795,7 +3910,93 @@ fn mim_inner_startup() -> std::time::Duration {
     masque_startup_timeout().min(std::time::Duration::from_secs(12))
 }
 
+fn edge_network(ip: IpAddr) -> Option<[u8; 3]> {
+    match ip {
+        IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            Some([octets[0], octets[1], octets[2]])
+        }
+        IpAddr::V6(_) => None,
+    }
+}
+
+fn spread_hops(found: &mut [SocketAddr]) {
+    if found.len() < 2 {
+        return;
+    }
+    let first = found[0];
+    let network = edge_network(first.ip());
+    if let Some(other) = found
+        .iter()
+        .position(|peer| edge_network(peer.ip()) != network)
+    {
+        if other >= 1 {
+            found.swap(1, other);
+        }
+    }
+}
+
+fn masque_verified_ladder(outer: SocketAddr, count: usize) -> Vec<SocketAddr> {
+    if outer.is_ipv6() {
+        return Vec::new();
+    }
+
+    let mut out: Vec<SocketAddr> = Vec::new();
+    let mut seen: HashSet<SocketAddr> = HashSet::new();
+    let outer_network = edge_network(outer.ip());
+
+    let verified: Vec<IpAddr> = prober::MASQUE_VERIFIED_GATEWAYS
+        .iter()
+        .filter_map(|entry| entry.parse().ok())
+        .collect();
+
+    let push =
+        |out: &mut Vec<SocketAddr>, seen: &mut HashSet<SocketAddr>, ip: IpAddr, port: u16| {
+            let peer = SocketAddr::new(ip, port);
+            if ip != outer.ip() && seen.insert(peer) {
+                out.push(peer);
+            }
+        };
+
+    for ip in verified
+        .iter()
+        .filter(|ip| edge_network(**ip) != outer_network)
+    {
+        push(&mut out, &mut seen, *ip, MASQUE_INNER_PORT);
+    }
+    for ip in &verified {
+        push(&mut out, &mut seen, *ip, MASQUE_INNER_PORT);
+    }
+    for &port in prober::MASQUE_ALT_PORTS {
+        for ip in &verified {
+            push(&mut out, &mut seen, *ip, port);
+        }
+    }
+
+    out.truncate(count.max(1));
+    out
+}
+
 fn inner_masque_candidates(outer: SocketAddr, count: usize) -> Vec<SocketAddr> {
+    if prober::ScanMode::parse(&std::env::var("AETHER_SCAN").unwrap_or_default())
+        != prober::ScanMode::Verified
+    {
+        return sibling_candidates(outer, count);
+    }
+    let mut peers = masque_verified_ladder(outer, count.saturating_sub(2).max(1));
+    for peer in sibling_candidates(outer, count) {
+        if peers.len() >= count {
+            break;
+        }
+        if !peers.contains(&peer) {
+            peers.push(peer);
+        }
+    }
+    peers.truncate(count.max(1));
+    peers
+}
+
+fn sibling_candidates(outer: SocketAddr, count: usize) -> Vec<SocketAddr> {
     use rand::RngExt;
 
     let mut rng = rand::rng();
@@ -4497,34 +4698,37 @@ async fn run_wireguard(
     }
 
     if forced.is_none() && quick.is_none() {
-        if let Some(cached) = lastconn::load(&lastconn_path) {
-            if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
-                if want_quick_reconnect(&cached).await {
-                    let profile = aethernoize::from_profile(&cached.profile);
-                    log::info!("[*] verifying cached WireGuard endpoint {peer} before reuse");
-                    match wireguard::verify_endpoint(
-                        peer,
-                        private_key,
-                        peer_public,
-                        identity.client_id,
-                        ipv4,
-                        &profile,
-                        std::time::Duration::from_secs(6),
-                        None,
-                    )
-                    .await
-                    {
-                        Ok(rtt) => {
-                            log::info!(
+        if let Some(history) = lastconn::load(&lastconn_path) {
+            for cached in history.candidates(&attempt_proof("wg")) {
+                if let Ok(peer) = cached.peer.parse::<SocketAddr>() {
+                    if want_quick_reconnect(&cached).await {
+                        let profile = aethernoize::from_profile(&cached.profile);
+                        log::info!("[*] verifying cached WireGuard endpoint {peer} before reuse");
+                        match wireguard::verify_endpoint(
+                            peer,
+                            private_key,
+                            peer_public,
+                            identity.client_id,
+                            ipv4,
+                            &profile,
+                            std::time::Duration::from_secs(6),
+                            None,
+                        )
+                        .await
+                        {
+                            Ok(rtt) => {
+                                log::info!(
                                 "[+] cached endpoint {peer} still works (rtt {:?}); skipping scan",
                                 rtt
                             );
-                            quick = Some((peer, profile, cached.profile.clone()));
-                        }
-                        Err(e) => {
-                            log::warn!(
+                                quick = Some((peer, profile, cached.profile.clone()));
+                                break;
+                            }
+                            Err(e) => {
+                                log::warn!(
                                 "[-] cached endpoint {peer} no longer works ({e}); scanning fresh"
                             );
+                            }
                         }
                     }
                 }
@@ -5111,7 +5315,7 @@ async fn select_scan_mode() -> prober::ScanMode {
     match answer.as_deref() {
         Some("1") => prober::ScanMode::Turbo,
         Some("3") => prober::ScanMode::Thorough,
-        Some("4") => prober::ScanMode::Stealth,
+        Some("4") => prober::ScanMode::Verified,
         Some("5") => prober::ScanMode::Ironclad,
         _ => prober::ScanMode::Balanced,
     }
@@ -6896,6 +7100,7 @@ mod tests {
 #[cfg(test)]
 mod ech_tests {
     use super::*;
+    const VALID_ECH: &str = "AEX+DQBBrwAgACCbK1mYDYFz/BAn6S5t+Q/v+Oej3eFNxtPWgz50fNnFPAAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA=";
 
     /// Serialised: these set process-wide variables and share one cache.
     fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
@@ -6905,6 +7110,8 @@ mod ech_tests {
 
     async fn with_policy(value: Option<&str>, h2: bool) {
         forget_ech().await;
+        std::env::remove_var("AETHER_ECH_DNS");
+        std::env::remove_var("AETHER_ECH_DOMAIN");
         match value {
             Some(v) => std::env::set_var("AETHER_ECH", v),
             None => std::env::remove_var("AETHER_ECH"),
@@ -6921,10 +7128,10 @@ mod ech_tests {
     /// It was fetched regardless, which is a DNS round trip on the way to a
     /// connect, spent on something no part of the H2 path reads.
     #[tokio::test]
-    async fn the_http2_framing_does_not_fetch_a_configuration_it_cannot_use() {
+    async fn the_http2_framing_resolves_the_key_it_will_offer() {
         let _serial = one_at_a_time();
-        with_policy(Some("auto"), true).await;
-        assert!(attempt_ech().await.is_none());
+        with_policy(Some(VALID_ECH), true).await;
+        assert!(attempt_ech().await.unwrap().is_some());
         with_policy(None, false).await;
     }
 
@@ -6933,22 +7140,43 @@ mod ech_tests {
     async fn ech_is_off_unless_it_is_asked_for() {
         let _serial = one_at_a_time();
         with_policy(None, false).await;
-        assert!(attempt_ech().await.is_none());
+        assert!(attempt_ech().await.unwrap().is_none());
         with_policy(Some("off"), false).await;
-        assert!(attempt_ech().await.is_none());
+        assert!(attempt_ech().await.unwrap().is_none());
         assert!(ech_policy_satisfied().await.is_ok());
     }
 
     #[tokio::test]
     async fn changing_ech_policy_does_not_reuse_the_previous_profiles_cached_list() {
         let _serial = one_at_a_time();
-        with_policy(Some("q83vAAAA"), false).await;
+        with_policy(Some(VALID_ECH), false).await;
         let first = attempt_ech().await.expect("manual list");
-        std::env::set_var("AETHER_ECH", "AQIDBA==");
+        let mut changed = tls::decode_ech_config_list(VALID_ECH).unwrap();
+        changed[6] ^= 1;
+        use base64::Engine;
+        std::env::set_var(
+            "AETHER_ECH",
+            base64::engine::general_purpose::STANDARD.encode(changed),
+        );
         let second = attempt_ech().await.expect("new manual list");
         assert_ne!(first, second);
         std::env::remove_var("AETHER_ECH");
-        assert!(attempt_ech().await.is_none());
+        assert!(attempt_ech().await.unwrap().is_none());
+        with_policy(None, false).await;
+    }
+
+    #[tokio::test]
+    async fn a_server_retry_key_survives_the_session_for_the_same_policy() {
+        let _serial = one_at_a_time();
+        with_policy(Some(VALID_ECH), false).await;
+        let initial = attempt_ech().await.unwrap();
+        let session = tls::EchSession::start(initial.clone());
+        let mut retry = initial.unwrap();
+        retry[6] ^= 1;
+        tls::adopt_ech_retry(&retry);
+        drop(session);
+        assert!(tls::session_ech().is_none());
+        assert_eq!(attempt_ech().await.unwrap(), Some(retry));
         with_policy(None, false).await;
     }
 
@@ -6958,12 +7186,13 @@ mod ech_tests {
     /// connection that sends it in the clear has been told nothing, which is the
     /// one outcome worse than failing.
     #[tokio::test]
-    async fn requiring_ech_on_a_framing_that_has_none_is_refused_by_name() {
+    async fn a_failed_ech_lookup_on_http2_is_refused_before_any_handshake() {
         let _serial = one_at_a_time();
         with_policy(Some("require"), true).await;
+        std::env::set_var("AETHER_ECH_DNS", "tcp://127.0.0.1:1");
 
         let refused = ech_policy_satisfied().await.unwrap_err().to_string();
-        assert!(refused.contains("HTTP/2"), "{refused}");
+        assert!(refused.contains(tls::NO_ECH_KEY), "{refused}");
 
         with_policy(None, false).await;
     }
@@ -6981,11 +7210,11 @@ mod ech_tests {
         // A configuration given directly, so the value is real and no lookup is
         // needed: with ECH off everything is None and this test would pass
         // against the defect it exists to catch.
-        with_policy(Some("q83vAAAA"), false).await;
+        with_policy(Some(VALID_ECH), false).await;
 
-        let first = attempt_ech().await;
+        let first = attempt_ech().await.expect("valid policy");
         assert!(first.is_some(), "the test needs a value to compare");
-        let second = attempt_ech().await;
+        let second = attempt_ech().await.expect("valid policy");
         assert_eq!(first, second);
 
         let identity = account::Identity {
@@ -7004,7 +7233,7 @@ mod ech_tests {
             assigned_endpoint: String::new(),
             refused: false,
         };
-        let probe = masque_probe(&identity, prober::IpScan::V4).await;
+        let probe = masque_probe(&identity, prober::IpScan::V4).await.unwrap();
         assert_eq!(
             first.clone().map(std::sync::Arc::from),
             probe.ech_config_list,
@@ -7133,6 +7362,7 @@ mod masque_reachability_tests {
                     quiet: true,
                     pin_endpoint: pinned,
                     expected_pins: consts::masque_pins().iter().map(|p| p.to_vec()).collect(),
+                    ech_config_list: None,
                 };
                 match masque_h2::verify_h2(&cfg, Duration::from_secs(6)).await {
                     Ok(rtt) => eprintln!("[test] {target} OK rtt={rtt:?}"),
