@@ -76,6 +76,7 @@ enum class AutoRoute(
         engineTransport = "h3",
         encryptedHello = true,
     ),
+    AETHER_H2_ECH("aether-h2-ech", Carrier.AETHER, engineTransport = "h2", encryptedHello = true),
 
     AETHER_H2_RECORDS("aether-h2-records", Carrier.AETHER, engineTransport = "h2", fragmentTls = true, helloShape = "records"),
     AETHER_H2_COMPACT("aether-h2-compact", Carrier.AETHER, engineTransport = "h2", fragmentTls = true, helloShape = "compact"),
@@ -136,6 +137,7 @@ enum class AutoRoute(
                     json.optString("ipScan") == "v6" -> AETHER_H2_IPV6
                     json.optString("helloShape") == "records" -> AETHER_H2_RECORDS
                     json.optString("helloShape") == "compact" -> AETHER_H2_COMPACT
+                    json.optBoolean("encryptedHello") -> AETHER_H2_ECH
                     json.optBoolean("fragmentTls") -> AETHER_H2_FRAGMENT
                     json.optString("scanMode") == "turbo" -> AETHER_H2_QUICK
                     else -> AETHER_H2_FULL
@@ -457,9 +459,9 @@ object AutoPlanner {
             listOf(AutoRoute.AETHER_H2_QUICK, AutoRoute.AETHER_H3_QUICK)
         }
         val tactics = if (h3First) {
-            listOf(AutoRoute.AETHER_H3_ECH, AutoRoute.AETHER_H2_FRAGMENT)
+            listOf(AutoRoute.AETHER_H3_ECH, AutoRoute.AETHER_H2_ECH, AutoRoute.AETHER_H2_FRAGMENT)
         } else {
-            listOf(AutoRoute.AETHER_H2_FRAGMENT, AutoRoute.AETHER_H3_ECH)
+            listOf(AutoRoute.AETHER_H2_FRAGMENT, AutoRoute.AETHER_H2_ECH, AutoRoute.AETHER_H3_ECH)
         }
         val recovery = listOf(AutoRoute.AETHER_H2_RECORDS, AutoRoute.AETHER_H2_COMPACT) +
             listOf(AutoRoute.AETHER_H2_IPV6).filter { options.allowIpv6 }
@@ -569,7 +571,8 @@ object AutoPlanner {
     fun preferredFor(lane: List<AutoRoute>, failure: String?): List<AutoRoute> {
         val wanted = when {
             failure == null -> return lane
-            failure.contains("ECH", ignoreCase = true) -> AutoRoute.AETHER_H3_ECH
+            failure.contains("ECH", ignoreCase = true) ->
+                if (lane.indexOf(AutoRoute.AETHER_H2_QUICK) < lane.indexOf(AutoRoute.AETHER_H3_QUICK)) AutoRoute.AETHER_H2_ECH else AutoRoute.AETHER_H3_ECH
             failure.contains("unrecognised name", ignoreCase = true) ||
                 failure.contains("unrecognized name", ignoreCase = true) ->
                 AutoRoute.AETHER_H2_FRAGMENT
@@ -616,7 +619,7 @@ object AutoPlanner {
         AutoRoute.AETHER_H3_QUICK, AutoRoute.AETHER_H2_QUICK -> 45_000L
         // A tactic rung is a different handshake, not a deeper search, so it
         // costs what a quick rung costs.
-        AutoRoute.AETHER_H2_FRAGMENT, AutoRoute.AETHER_H3_ECH,
+        AutoRoute.AETHER_H2_FRAGMENT, AutoRoute.AETHER_H3_ECH, AutoRoute.AETHER_H2_ECH,
         AutoRoute.AETHER_H2_RECORDS, AutoRoute.AETHER_H2_COMPACT, AutoRoute.AETHER_H2_IPV6 -> 45_000L
         AutoRoute.AETHER_WOM -> 120_000L
         AutoRoute.AETHER_H2_FULL -> 180_000L

@@ -19,6 +19,11 @@ data class TlsOptions(
     val splitSni: Boolean = true,
     val customEch: Boolean = false,
     val echConfigList: String = "",
+    val echDns: String = "",
+    val echDomain: String = "",
+    val tlsCiphers: String = "",
+    val disableGrease: Boolean = false,
+    val enrollAddress: String = "",
 ) {
     fun validationError(fragmentEnabled: Boolean, echEnabled: Boolean): Int? = when {
         fragmentEnabled && fragmentMode == TlsFragmentMode.CUSTOM &&
@@ -26,6 +31,9 @@ data class TlsOptions(
         fragmentEnabled && fragmentMode == TlsFragmentMode.CUSTOM &&
             !validRange(fragmentDelay, 0, 100) -> R.string.tls_fragment_delay_error
         echEnabled && customEch && !validEchConfigList(echConfigList) -> R.string.tls_ech_config_error
+        echEnabled && echDomain.isNotBlank() && !validDomain(echDomain.trim()) -> R.string.tls_ech_domain_error
+        echEnabled && echDns.isNotBlank() && !validResolver(echDns.trim()) -> R.string.tls_ech_dns_error
+        listOf(tlsCiphers, enrollAddress).any { it.length > 4096 || it.any(Char::isISOControl) } -> R.string.tls_options_error
         else -> null
     }
 
@@ -40,12 +48,20 @@ data class TlsOptions(
         val canonicalEch = runCatching { Base64.getEncoder().encodeToString(Base64.getDecoder().decode(echText)) }.getOrDefault(echText)
         json.put("echConfigList", if (json.optBoolean("encryptedHello") && customEch) canonicalEch else "")
         json.put("customEch", json.optBoolean("encryptedHello") && customEch)
+        json.put("echDns", if (json.optBoolean("encryptedHello")) echDns.trim() else "")
+        json.put("echDomain", if (json.optBoolean("encryptedHello")) echDomain.trim() else "")
+        json.put("tlsCiphers", tlsCiphers.trim())
+        json.put("disableGrease", disableGrease)
+        json.put("enrollAddress", enrollAddress.trim())
     }
 
     fun encode(): String = JSONObject()
         .put("fragmentMode", fragmentMode.wireName).put("fragmentSize", fragmentSize)
         .put("fragmentDelay", fragmentDelay).put("splitSni", splitSni)
-        .put("customEch", customEch).put("echConfigList", echConfigList).toString()
+        .put("customEch", customEch).put("echConfigList", echConfigList)
+        .put("echDns", echDns).put("echDomain", echDomain)
+        .put("tlsCiphers", tlsCiphers).put("disableGrease", disableGrease)
+        .put("enrollAddress", enrollAddress).toString()
 
     companion object {
         fun decode(raw: String?): TlsOptions = runCatching {
@@ -57,6 +73,11 @@ data class TlsOptions(
                 splitSni = json.optBoolean("splitSni", true),
                 customEch = json.optBoolean("customEch", false),
                 echConfigList = json.optString("echConfigList"),
+                echDns = json.optString("echDns"),
+                echDomain = json.optString("echDomain"),
+                tlsCiphers = json.optString("tlsCiphers"),
+                disableGrease = json.optBoolean("disableGrease", false),
+                enrollAddress = json.optString("enrollAddress"),
             )
         }.getOrDefault(TlsOptions())
 
@@ -67,6 +88,19 @@ data class TlsOptions(
             val high = values.last().toIntOrNull() ?: return false
             return low in minimum..maximum && high in low..maximum
         }
+
+        private fun validDomain(raw: String): Boolean = raw.trimEnd('.').let { name ->
+            name.isNotEmpty() && name.length <= 253 && name.split('.').all { label ->
+                label.length in 1..63 && label.all { it.isLetterOrDigit() && it.code < 128 || it == '-' || it == '_' }
+            }
+        }
+
+        private fun validResolver(raw: String): Boolean = runCatching {
+            val uri = java.net.URI(raw.substringBefore('@'))
+            uri.scheme in setOf("udp", "tcp", "https") && !uri.host.isNullOrEmpty() &&
+                uri.port in -1..65535 && uri.port != 0 && uri.userInfo == null && raw.length <= 4096 &&
+                raw.none(Char::isISOControl)
+        }.getOrDefault(false)
 
         fun validEchConfigList(raw: String): Boolean = runCatching {
             val bytes = Base64.getDecoder().decode(raw.filterNot(Char::isWhitespace))

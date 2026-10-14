@@ -10,8 +10,8 @@ and the GPL-3.0 parts remain GPL-3.0.
 ## Aether — AGPL-3.0
 
 The native engine is vendored from `CluvexStudio/Aether` revision
-`0e6f6a52`, released as `v2.0.0`, with four changes carried from `v2.1.0`
-(listed in `native/aether/UPSTREAM.md`). The original license and revision
+`6175b67df370ab856bcee07fe85b524031903956`, released as `v2.3.0`, with
+Android adaptations listed in `native/aether/UPSTREAM.md`. The original license and revision
 record are included under `native/aether/`.
 
 The WARP WireGuard-over-MASQUE orchestration is adapted from
@@ -33,8 +33,9 @@ that purpose, and the omitted file does not build against this tree.
 
 Upstream's optional `tor` feature is also not built. The six crates behind it --
 `arti-client`, `tor-chanmgr`, `tor-rtcompat`, `tokio-util`, `liblzma` and
-`tracing-subscriber` -- are absent from `aether/Cargo.toml` and from the
-lockfile, so none of them ships. `aether/src/tor.rs` and `aether/src/bridges.rs`
+`tracing-subscriber` -- have no Tor feature declarations in `aether/Cargo.toml`,
+so the Tor engine is not built. Some helpers, such as `tokio-util`, are also
+transitive dependencies of unrelated HTTP code. `aether/src/tor.rs` and `aether/src/bridges.rs`
 are vendored for completeness and compile to their feature-off stubs; this app
 reaches tor through `info.guardianproject:tor-android` instead. See
 `docs/AETHER_2_0_MERGE.md` for why.
@@ -140,9 +141,10 @@ licence; the GPL-3.0 text is in [licenses/GPL-3.0.txt](licenses/GPL-3.0.txt).
 
 ## BoringSSL Rust bindings — MIT
 
-`boring-sys` 4.22.0 is vendored under `native/third-party/boring-sys` under its
-MIT license. WhiteAesther changes only its build script to normalize `.exe`
-paths from cargo-ndk on Windows; BoringSSL runtime and crypto source are not
+`boring-sys` 5.2.0 is vendored under `native/third-party/boring-sys` under its
+MIT license. WhiteAesther normalizes `.exe` paths from cargo-ndk on Windows and
+quotes the generated NASM include path in BoringSSL's CMake file so host builds
+work in directories containing spaces. Cryptographic runtime source is not
 modified. Details are in `native/third-party/README.md`.
 
 ## Vazirmatn — SIL Open Font License 1.1

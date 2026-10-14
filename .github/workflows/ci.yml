@@ -45,6 +45,8 @@ jobs:
 
       - name: Test and lint the native bridge
         run: |
+          # Engine tests include local TLS/DNS servers and process-wide settings.
+          cargo test --manifest-path native/aether/aether/Cargo.toml --locked --lib -- --test-threads=1
           cargo test --manifest-path native/android-bridge/Cargo.toml --locked
           cargo clippy --manifest-path native/android-bridge/Cargo.toml --locked --all-targets -- -D warnings
 
@@ -98,6 +100,8 @@ jobs:
             apk="${apk_dir}/app-preview-${abi}-debug.apk"
             test -f "$apk"
             jar tf "$apk" | grep -F "lib/${abi}/libwhiteaesther_core.so"
+            python3 tools/verify_native_dependencies.py \
+              --ndk "${ANDROID_HOME}/ndk/29.0.14206865" "$apk"
             # The Psiphon carrier, both halves of it. The tunnel core is a
             # native library that has to match the ABI, and the server list is
             # an asset a fetch step can silently skip -- either one missing is
@@ -119,6 +123,8 @@ jobs:
 
           universal="${apk_dir}/app-preview-universal-debug.apk"
           test -f "$universal"
+          python3 tools/verify_native_dependencies.py \
+            --ndk "${ANDROID_HOME}/ndk/29.0.14206865" "$universal"
           for abi in armeabi-v7a arm64-v8a x86_64; do
             jar tf "$universal" | grep -F "lib/${abi}/libwhiteaesther_core.so"
           done

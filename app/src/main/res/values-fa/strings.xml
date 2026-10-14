@@ -151,7 +151,7 @@
     <string name="split_the_tls_handshake">تکه‌تکه کردن دست‌دهی TLS</string>
     <string name="sends_the_first_packet_in_pieces_so">نخستین بسته را تکه‌تکه می‌فرستد تا فیلترینگی که نام سایت را می‌خواند نتواند ببیندش. جایی که اتصال‌ها مسدود می‌شوند این را روشن کنید.</string>
     <string name="encrypted_client_hello">سلام اولیهٔ رمزگذاری‌شده</string>
-    <string name="hides_which_site_is_being_reached_only">پنهان می‌کند که به کدام سایت وصل می‌شوید. فقط جایی کار می‌کند که شبکهٔ آن طرف پشتیبانی کند.</string>
+    <string name="hides_which_site_is_being_reached_only">نام سرور تونل و ثبت کلید را پنهان می‌کند. سرور باید از ECH پشتیبانی کند.</string>
     <string name="dns_resolvers">سرورهای نام</string>
     <string name="fixed_in_the_engine_not_configurable_yet">در هسته ثابت است. هنوز قابل تنظیم نیست.</string>
     <string name="default_padding_tuned_for_ordinary_filtering">پیش‌فرض. لایه‌گذاری تنظیم‌شده برای فیلترینگ معمولی.</string>
@@ -566,10 +566,22 @@
     <string name="tls_split_sni">تقسیم در محل نام سرور</string>
     <string name="tls_fragment_scope">تقسیم برای H2، از جمله تونل بیرونی H2 در وایرگارد روی MASQUE اعمال می‌شود. حالت خودکار پیش‌تنظیم‌های بازیابی را نگه می‌دارد.</string>
     <string name="tls_ech_config">ECHConfigList با کدگذاری Base64</string>
-    <string name="tls_ech_scope">ECH فعلاً برای H3 است. حالت خودکار تنظیمات را دریافت می‌کند؛ حالت سفارشی از فهرست واردشده استفاده می‌کند. سرور باید ECH را بپذیرد.</string>
+    <string name="tls_ech_scope">ECH برای H3، H2، ثبت کلید WARP و تونل بیرونی WOM اعمال می‌شود. اگر کلید دریافت یا پذیرفته نشود، اتصال درخواست‌شده با ECH متوقف می‌شود. resolver خالی از https://1.1.1.1/dns-query و دامنهٔ خالی از cloudflare-ech.com استفاده می‌کند.</string>
     <string name="tls_fragment_size_error">اندازه قطعه را از ۱ تا ۱۶۳۸۴، به صورت عدد یا بازه صعودی وارد کنید.</string>
     <string name="tls_fragment_delay_error">تأخیر را از ۰ تا ۱۰۰ میلی‌ثانیه، به صورت عدد یا بازه صعودی وارد کنید.</string>
     <string name="tls_ech_config_error">یک ECHConfigList معتبر با کدگذاری Base64 وارد کنید یا حالت خودکار را انتخاب کنید.</string>
     <string name="use_carriers_only">فقط مسیرهای انتخاب‌شده</string>
     <string name="empty_exit_chain_hint">زنجیره خروجی اختیاری روشن است اما هیچ نودی ندارد. اشتراک اضافه کنید یا آن را خاموش کنید تا فقط مسیرهای انتخاب‌شده استفاده شوند.</string>
+    <string name="tls_ech_dns">resolver کلید ECH (udp://، tcp:// یا https://)</string>
+    <string name="tls_ech_domain">دامنهٔ کلید ECH (پیش‌فرض: cloudflare-ech.com)</string>
+    <string name="tls_ciphers">مجموعهٔ رمزهای TLS 1.2</string>
+    <string name="tls_key_groups">گروه‌های تبادل کلید TLS</string>
+    <string name="tls_disable_grease">غیرفعال‌کردن GREASE</string>
+    <string name="tls_enroll_address">آدرس ثبت کلید WARP (اختیاری، host:port)</string>
+    <string name="tls_fingerprint_scope">برای پیش‌فرض هسته، فیلدها را خالی بگذارید. تنظیمات دستی TLS برای ثبت کلید و دریافت ECH هم اعمال می‌شوند. بررسی pin گواهی فعال می‌ماند.</string>
+    <string name="tls_ech_domain_error">دامنهٔ معتبر کلید ECH را وارد کنید یا فیلد را خالی بگذارید.</string>
+    <string name="tls_ech_dns_error">یک resolver معتبر udp://، tcp:// یا https:// وارد کنید یا فیلد را خالی بگذارید.</string>
+    <string name="tls_options_error">تنظیمات TLS باید کوتاه و تک‌خطی باشند.</string>
+    <string name="scan_verified">endpointهای تأییدشده</string>
+    <string name="scan_verified_description">gatewayهای شناخته‌شده را ترجیح می‌دهد و در صورت امکان، دو گام تونل تو‌در‌تو را در محدوده‌های متفاوت انتخاب می‌کند.</string>
 </resources>

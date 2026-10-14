@@ -159,6 +159,16 @@ struct BridgeConfig {
     /// TLS key groups, which change the shape of the handshake.
     #[serde(default)]
     tls_groups: String,
+    #[serde(default)]
+    tls_ciphers: String,
+    #[serde(default)]
+    disable_grease: bool,
+    #[serde(default)]
+    ech_dns: String,
+    #[serde(default)]
+    ech_domain: String,
+    #[serde(default)]
+    enroll_address: String,
     peer: Option<String>,
     #[serde(default)]
     peer_fallback: bool,
@@ -323,6 +333,22 @@ impl BridgeConfig {
                 return Err("echConfigList has an invalid ECHConfigList length".into());
             }
         }
+        if config.encrypted_hello {
+            if !config.ech_dns.trim().is_empty() {
+                aether::dns::EchDns::parse(config.ech_dns.trim())
+                    .map_err(|reason| format!("echDns: {reason}"))?;
+            }
+            if !config.ech_domain.trim().is_empty()
+                && !aether::dns::valid_domain(config.ech_domain.trim())
+            {
+                return Err("echDomain must be a DNS name".into());
+            }
+        }
+        if !config.enroll_address.trim().is_empty()
+            && aether::dns::host_and_port(config.enroll_address.trim(), 443).is_none()
+        {
+            return Err("enrollAddress must be an IP address or host with an optional port".into());
+        }
         if let Some(peer) = config.peer.as_deref() {
             let address = peer
                 .parse::<SocketAddr>()
@@ -481,6 +507,35 @@ impl BridgeConfig {
         set_or_clear("AETHER_UPSTREAM", &self.upstream_proxy);
         set_or_clear("AETHER_DNS", &self.dns_servers);
         set_or_clear("AETHER_TLS_GROUPS", &self.tls_groups);
+        set_or_clear("AETHER_TLS_CIPHERS", &self.tls_ciphers);
+        set_or_clear(
+            "AETHER_DISABLE_GREASE",
+            if self.disable_grease { "1" } else { "" },
+        );
+        set_or_clear(
+            "AETHER_ECH_DNS",
+            if self.encrypted_hello {
+                if self.ech_dns.trim().is_empty() {
+                    // H2 is also used where UDP, including DNS on port 53,
+                    // cannot leave. Bootstrap its key over protected HTTPS.
+                    "https://1.1.1.1/dns-query"
+                } else {
+                    &self.ech_dns
+                }
+            } else {
+                ""
+            },
+        );
+        set_or_clear(
+            "AETHER_ECH_DOMAIN",
+            if self.encrypted_hello {
+                &self.ech_domain
+            } else {
+                ""
+            },
+        );
+        set_or_clear("AETHER_ENROLL_ADDRESS", &self.enroll_address);
+        aether::account::forget_api_ech();
         set_or_clear("AETHER_ROUTE_BLOCK", &self.route_block);
         set_or_clear("AETHER_ROUTE_DIRECT", &self.route_direct);
         set_or_clear("AETHER_LOG_LEVEL", &self.log_level);
@@ -1308,7 +1363,23 @@ mod tests {
         // Pinned deliberately. The engine version crosses into the app's
         // diagnostics and its update notice, and an engine bump that nobody
         // noticed is one nobody tested on a phone either.
-        assert_eq!(aether::version(), "2.0.0");
+        assert_eq!(aether::version(), "2.3.0");
+    }
+
+    #[test]
+    fn registration_and_ech_lookup_addresses_are_validated_before_startup() {
+        assert!(BridgeConfig::parse(&config(r#", "encryptedHello":true,"echDns":"https://1.1.1.1/dns-query","echDomain":"cloudflare-ech.com","enrollAddress":"[2606:4700::1]:8443""#)).is_ok());
+        for extra in [
+            r#", "encryptedHello":true,"echDns":"http://resolver.example""#,
+            r#", "encryptedHello":true,"echDomain":"not a name""#,
+            r#", "enrollAddress":"localhost:0""#,
+        ] {
+            assert!(BridgeConfig::parse(&config(extra)).is_err(), "{extra}");
+        }
+        // Saved but disabled ECH fields must not prevent another protocol.
+        assert!(
+            BridgeConfig::parse(&config(r#", "encryptedHello":false,"echDns":"invalid""#)).is_ok()
+        );
     }
 
     #[test]

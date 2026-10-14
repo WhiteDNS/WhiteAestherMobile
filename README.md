@@ -38,6 +38,8 @@ sideloaded APK.
 > **راهنمای فارسی:** [docs/GUIDE.fa.md](docs/GUIDE.fa.md) -- installing, first run, and what to change when a
 > network blocks the connection.
 
+> **تنظیمات هستهٔ ۲.۳:** [آموزش TLS، ECH و Verified edges](docs/GUIDE.fa.md#aether-23) — defaults, input examples, manual testing and restoring previous settings.
+
 ## First run
 
 **1. Leave Coverage on "Whole device".** Under **Traffic**, this is the default
@@ -125,8 +127,8 @@ cd WhiteAestherMobile
 ./gradlew assembleStableDebug
 ```
 
-Needs JDK 21, Android SDK 36 with NDK `29.0.14206865` and CMake 3.22.1, and Rust
-1.88.0 with the Android targets plus `cargo-ndk`. The Gradle build compiles the
+Needs JDK 21, Android SDK 37.2 with NDK `29.0.14206865` and CMake 3.22.1, and Rust
+1.98.0 with the Android targets plus `cargo-ndk`. The Gradle build compiles the
 Rust bridge itself.
 
 `./gradlew :app:compileStableDebugKotlin` skips the native build and is the fast

@@ -19,6 +19,10 @@ pub struct Proof {
     pub fragment_tls: bool,
     #[serde(default)]
     pub ech: bool,
+    /// Digest of TLS, ECH lookup and record-shaping settings. Empty in files
+    /// written before 2.3, which remain worth one validation attempt.
+    #[serde(default)]
+    pub fingerprint: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -29,7 +33,17 @@ pub struct LastConnection {
     pub profile: String,
     #[serde(default)]
     pub proof: Proof,
+    #[serde(default)]
+    pub recent: Vec<RecentPeer>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecentPeer {
+    pub peer: String,
+    pub proof: Proof,
+}
+
+pub const RECENT_CAP: usize = 8;
 
 impl LastConnection {
     /// Whether this memory is about the attempt being made now.
@@ -45,12 +59,35 @@ impl LastConnection {
         self.proof.transport == now.transport
             && self.proof.fragment_tls == now.fragment_tls
             && self.proof.ech == now.ech
+            && (self.proof.fingerprint.is_empty() || self.proof.fingerprint == now.fingerprint)
+    }
+
+    pub fn candidates(&self, proof: &Proof) -> Vec<Self> {
+        let mut seen = std::collections::HashSet::new();
+        std::iter::once(RecentPeer {
+            peer: self.peer.clone(),
+            proof: self.proof.clone(),
+        })
+        .chain(self.recent.iter().cloned())
+        .map(|entry| Self {
+            peer: entry.peer,
+            profile: entry.proof.profile.clone(),
+            proof: entry.proof,
+            recent: Vec::new(),
+        })
+        .filter(|entry| entry.applies_to(proof) && seen.insert(entry.peer.clone()))
+        .take(RECENT_CAP)
+        .collect()
     }
 }
 
 pub fn load(path: &str) -> Option<LastConnection> {
     let text = std::fs::read_to_string(path).ok()?;
-    toml::from_str(&text).ok()
+    let mut connection: LastConnection = toml::from_str(&text).ok()?;
+    if connection.proof.profile.is_empty() {
+        connection.proof.profile = connection.profile.clone();
+    }
+    Some(connection)
 }
 
 /// Records an endpoint that has carried traffic, and what carried it.
@@ -61,10 +98,33 @@ pub fn load(path: &str) -> Option<LastConnection> {
 /// then failed to build a session was stored as the last good one, and the next
 /// connect led with it.
 pub fn save(path: &str, peer: &str, proof: &Proof) {
+    let mut recent = vec![RecentPeer {
+        peer: peer.to_string(),
+        proof: proof.clone(),
+    }];
+    if let Some(previous) = load(path) {
+        let entries = std::iter::once(RecentPeer {
+            peer: previous.peer,
+            proof: previous.proof,
+        })
+        .chain(previous.recent);
+        for entry in entries {
+            if recent.len() == RECENT_CAP {
+                break;
+            }
+            if !recent
+                .iter()
+                .any(|kept| kept.peer == entry.peer && kept.proof == entry.proof)
+            {
+                recent.push(entry);
+            }
+        }
+    }
     let conn = LastConnection {
         peer: peer.to_string(),
         profile: proof.profile.clone(),
         proof: proof.clone(),
+        recent,
     };
     match toml::to_string_pretty(&conn) {
         Ok(text) => {
@@ -80,12 +140,41 @@ pub fn save(path: &str, peer: &str, proof: &Proof) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn history_is_bounded_and_does_not_reuse_a_different_tls_profile() {
+        let directory = std::env::temp_dir().join(format!(
+            "aether-history-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("lastconn.toml");
+        let path = path.to_str().unwrap();
+        let mut shape = proof("h2", true, true);
+        shape.fingerprint = "original".into();
+        for n in 1..=12 {
+            save(path, &format!("162.159.198.{n}:443"), &shape);
+        }
+        let cached = load(path).unwrap();
+        let candidates = cached.candidates(&shape);
+        assert_eq!(candidates.len(), RECENT_CAP);
+        assert_eq!(candidates[0].peer, "162.159.198.12:443");
+        assert_eq!(candidates[7].peer, "162.159.198.5:443");
+        shape.fingerprint = "changed".into();
+        assert!(cached.candidates(&shape).is_empty());
+        save(path, "162.159.198.20:443", &shape);
+        assert_eq!(load(path).unwrap().candidates(&shape).len(), 1);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
     fn proof(transport: &str, fragment_tls: bool, ech: bool) -> Proof {
         Proof {
             transport: transport.to_string(),
             profile: "firewall".to_string(),
             fragment_tls,
             ech,
+            fingerprint: String::new(),
         }
     }
 
@@ -94,6 +183,7 @@ mod tests {
             peer: "162.159.198.2:443".to_string(),
             profile: proof.profile.clone(),
             proof,
+            recent: Vec::new(),
         }
     }
 
@@ -123,6 +213,7 @@ mod tests {
             peer: "162.159.198.2:443".to_string(),
             profile: "firewall".to_string(),
             proof: Proof::default(),
+            recent: Vec::new(),
         };
         assert!(old.applies_to(&proof("h3", true, true)));
     }

@@ -1,5 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.gradle.api.tasks.Exec
+import org.gradle.api.tasks.Sync
 import org.gradle.api.provider.ValueSource
 import org.gradle.api.provider.ValueSourceParameters
 import org.gradle.process.ExecOperations
@@ -47,6 +48,14 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val androidNdkVersion = "29.0.14206865"
+// Native compilation and runtime packaging must use the same NDK.
+val androidSdkHome = extensions.getByType<ApplicationAndroidComponentsExtension>()
+    .sdkComponents.sdkDirectory.map { it.asFile.absolutePath.replace('\\', '/') }
+val androidNdkHome = providers.environmentVariable("ANDROID_NDK_HOME")
+    .orElse(androidSdkHome.map { "$it/ndk/$androidNdkVersion" })
+    .map { it.replace('\\', '/') }
+
 android {
     namespace = "com.whitedns.whiteaesther"
     // 37 because tor-android requires it, and only for compiling:
@@ -54,7 +63,7 @@ android {
     // change for every permission and background rule in the app, and it
     // is not something to carry in on the back of a dependency bump.
     compileSdk = 37
-    ndkVersion = "29.0.14206865"
+    ndkVersion = androidNdkVersion
 
     defaultConfig {
         applicationId = "com.whitedns.whiteaesther"
@@ -186,6 +195,11 @@ android {
     }
 
     sourceSets {
+        // BoringSSL's Android build links libc++ dynamically. cargo-ndk copies
+        // our cdylib, but does not copy its NDK runtime dependencies.
+        getByName("main").jniLibs.directories.add(
+            layout.buildDirectory.dir("generated/cppJniLibs").get().asFile.absolutePath,
+        )
         getByName("debug").jniLibs.directories.add(
             layout.buildDirectory.dir("generated/rustJniLibs/debug").get().asFile.absolutePath,
         )
@@ -270,11 +284,8 @@ fun registerCargoNdkTask(name: String, release: Boolean) = tasks.register<Exec>(
     val outputDir = layout.buildDirectory.dir("generated/rustJniLibs/$outputVariant")
     // Resolve the same SDK as AGP (including local.properties). A different
     // ANDROID_HOME used to switch CMake's compiler under an existing NDK cache.
-    val androidHome = project.extensions.getByType<ApplicationAndroidComponentsExtension>()
-        .sdkComponents.sdkDirectory.map { it.asFile.absolutePath.replace('\\', '/') }
-    val ndkHome = providers.environmentVariable("ANDROID_NDK_HOME")
-        .orElse(androidHome.map { "$it/ndk/29.0.14206865" })
-        .map { it.replace('\\', '/') }
+    val androidHome = androidSdkHome
+    val ndkHome = androidNdkHome
     val cmakeBin = androidHome.map { "$it/cmake/3.22.1/bin".replace('\\', '/') }
     val clangBin = ndkHome.map {
         "$it/toolchains/llvm/prebuilt/windows-x86_64/bin"
@@ -337,6 +348,32 @@ fun registerCargoNdkTask(name: String, release: Boolean) = tasks.register<Exec>(
 val cargoBuildAndroidDebug = registerCargoNdkTask("cargoBuildAndroidDebug", release = false)
 val cargoBuildAndroidRelease = registerCargoNdkTask("cargoBuildAndroidRelease", release = true)
 
+val stageAndroidCppRuntime = tasks.register<Sync>("stageAndroidCppRuntime") {
+    val host = when {
+        System.getProperty("os.name").startsWith("Windows", ignoreCase = true) -> "windows-x86_64"
+        System.getProperty("os.name").startsWith("Mac", ignoreCase = true) -> "darwin-x86_64"
+        else -> "linux-x86_64"
+    }
+    val triples = mapOf(
+        "armeabi-v7a" to "arm-linux-androideabi",
+        "arm64-v8a" to "aarch64-linux-android",
+        "x86_64" to "x86_64-linux-android",
+    )
+    androidAbis.forEach { abi ->
+        val triple = requireNotNull(triples[abi]) { "Unsupported Android ABI: $abi" }
+        from(androidNdkHome.map { ndk ->
+            file("$ndk/toolchains/llvm/prebuilt/$host/sysroot/usr/lib/$triple/libc++_shared.so")
+                .also { require(it.isFile) { "Missing NDK C++ runtime: $it" } }
+        }) {
+            into(abi)
+        }
+    }
+    inputs.property("androidAbis", androidAbis)
+    into(layout.buildDirectory.dir("generated/cppJniLibs"))
+}
+
+tasks.matching { it.name.matches(Regex("merge(?:Preview|Stable)(?:Debug|Release)JniLibFolders")) }
+    .configureEach { dependsOn(stageAndroidCppRuntime) }
 tasks.matching { it.name.matches(Regex("merge(?:Preview|Stable)DebugJniLibFolders")) }
     .configureEach { dependsOn(cargoBuildAndroidDebug) }
 tasks.matching { it.name.matches(Regex("merge(?:Preview|Stable)ReleaseJniLibFolders")) }

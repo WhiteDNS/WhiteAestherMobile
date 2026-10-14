@@ -11,9 +11,9 @@
 
 [package]
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.85"
 name = "boring-sys"
-version = "4.22.0"
+version = "5.2.0"
 authors = [
     "Alex Crichton <alex@alexcrichton.com>",
     "Steven Fackler <sfackler@gmail.com>",
@@ -26,33 +26,25 @@ include = [
     "/*.toml",
     "/LICENSE-MIT",
     "/cmake/*.cmake",
-    "/deps/boringssl/src/util/32-bit-toolchain.cmake",
     "/deps/boringssl/**/*.[chS]",
+    "/deps/boringssl/**/*.inc",
     "/deps/boringssl/**/*.asm",
-    "/deps/boringssl/sources.json",
-    "/deps/boringssl/src/crypto/obj/obj_mac.num",
-    "/deps/boringssl/src/crypto/obj/objects.txt",
+    "/deps/boringssl/**/*.pl",
+    "/deps/boringssl/**/*.go",
+    "/deps/boringssl/**/*.cmake",
+    "/deps/boringssl/**/go.mod",
+    "/deps/boringssl/**/go.sum",
+    "/deps/boringssl/crypto/obj/obj_mac.num",
+    "/deps/boringssl/crypto/obj/objects.txt",
+    "/deps/boringssl/crypto/err/*.errordata",
     "/deps/boringssl/**/*.bzl",
-    "/deps/boringssl/src/**/*.cc",
+    "/deps/boringssl/**/*.cc",
+    "/deps/boringssl/**/*.cpp",
+    "/deps/boringssl/**/*.in",
     "/deps/boringssl/**/CMakeLists.txt",
     "/deps/boringssl/**/sources.cmake",
+    "/deps/boringssl/**/util/go_tests.txt",
     "/deps/boringssl/LICENSE",
-    "/deps/boringssl-fips/src/util/32-bit-toolchain.cmake",
-    "/deps/boringssl-fips/**/*.[chS]",
-    "/deps/boringssl-fips/**/*.asm",
-    "/deps/boringssl-fips/**/*.pl",
-    "/deps/boringssl-fips/**/*.go",
-    "/deps/boringssl-fips/**/go.mod",
-    "/deps/boringssl-fips/**/go.sum",
-    "/deps/boringssl-fips/sources.json",
-    "/deps/boringssl-fips/crypto/obj/obj_mac.num",
-    "/deps/boringssl-fips/crypto/obj/objects.txt",
-    "/deps/boringssl-fips/crypto/err/*.errordata",
-    "/deps/boringssl-fips/**/*.bzl",
-    "/deps/boringssl-fips/**/*.cc",
-    "/deps/boringssl-fips/**/CMakeLists.txt",
-    "/deps/boringssl-fips/**/sources.cmake",
-    "/deps/boringssl-fips/LICENSE",
     "/build/*",
     "/src",
     "/patches",
@@ -65,6 +57,13 @@ autobenches = false
 description = "FFI bindings to BoringSSL"
 documentation = "https://docs.rs/boring-sys"
 readme = "README.md"
+keywords = [
+    "tls",
+    "boringssl",
+    "openssl",
+    "fips",
+    "ml-kem",
+]
 categories = [
     "cryptography",
     "external-ffi-bindings",
@@ -75,8 +74,8 @@ repository = "https://github.com/cloudflare/boring"
 [package.metadata.docs.rs]
 features = [
     "rpk",
-    "pq-experimental",
     "underscore-wildcards",
+    "mlkem",
 ]
 rustdoc-args = [
     "--cfg",
@@ -84,10 +83,10 @@ rustdoc-args = [
 ]
 
 [features]
+allow-crl-extensions-bad-version = []
 fips = []
-fips-link-precompiled = []
-fips-precompiled = []
-pq-experimental = []
+mlkem = []
+relax-cert-validation = []
 rpk = []
 underscore-wildcards = []
 

@@ -153,7 +153,7 @@
     <string name="split_the_tls_handshake">Split the TLS handshake</string>
     <string name="sends_the_first_packet_in_pieces_so">Sends the first packet in pieces so filtering that reads the site name cannot see it. Turn this on where connections are blocked.</string>
     <string name="encrypted_client_hello">Encrypted Client Hello</string>
-    <string name="hides_which_site_is_being_reached_only">Hides which site is being reached. Only works where the network on the other end supports it.</string>
+    <string name="hides_which_site_is_being_reached_only">Hides the tunnel and registration server names. The server must support ECH.</string>
     <string name="dns_resolvers">DNS resolvers</string>
     <string name="fixed_in_the_engine_not_configurable_yet">Fixed in the engine. Not configurable yet.</string>
     <string name="default_padding_tuned_for_ordinary_filtering">Default. Padding tuned for ordinary filtering.</string>
@@ -572,10 +572,22 @@
     <string name="tls_split_sni">Split at the server name</string>
     <string name="tls_fragment_scope">Splitting applies to H2, including the outer H2 tunnel of WireGuard over MASQUE. Automatic keeps the recovery presets available.</string>
     <string name="tls_ech_config">Base64 ECHConfigList</string>
-    <string name="tls_ech_scope">ECH currently applies to H3. Automatic discovers the configuration; Custom uses the supplied list. The server must accept ECH.</string>
+    <string name="tls_ech_scope">ECH applies to H3, H2, WARP registration and the outer WOM tunnel. A requested ECH connection stops if its key cannot be obtained or accepted. An empty resolver uses https://1.1.1.1/dns-query; an empty domain uses cloudflare-ech.com.</string>
     <string name="tls_fragment_size_error">Enter fragment bytes from 1 to 16384, as a value or ascending range.</string>
     <string name="tls_fragment_delay_error">Enter a delay from 0 to 100 ms, as a value or ascending range.</string>
     <string name="tls_ech_config_error">Paste a valid Base64 ECHConfigList, or select Automatic.</string>
     <string name="use_carriers_only">Use carriers only</string>
     <string name="empty_exit_chain_hint">The optional exit-node chain is enabled but has no nodes. Add a subscription, or turn it off to use your selected carriers.</string>
+    <string name="tls_ech_dns">ECH resolver (udp://, tcp:// or https://)</string>
+    <string name="tls_ech_domain">ECH key domain (default: cloudflare-ech.com)</string>
+    <string name="tls_ciphers">TLS 1.2 cipher suites</string>
+    <string name="tls_key_groups">TLS key exchange groups</string>
+    <string name="tls_disable_grease">Disable GREASE</string>
+    <string name="tls_enroll_address">WARP registration address (optional host:port)</string>
+    <string name="tls_fingerprint_scope">Leave fields empty to use the engine defaults. Manual TLS choices also apply to registration and ECH discovery. Certificate pinning remains enabled.</string>
+    <string name="tls_ech_domain_error">Enter a valid domain for the ECH key, or leave it empty.</string>
+    <string name="tls_ech_dns_error">Enter a valid udp://, tcp:// or https:// resolver, or leave it empty.</string>
+    <string name="tls_options_error">TLS options must be short single-line values.</string>
+    <string name="scan_verified">Verified edges</string>
+    <string name="scan_verified_description">Prefers known gateways and separates nested hops when possible.</string>
 </resources>

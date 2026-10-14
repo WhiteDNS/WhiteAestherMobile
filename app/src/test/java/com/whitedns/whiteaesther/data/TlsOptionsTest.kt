@@ -7,6 +7,36 @@ import org.junit.Test
 import java.util.Base64
 
 class TlsOptionsTest {
+    @Test fun newTlsOptionsSurviveStorageAndAutomaticH2Recovery() {
+        val options = TlsOptions(echDns = "https://1.1.1.1/dns-query", echDomain = "cloudflare-ech.com",
+            tlsCiphers = "ECDHE-RSA-AES128-GCM-SHA256", disableGrease = true, enrollAddress = "188.114.97.6:8443")
+        assertEquals(options, TlsOptions.decode(options.encode()))
+        val config = JSONObject().put("encryptedHello", true)
+        options.applyTo(config)
+        val recovered = JSONObject(AutoPlanner.engineConfig(config.toString(), AutoRoute.AETHER_H2_ECH, false))
+        assertEquals("h2", recovered.getString("transport"))
+        assertEquals(options.echDns, recovered.getString("echDns"))
+        assertEquals(options.tlsCiphers, recovered.getString("tlsCiphers"))
+        assertTrue(recovered.getBoolean("disableGrease"))
+        assertEquals(AutoRoute.AETHER_H2_ECH, AutoRoute.ofEngineConfig(recovered.toString()))
+        assertEquals(45_000L, AutoPlanner.budgetMs(AutoRoute.AETHER_H2_ECH))
+        val shaped = JSONObject(recovered.toString()).put("helloShape", "records").put("fragmentMode", "records")
+        val remembered = AutoRoute.ofEngineConfig(shaped.toString())
+        assertEquals(AutoRoute.AETHER_H2_RECORDS, remembered)
+        val replayed = JSONObject(AutoPlanner.engineConfig(shaped.toString(), remembered, false))
+        assertEquals("records", replayed.getString("helloShape"))
+        assertTrue(replayed.getBoolean("encryptedHello"))
+    }
+
+    @Test fun echResolverAndDomainAreValidatedOnlyWhenEnabled() {
+        val invalid = TlsOptions(echDns = "http://resolver.example", echDomain = "not a domain")
+        assertNull(invalid.validationError(false, false))
+        assertEquals(R.string.tls_ech_domain_error, invalid.validationError(false, true))
+        assertEquals(R.string.tls_ech_dns_error, invalid.copy(echDomain = "").validationError(false, true))
+        for (resolver in listOf("udp://1.1.1.1", "tcp://[2606:4700:4700::1111]:53", "https://1.1.1.1/dns-query")) {
+            assertNull(TlsOptions(echDns = resolver).validationError(false, true))
+        }
+    }
     private val list = Base64.getEncoder().encodeToString(byteArrayOf(0, 5, -2, 13, 0, 1, 1))
 
     @Test fun legacySettingsRetainAutomaticDiscovery() {
