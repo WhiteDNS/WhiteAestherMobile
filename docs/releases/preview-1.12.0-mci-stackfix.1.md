@@ -12,11 +12,14 @@
 
 ## نصب و گزارش تست
 
-APKهای این انتشار **Preview** هستند و کنار نسخهٔ اصلی نصب می‌شوند. نسخهٔ داخل برنامه `1.12.0-native-stackfix-20261014-preview` است.
+APKهای این انتشار در **GitHub Actions** از سورس تگ انتشار ساخته می‌شوند و با کلید رسمی انتشار امضا می‌شوند. این فایل‌ها روی نسخهٔ اصلی نصب می‌شوند؛ نسخهٔ داخل برنامه `1.12.0-mci-stackfix.1` است.
 
-- `WhiteAesther-stackfix-arm64-v8a.apk`: برای گوشی‌های ARM64، از جمله Poco X7 Pro.
-- `WhiteAesther-stackfix-x86_64.apk`: برای شبیه‌سازهای x86_64، مانند LDPlayer.
-- `SHA256SUMS`: هش فایل‌های APK.
+- `WhiteAestherMobile-1.12.0-mci-stackfix.1-arm64-v8a.apk`: برای گوشی‌های ARM64، از جمله Poco X7 Pro.
+- `WhiteAestherMobile-1.12.0-mci-stackfix.1-armeabi-v7a.apk`: برای گوشی‌های ۳۲بیتی ARMv7.
+- `WhiteAestherMobile-1.12.0-mci-stackfix.1-x86_64.apk`: برای شبیه‌سازهای x86_64، مانند LDPlayer.
+- `WhiteAestherMobile-1.12.0-mci-stackfix.1-universal.apk`: شامل هر سه معماری.
+- `WhiteAestherMobile-1.12.0-mci-stackfix.1-bundle.aab`: باندل اندروید برای توزیع در فروشگاه.
+- `SHA256SUMS`: هش فایل‌های APK و AAB.
 
 تست استک کوچک، تست‌های پل بومی و HTTPS/دریافت هویت، و بررسی امضا و وابستگی‌های APK انجام شده‌اند. رفع کرش روی خود Poco و موفقیت اتصال روی همراه اول هنوز به گزارش کاربران نیاز دارد. لاگ ارسالی LDPlayer همچنین خطاهای جداگانهٔ SIGILL برای Snowflake/Lyrebird داشت.
 

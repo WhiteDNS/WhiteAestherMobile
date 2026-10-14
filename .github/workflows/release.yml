@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to build, for example v1.0.0
+        description: Existing release or preview tag, for example v1.0.0 or preview-1.0.0-test.1
         required: true
       quiet:
         description: >-
@@ -104,12 +104,16 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ inputs.tag || github.ref_name }}"
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-            echo "::error::Tag '$tag' is not vMAJOR.MINOR.PATCH."
+          if [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?)$ ]]; then
+            name="${BASH_REMATCH[1]}"
+          elif [[ "$tag" =~ ^preview-([0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+)$ ]]; then
+            name="${BASH_REMATCH[1]}"
+          else
+            echo "::error::Tag '$tag' is not a release or preview version."
             exit 1
           fi
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "name=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
           echo "code=$((100000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_OUTPUT"
 
       # The exit chain's engine is Go and is not built by Gradle: it needs its
@@ -253,10 +257,13 @@ jobs:
           # quickly hide it" is a race against every phone that checks in
           # between.
           quiet=""
-          if [[ "${{ inputs.quiet }}" == "true" ]]; then
-            quiet="--prerelease"
+          if [[ "${{ inputs.quiet }}" == "true" || "$tag" == preview-* || "${{ steps.version.outputs.name }}" == *-* ]]; then
+            quiet="--prerelease --latest=false"
           fi
           if gh release view "$tag" >/dev/null 2>&1; then
+            if [[ -n "$quiet" ]]; then
+              gh release edit "$tag" $quiet
+            fi
             gh release upload "$tag" release-assets/* --clobber
           else
             gh release create "$tag" release-assets/* \
