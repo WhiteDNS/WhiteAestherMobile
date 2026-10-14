@@ -1,7 +1,9 @@
 pub const API_URL: &str = "https://api.cloudflareclient.com";
 pub const API_VERSION: &str = "v0a4471";
 
-pub const CONNECT_SNI: &str = "consumer-masque.cloudflareclient.com";
+// Keep the visible TLS name separate from the CONNECT authority. The MASQUE
+// hostname is filtered on networks where ordinary Cloudflare HTTPS still works.
+pub const CONNECT_SNI: &str = "www.cloudflare.com";
 pub const L4_CONNECT_SNI: &str = "consumer-masque-proxy.cloudflareclient.com";
 pub const CONNECT_URI: &str = "https://cloudflareaccess.com";
 

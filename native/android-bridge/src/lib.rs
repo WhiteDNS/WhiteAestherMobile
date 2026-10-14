@@ -25,6 +25,9 @@ use tokio::sync::{mpsc, oneshot};
 const BRIDGE_VERSION: &str = "0.3.1";
 const PACKET_QUEUE: usize = 1_024;
 const SCAN_RESULT_LIMIT: usize = 6;
+// Android coroutine/JNI callers can have only a small native stack. Both the
+// root future and Tokio tasks need room for the engine's async call chains.
+const CORE_STACK_BYTES: usize = 8 << 20;
 
 #[derive(Default)]
 struct RunControl {
@@ -267,7 +270,7 @@ fn default_ip_scan() -> String {
 }
 
 fn default_transport() -> String {
-    "h3".into()
+    "h2".into()
 }
 
 fn default_noize() -> String {
@@ -523,7 +526,8 @@ impl BridgeConfig {
                     &self.ech_dns
                 }
             } else {
-                ""
+                // Automatic enrollment races ECH even when tunnel ECH is off.
+                "https://1.1.1.1/dns-query"
             },
         );
         set_or_clear(
@@ -771,8 +775,28 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("whiteaesther-core")
+        .thread_stack_size(CORE_STACK_BYTES)
         .build()
         .map_err(|error| format!("failed to start native runtime: {error}"))
+}
+
+/// Construct and poll engine futures on a native stack we own. Tokio's worker
+/// stack size does not apply to the thread calling Runtime::block_on.
+/// JNI references stay on the calling thread; only owned Rust data or scoped
+/// borrows cross this boundary, and the caller waits for cleanup to finish.
+fn core_thread<T: Send>(
+    name: &str,
+    work: impl FnOnce() -> Result<T, String> + Send,
+) -> Result<T, String> {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name(name.to_string())
+            .stack_size(CORE_STACK_BYTES)
+            .spawn_scoped(scope, work)
+            .map_err(|error| format!("failed to start {name}: {error}"))?
+            .join()
+            .map_err(|_| format!("{name} panicked"))?
+    })
 }
 
 #[no_mangle]
@@ -847,16 +871,18 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
             // the future is what actually ends provisioning and the endpoint
             // search inside it; without this the caller's deadline only stopped
             // it waiting, and the work went on behind whatever came next.
-            let prepared = runtime()?.block_on(async {
-                tokio::select! {
-                    biased;
-                    _ = until_cancelled(&PREPARE_CANCELLED) => {
-                        Err("route preparation was cancelled".to_string())
+            let prepared = core_thread("whiteaesther-prepare", || {
+                runtime()?.block_on(Box::pin(async {
+                    tokio::select! {
+                        biased;
+                        _ = until_cancelled(&PREPARE_CANCELLED) => {
+                            Err("route preparation was cancelled".to_string())
+                        }
+                        result = Box::pin(aether::prepare_embedded(&embedded)) => {
+                            result.map_err(|error| error.to_string())
+                        }
                     }
-                    result = aether::prepare_embedded(&embedded) => {
-                        result.map_err(|error| error.to_string())
-                    }
-                }
+                }))
             })?;
             Ok(response(
                 true,
@@ -909,16 +935,18 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
             let config = BridgeConfig::parse(&raw)?;
             config.apply_environment();
             let embedded = config.embedded(None)?;
-            let devices = runtime()?.block_on(async {
-                tokio::select! {
-                    biased;
-                    _ = until_cancelled(&PREPARE_CANCELLED) => {
-                        Err("provisioning was cancelled".to_string())
+            let devices = core_thread("whiteaesther-provision", || {
+                runtime()?.block_on(Box::pin(async {
+                    tokio::select! {
+                        biased;
+                        _ = until_cancelled(&PREPARE_CANCELLED) => {
+                            Err("provisioning was cancelled".to_string())
+                        }
+                        result = Box::pin(aether::provision_embedded(&embedded)) => {
+                            result.map_err(|error| error.to_string())
+                        }
                     }
-                    result = aether::provision_embedded(&embedded) => {
-                        result.map_err(|error| error.to_string())
-                    }
-                }
+                }))
             })?;
             Ok(response(true, serde_json::json!({ "devices": devices })))
         })()
@@ -952,13 +980,15 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
             let config = BridgeConfig::parse(&raw)?;
             config.apply_environment();
             let embedded = config.embedded(None)?;
-            let results = runtime()?
-                .block_on(aether::scan_embedded(
-                    &embedded,
-                    SCAN_RESULT_LIMIT,
-                    &SCAN_CANCELLED,
-                ))
-                .map_err(|error| error.to_string())?;
+            let results = core_thread("whiteaesther-scan", || {
+                runtime()?
+                    .block_on(Box::pin(aether::scan_embedded(
+                        &embedded,
+                        SCAN_RESULT_LIMIT,
+                        &SCAN_CANCELLED,
+                    )))
+                    .map_err(|error| error.to_string())
+            })?;
             Ok(response(
                 true,
                 serde_json::json!({
@@ -990,9 +1020,11 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
             let config = BridgeConfig::parse(&raw)?;
             config.apply_environment();
             let embedded = config.embedded(None)?;
-            let result = runtime()?
-                .block_on(aether::test_embedded_peer(&embedded))
-                .map_err(|error| error.to_string())?;
+            let result = core_thread("whiteaesther-test", || {
+                runtime()?
+                    .block_on(Box::pin(aether::test_embedded_peer(&embedded)))
+                    .map_err(|error| error.to_string())
+            })?;
             Ok(response(
                 true,
                 serde_json::json!({
@@ -1085,63 +1117,66 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
                 env.new_global_ref(listener)
                     .map_err(|error| error.to_string())?,
             );
-            let runtime = runtime()?;
-            let stop_rx = run_guard
-                .receiver
-                .take()
-                .expect("new run owns its receiver");
+            core_thread("whiteaesther-run", || {
+                let runtime = runtime()?;
+                let stop_rx = run_guard
+                    .receiver
+                    .take()
+                    .expect("new run owns its receiver");
 
-            let (endpoint, pump) = if config.mode == "tun" {
-                if tun_fd < 0 {
-                    return Err("TUN mode requires a valid file descriptor".into());
-                }
-                let (device_tx, device_rx) = mpsc::channel(PACKET_QUEUE);
-                let (tunnel_tx, tunnel_rx) = mpsc::channel(PACKET_QUEUE);
-                let pump = tun::TunPump::start(
-                    pending_tun.0.take().expect("validated descriptor"),
-                    device_tx,
-                    tunnel_rx,
-                )
-                .map_err(|error| format!("failed to start TUN pump: {error}"))?;
-                (
-                    aether::EmbeddedEndpoint::Tun {
-                        device_to_tunnel: device_rx,
-                        tunnel_to_device: tunnel_tx,
-                    },
-                    Some(pump),
-                )
-            } else {
-                drop(PendingTunDescriptor(pending_tun.0.take()));
-                (aether::EmbeddedEndpoint::Socks, None)
-            };
+                let (endpoint, pump) = if config.mode == "tun" {
+                    if tun_fd < 0 {
+                        return Err("TUN mode requires a valid file descriptor".into());
+                    }
+                    let (device_tx, device_rx) = mpsc::channel(PACKET_QUEUE);
+                    let (tunnel_tx, tunnel_rx) = mpsc::channel(PACKET_QUEUE);
+                    let pump = tun::TunPump::start(
+                        pending_tun.0.take().expect("validated descriptor"),
+                        device_tx,
+                        tunnel_rx,
+                    )
+                    .map_err(|error| format!("failed to start TUN pump: {error}"))?;
+                    (
+                        aether::EmbeddedEndpoint::Tun {
+                            device_to_tunnel: device_rx,
+                            tunnel_to_device: tunnel_tx,
+                        },
+                        Some(pump),
+                    )
+                } else {
+                    drop(PendingTunDescriptor(pending_tun.0.take()));
+                    (aether::EmbeddedEndpoint::Socks, None)
+                };
 
-            let (ready_tx, mut ready_rx) = oneshot::channel();
-            let outcome = runtime.block_on(async {
-                let mut engine = Box::pin(aether::run_embedded(embedded, endpoint, Some(ready_tx)));
-                let mut stop_rx = Box::pin(stop_rx);
-                tokio::select! {
-                    biased;
-                    _ = &mut stop_rx => Ok(()),
-                    result = &mut engine => result.map_err(|error| error.to_string()),
-                    ready = &mut ready_rx => {
-                        if ready.is_ok() {
-                            call_engine_ready(&vm, &listener)
-                                .map_err(|error| error.to_string())?;
-                        }
-                        tokio::select! {
-                            biased;
-                            _ = &mut stop_rx => Ok(()),
-                            result = &mut engine => result.map_err(|error| error.to_string()),
+                let (ready_tx, mut ready_rx) = oneshot::channel();
+                let outcome = runtime.block_on(Box::pin(async {
+                    let mut engine =
+                        Box::pin(aether::run_embedded(embedded, endpoint, Some(ready_tx)));
+                    let mut stop_rx = Box::pin(stop_rx);
+                    tokio::select! {
+                        biased;
+                        _ = &mut stop_rx => Ok(()),
+                        result = &mut engine => result.map_err(|error| error.to_string()),
+                        ready = &mut ready_rx => {
+                            if ready.is_ok() {
+                                call_engine_ready(&vm, &listener)
+                                    .map_err(|error| error.to_string())?;
+                            }
+                            tokio::select! {
+                                biased;
+                                _ = &mut stop_rx => Ok(()),
+                                result = &mut engine => result.map_err(|error| error.to_string()),
+                            }
                         }
                     }
+                }));
+                drop(runtime);
+                if let Some(pump) = pump {
+                    pump.stop();
                 }
-            });
-            drop(runtime);
-            if let Some(pump) = pump {
-                pump.stop();
-            }
-            outcome?;
-            Ok(response(true, serde_json::json!({"stopped": true})))
+                outcome?;
+                Ok(response(true, serde_json::json!({"stopped": true})))
+            })
         })()
         .unwrap_or_else(error_response);
         java_string(env, &result)
@@ -1213,6 +1248,67 @@ fn call_engine_ready(vm: &JavaVM, listener: &GlobalRef) -> jni::errors::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[inline(never)]
+    async fn stack_heavy_operation() -> u8 {
+        let mut buffer = [0u8; 1 << 20];
+        std::hint::black_box(&mut buffer);
+        let last = buffer.len() - 1;
+        buffer[last] = 42;
+        tokio::task::yield_now().await;
+        std::hint::black_box(buffer[last])
+    }
+
+    #[test]
+    fn a_small_jni_style_stack_can_drive_large_root_and_worker_futures() {
+        let caller = std::thread::Builder::new()
+            .stack_size(256 << 10)
+            .spawn(|| {
+                let caller_id = std::thread::current().id();
+                core_thread("whiteaesther-stack-test", || {
+                    assert_ne!(std::thread::current().id(), caller_id);
+                    let config = BridgeConfig::parse(&config(""))?.embedded(None)?;
+                    let prepare = Box::pin(aether::prepare_embedded(&config));
+                    // Construct the actual prepare future too, without polling
+                    // it or accessing the network or identity store.
+                    std::hint::black_box(&prepare);
+                    drop(prepare);
+                    runtime()?.block_on(Box::pin(async {
+                        let root = Box::pin(stack_heavy_operation()).await;
+                        let worker =
+                            tokio::spawn(async { Box::pin(stack_heavy_operation()).await })
+                                .await
+                                .map_err(|error| error.to_string())?;
+                        Ok((root, worker))
+                    }))
+                })
+            })
+            .unwrap();
+        assert_eq!(caller.join().unwrap().unwrap(), (42, 42));
+    }
+
+    #[test]
+    fn native_worker_returns_errors_after_its_cleanup_and_reports_panics() {
+        struct Guard<'a>(&'a AtomicBool);
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let cleaned = AtomicBool::new(false);
+        let error = core_thread::<()>("whiteaesther-error-test", || {
+            let _guard = Guard(&cleaned);
+            Err("cancelled".into())
+        })
+        .unwrap_err();
+        assert_eq!(error, "cancelled");
+        assert!(cleaned.load(Ordering::SeqCst));
+        assert!(
+            core_thread::<()>("whiteaesther-panic-test", || panic!("fixture"))
+                .unwrap_err()
+                .contains("panicked")
+        );
+    }
 
     fn config(extra: &str) -> String {
         format!(r#"{{"mode":"proxy","configPath":"aether.toml","listenPort":1819{extra}}}"#)

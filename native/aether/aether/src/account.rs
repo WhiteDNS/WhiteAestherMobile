@@ -448,6 +448,8 @@ pub fn check_enroll_address() -> Result<()> {
 /// core's TLS fingerprint (see `https`), offering the ECH key of --ech when it is given, through
 /// the upstream proxy when there is one. Retried on a transient answer, after as long as the API
 /// asks to wait when it does.
+/// Without explicit ECH or an enrollment address, authenticated raw, split and
+/// ECH handshakes race over TCP-reachable edges before one HTTP request is sent.
 async fn api_call(
     label: &str,
     method: &str,
@@ -457,9 +459,20 @@ async fn api_call(
     jwt: Option<&str>,
 ) -> Result<AccountData> {
     let (address, port) = enroll_address()?;
+    // Explicit ECH and enrollment addresses remain strict manual policies.
+    // Otherwise bootstrap all three methods without waiting for a failed direct call.
+    let adaptive = std::env::var("AETHER_ENROLL_ADDRESS")
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+        && std::env::var("AETHER_ECH")
+            .unwrap_or_default()
+            .trim()
+            .is_empty();
     // The system resolver looks a name up outside the socket mark; through the upstream proxy,
     // the proxy looks it up and only the marked connection to the proxy leaves.
     if crate::egress::mark() != 0
+        && !adaptive
         && crate::upstream::configured().is_none()
         && address.parse::<std::net::IpAddr>().is_err()
     {
@@ -501,7 +514,17 @@ async fn api_call(
             tokio::time::sleep(wait).await;
         }
 
-        let sent = crate::https::send(&request, &fingerprint, ech.as_mut(), API_TIMEOUT).await;
+        let sent = if adaptive {
+            match apifront::send(&request, &fingerprint, API_TIMEOUT).await {
+                Ok((response, key)) => {
+                    ech = key;
+                    Ok(response)
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            crate::https::send(&request, &fingerprint, ech.as_mut(), API_TIMEOUT).await
+        };
         if let Some(key) = &ech {
             // A key a server handed back is the one the later calls offer.
             remember_api_ech(key.clone());
@@ -510,39 +533,10 @@ async fn api_call(
         let response = match sent {
             Ok(response) => response,
             Err(error) => {
-                // The request never became an HTTP exchange at all: the name did
-                // not resolve, the connection was refused, or it was reset or
-                // timed out on the way out. Repeating it cannot change any of
-                // those, because what failed is the route rather than the
-                // answer -- and it used to be repeated four more times at twenty
-                // seconds each. That is a hundred seconds spent before the
-                // camouflaged route was allowed to start, on exactly the
-                // networks where the camouflaged route is the only one that can
-                // work. Measured on a phone in Iran: 18:13:26 to 18:15:08.
-                //
-                // The retry ladder below is kept for the answers that ask for
-                // one -- 429, 5xx and Retry-After -- because those did reach
-                // Cloudflare and are worth asking again.
-                log::warn!(
-                    "[!] {label}: the direct route did not complete a request ({error}); \
-                     handing over to the camouflaged route rather than repeating it"
-                );
-                if ech.is_none()
-                    && std::env::var("AETHER_ENROLL_ADDRESS")
-                        .unwrap_or_default()
-                        .trim()
-                        .is_empty()
-                {
-                    return fallback_call(
-                        label,
-                        method,
-                        path,
-                        body.map(<[u8]>::to_vec),
-                        bearer,
-                        jwt,
-                    )
-                    .await;
-                }
+                // Only explicit HTTP refusals asking for a retry enter the
+                // backoff below. An ambiguous failed POST is never sent again
+                // over another route: the server may already have accepted it.
+                log::warn!("[!] {label}: API route failed ({error})");
                 return Err(error);
             }
         };
@@ -1336,60 +1330,5 @@ mod identity_refusal_tests {
                 "{status} cannot be both retryable and a dead identity"
             );
         }
-    }
-}
-
-async fn fallback_call(
-    label: &str,
-    method: &str,
-    path: &str,
-    body: Option<Vec<u8>>,
-    bearer: Option<&str>,
-    jwt: Option<&str>,
-) -> Result<AccountData> {
-    log::info!(
-        "[*] {label} retrying over a camouflaged route: random cloudflare edge address, \
-         no dns lookup, split client hello, alternate tls fingerprints"
-    );
-
-    let request = apifront::ApiRequest {
-        method: method.to_string(),
-        host: api_host().to_string(),
-        path: path.to_string(),
-        headers: front_headers(bearer, jwt),
-        body,
-    };
-
-    let response = apifront::fetch(&request).await?;
-
-    if (200..300).contains(&response.status) {
-        log::info!(
-            "[+] {label} went through the camouflaged route ({})",
-            response.route
-        );
-        return serde_json::from_str::<AccountData>(&response.body).map_err(|e| {
-            AetherError::Api(format!(
-                "{label} decode over {}: {e} ({} byte answer)",
-                response.route,
-                response.body.len()
-            ))
-        });
-    }
-
-    let described = format!(
-        "{label} over {}: {}",
-        response.route,
-        describe_status(response.status, &response.body)
-    );
-    if matches!(response.status, 401 | 404 | 410) {
-        return Err(AetherError::IdentityRefused(described));
-    }
-    Err(AetherError::Api(described))
-}
-
-fn describe_status(status: u16, body: &str) -> String {
-    match reqwest::StatusCode::from_u16(status) {
-        Ok(code) => describe_rejection(code, body),
-        Err(_) => format!("status {status}: {body}"),
     }
 }

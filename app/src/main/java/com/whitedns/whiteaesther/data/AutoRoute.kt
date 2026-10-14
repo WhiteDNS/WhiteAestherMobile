@@ -423,19 +423,19 @@ object AutoPlanner {
      * that connects for them may be the one their path never reaches.
      *
      * The rule: whatever connected here last goes first, because it is evidence
-     * and the rest is inference. With nothing to go on, H2 leads on mobile data
-     * -- operators have dropped QUIC for weeks at a time -- and H3 leads
-     * elsewhere, which is what the Wi-Fi in the log that prompted this needed.
+     * and the rest is inference. With nothing proven, H2 leads on every network;
+     * filtered operators may drop UDP even while ordinary HTTPS is reachable.
      *
      * `provenFraming` is per network. A framing proven on another network says
      * nothing about this one, and treating it as evidence is how a phone that
      * connected at home opens every session on mobile data with the wrong guess.
      */
+    @Suppress("UNUSED_PARAMETER")
     fun framingOrder(provenFraming: String?, onMobileData: Boolean): List<String> {
         val h3First = when (provenFraming) {
             "h3" -> true
             "h2" -> false
-            else -> !onMobileData
+            else -> false
         }
         return if (h3First) listOf("h3", "h2") else listOf("h2", "h3")
     }
