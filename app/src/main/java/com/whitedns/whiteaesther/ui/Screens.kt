@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -67,6 +68,8 @@ import com.whitedns.whiteaesther.data.AppSettings
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import com.whitedns.whiteaesther.core.CarrierStage
+import com.whitedns.whiteaesther.core.EndpointProbeProfile
+import com.whitedns.whiteaesther.core.applyTo
 import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.core.TorBridges
 import com.whitedns.whiteaesther.data.TorBridge
@@ -1571,29 +1574,59 @@ fun EndpointScreen(
                     style = AetherTheme.type.Data,
                     color = if (scannerState.error != null) colors.signalFailed else colors.text2,
                 )
+                scannerState.discovery?.let { progress ->
+                    Spacer(Modifier.height(8.dp))
+                    if (scannerState.operation != null) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = colors.brand)
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    Text(
+                        stringResource(R.string.scan_progress_counts, progress.completed, progress.total, progress.elapsedSeconds),
+                        style = AetherTheme.type.Small, color = colors.text3,
+                    )
+                    progress.profile?.let { profile ->
+                        Text(
+                            stringResource(R.string.scan_profile_details, stringResource(profile.transport.label),
+                                stringResource(if (profile.fragmentTls) R.string.scan_on else R.string.scan_off),
+                                stringResource(if (profile.encryptedHello) R.string.scan_on else R.string.scan_off)),
+                            style = AetherTheme.type.Small, color = colors.text3,
+                        )
+                    }
+                    if (progress.diagnostics.isNotEmpty() || progress.failureSummary.isNotBlank()) {
+                        var details by rememberSaveable { mutableStateOf(false) }
+                        Spacer(Modifier.height(8.dp))
+                        OutlineButton(text = stringResource(R.string.scan_details), onClick = { details = !details })
+                        if (details) {
+                            if (progress.failureSummary.isNotBlank()) Text(
+                                progress.failureSummary, style = AetherTheme.type.Small, color = colors.text3,
+                            )
+                            progress.diagnostics.forEach { diagnostic ->
+                                Text(diagnostic, style = AetherTheme.type.Small, color = colors.text3)
+                            }
+                        }
+                    }
+                }
             }
             scannerState.results.forEach { result ->
                 Divider()
-                val selected = custom && normalized == result.peer
-                val interaction = remember(result.peer) { MutableInteractionSource() }
+                val selected = custom && normalized == result.peer &&
+                    (result.profile == null || result.profile == EndpointProbeProfile.from(settings))
+                val interaction = remember(result.peer, result.profile) { MutableInteractionSource() }
                 val shape = RoundedCornerShape(14.dp)
                 val selectResult = {
                     endpointText = result.peer
                     onSettingsChange(
-                        settings.copy(
-                            endpointMode = EndpointMode.CUSTOM_FIRST,
-                            customEndpoint = result.peer,
-                            customEndpointProtocol = settings.transport,
-                        ),
+                        result.applyTo(settings),
                     )
                 }
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .background(if (selected) colors.brand.copy(alpha = 0.08f) else Color.Transparent)
-                        .tvControllerActivation(onClick = selectResult)
-                        .clickable(interaction, LocalIndication.current, onClick = selectResult)
+                        .tvControllerActivation(onClick = { if (scannerState.operation == null) selectResult() })
+                        .clickable(interaction, LocalIndication.current, enabled = scannerState.operation == null, onClick = selectResult)
                         .controllerFocus(interaction, shape)
+                        .testTag("endpoint-result-${result.peer}-${result.profile?.transport?.wireName}")
                         .padding(horizontal = 15.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -1607,22 +1640,39 @@ fun EndpointScreen(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            if (selected) {
-                                stringResource(R.string.validated_route_pinned, stringResource(settings.transport.probedAs.label))
-                            } else {
-                                stringResource(R.string.validated_route, stringResource(settings.transport.probedAs.label))
-                            },
+                            stringResource((result.profile?.transport ?: settings.transport.probedAs).label),
                             style = AetherTheme.type.Small,
                             color = colors.text3,
                         )
+                        Text(
+                            when {
+                                result.successfulChecks > 0 -> stringResource(R.string.scan_stable,
+                                    result.successfulChecks, result.attemptedChecks, result.jitterMillis)
+                                result.attemptedChecks > 0 -> stringResource(R.string.scan_handshake_only)
+                                else -> stringResource(R.string.scan_pending_check)
+                            },
+                            style = AetherTheme.type.Small,
+                            color = if (result.successfulChecks > 0) colors.brand else colors.text3,
+                        )
+                        result.profile?.let { profile ->
+                            if (profile.fragmentTls || profile.encryptedHello) Text(
+                                stringResource(R.string.scan_profile_details, profile.fragmentMode.wireName,
+                                    stringResource(if (profile.fragmentTls) R.string.scan_on else R.string.scan_off),
+                                    stringResource(if (profile.encryptedHello) R.string.scan_on else R.string.scan_off)),
+                                style = AetherTheme.type.Small, color = colors.text3,
+                            )
+                        }
                     }
                     Text(stringResource(R.string.result_rttmillis_ms, result.rttMillis), style = AetherTheme.type.Data, color = colors.brand)
                 }
             }
         }
         Note(
-            stringResource(R.string.only_endpoints_that_pass_the_settings_transport, settings.transport.probedAs.label),
+            stringResource(R.string.scan_help),
         )
+        if (settings.transport in listOf(TunnelProtocol.MASQUE_IN_MASQUE, TunnelProtocol.WARP_IN_WARP, TunnelProtocol.WIREGUARD_OVER_MASQUE)) {
+            Note(stringResource(R.string.scan_nested_note))
+        }
     }
 }
 

@@ -499,6 +499,7 @@ object AutoPlanner {
      */
     fun automaticBase(base: String): String = runCatching {
         val json = JSONObject(base)
+        json.put("advancedDiscovery", true)
         if (json.optString("scanMode", "balanced") !in AUTOMATIC_DEPTHS) {
             json.put("scanMode", "balanced")
         }
@@ -555,7 +556,7 @@ object AutoPlanner {
     fun recoveryAttemptConfig(base: String, options: AutoOptions, remembered: AutoRoute?, attempt: Int): String {
         val lane = aetherLane(options, remembered)
         val route = lane[attempt.coerceAtLeast(0) % lane.size]
-        return engineConfig(base, route, deep = route.fullSearch)
+        return engineConfig(automaticBase(base), route, deep = route.fullSearch)
     }
 
     /**

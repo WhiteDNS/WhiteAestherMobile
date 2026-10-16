@@ -876,11 +876,13 @@ fn name_close_code(code: u64) -> &'static str {
         0x100..=0x1ff => match code - CRYPTO_ERROR_BASE {
             40 => "tls: handshake failure",
             42 => "tls: bad certificate",
+            46 => "tls: certificate unknown",
             48 => "tls: unknown certificate authority",
             50 => "tls: decode error",
             70 => "tls: protocol version",
             80 => "tls: internal error",
             112 => "tls: unrecognised name",
+            116 => "tls: client certificate required",
             120 => "tls: no application protocol",
             121 => "tls: ECH required",
             _ => "tls alert",
@@ -1036,8 +1038,8 @@ pub async fn verify_masque(p: &VerifyParams) -> Result<Duration> {
                                     }
                                     last_probe = Instant::now();
                                 } else {
-                                    return Err(AetherError::Other(format!(
-                                        "status {}",
+                                    return Err(AetherError::Masque(format!(
+                                        "h3 connect-ip status {}",
                                         String::from_utf8_lossy(h.value())
                                     )));
                                 }
@@ -1108,8 +1110,11 @@ pub async fn verify_masque(p: &VerifyParams) -> Result<Duration> {
         }
 
         if conn.is_closed() {
+            if !connect_ip_ok {
+                return Err(describe_early_close(&conn));
+            }
             return Err(AetherError::Other(
-                "closed before data-plane confirmation".into(),
+                "CONNECT-IP accepted but closed before data-plane confirmation".into(),
             ));
         }
     }

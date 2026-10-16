@@ -308,12 +308,7 @@ pub async fn attach_masque_cert(identity: Identity) -> Result<Identity> {
     }
 
     let enrollment = account::ensure_masque_enrolled(&identity).await?;
-    Ok(Identity {
-        cert_pem: enrollment.cert_pem,
-        key_pem: enrollment.key_pem,
-        cert_issued_at: enrollment.issued_at,
-        ..identity
-    })
+    Ok(enrollment.apply(identity))
 }
 
 pub async fn open_identity(path: &str, request: &ProvisionRequest) -> Result<Identity> {

@@ -35,11 +35,17 @@ import org.json.JSONObject
 class AetherCarrierClient(
     private val scope: CoroutineScope,
     private val engineConfig: String,
+    private val preparation: suspend (String, Long) -> Result<EndpointPreparation> = { config, _ ->
+        withContext(Dispatchers.IO) { NativeAetherBridge.prepare(config) }
+            .map { EndpointPreparation(config, it) }
+    },
 ) : CarrierClient {
     private val mutableState = MutableStateFlow(CarrierSnapshot())
     override val state = mutableState
 
     private var engine: Job? = null
+    var preparedConfig: String? = null
+        private set
 
     /**
      * True between a [stop] and the engine job it cancelled finishing.
@@ -54,6 +60,7 @@ class AetherCarrierClient(
 
     override suspend fun start(timeoutMs: Long): Result<Int> {
         stopping = false
+        preparedConfig = null
         mutableState.value = CarrierSnapshot(stage = CarrierStage.CONNECTING)
 
         // Inside the budget, not before it. prepare provisions an identity and
@@ -67,15 +74,19 @@ class AetherCarrierClient(
         val watchdog = scope.launch {
             delay(timeoutMs)
             NativeAetherBridge.cancelPrepare()
+            NativeAetherBridge.cancelScan()
         }
         val preparation = try {
-            withContext(Dispatchers.IO) { NativeAetherBridge.prepare(engineConfig) }
+            this.preparation(engineConfig, timeoutMs)
         } finally {
             watchdog.cancel()
         }
-        val prepared = preparation.getOrElse { error ->
+        val selected = preparation.getOrElse { error ->
             return failed(error.message ?: "the engine could not prepare a route")
         }
+        val prepared = selected.engine
+        val activeConfig = selected.config
+        preparedConfig = activeConfig
 
         // Whatever preparation did not spend. A route that opens is still worth
         // waiting for, but not on top of a budget that has already gone.
@@ -86,7 +97,7 @@ class AetherCarrierClient(
 
         val port = runCatching {
             // The engine's own default, and what the settings write here anyway.
-            JSONObject(engineConfig).optInt("listenPort", DEFAULT_LISTEN_PORT)
+            JSONObject(activeConfig).optInt("listenPort", DEFAULT_LISTEN_PORT)
         }.getOrDefault(DEFAULT_LISTEN_PORT)
 
         // run() returns when the engine stops, so it cannot be awaited for
@@ -97,7 +108,7 @@ class AetherCarrierClient(
         var outcome: NativeResult? = null
         val job = scope.launch(Dispatchers.IO) {
             outcome = NativeAetherBridge.run(
-                engineConfig,
+                activeConfig,
                 prepared.peer,
                 NO_INTERFACE,
                 NativeEngineListener { up.complete(Unit) },
@@ -150,6 +161,7 @@ class AetherCarrierClient(
         // waited for -- see raceLanes.
         stopping = true
         runCatching { NativeAetherBridge.cancelPrepare() }
+        runCatching { NativeAetherBridge.cancelScan() }
         runCatching { NativeAetherBridge.stop() }
         engine?.cancel()
         mutableState.value = CarrierSnapshot(stage = CarrierStage.STOPPED)

@@ -29,6 +29,7 @@ pub mod prober;
 pub mod psiphon;
 pub mod quic;
 pub mod routing;
+pub mod scan;
 pub mod stats;
 // Ours: the VpnService callback that keeps a socket out of the tunnel.
 pub mod sniff;
@@ -990,7 +991,7 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
     // the WireGuard path -- provisioning a WARP account and building a tunnel
     // nobody asked for, without saying so. Now the next protocol upstream adds
     // is a compile error here instead of a silent one.
-    let identity = match config.protocol() {
+    let mut identity = match config.protocol() {
         Protocol::Masque | Protocol::MasqueInMasque | Protocol::WireGuardOverMasque => {
             load_or_provision_masque(&config.identity_site()).await?
         }
@@ -1003,7 +1004,9 @@ pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepare
     // costs exactly what preparing a single one does.
     let peer = match config.protocol() {
         Protocol::Masque | Protocol::MasqueInMasque | Protocol::WireGuardOverMasque => {
-            select_embedded_peer(&identity, config, &config_path).await?
+            let peer = select_embedded_peer(&mut identity, config, &config_path).await?;
+            persist_masque_profile(&config.identity_site(), &identity).await?;
+            peer
         }
         Protocol::WireGuard | Protocol::WarpInWarp => {
             select_embedded_wg_peer(&identity, config, &config_path)
@@ -1103,12 +1106,45 @@ async fn verify_wg_peer(
     peer: SocketAddr,
     profile: &aethernoize::AetherNoizeConfig,
 ) -> Result<std::time::Duration> {
+    verify_wg_peer_mode(identity, peer, profile, false).await
+}
+
+async fn verify_wg_peer_mode(
+    identity: &account::Identity,
+    peer: SocketAddr,
+    profile: &aethernoize::AetherNoizeConfig,
+    real_traffic: bool,
+) -> Result<std::time::Duration> {
     let private_key = identity.private_key_bytes()?;
     let peer_public = identity.peer_public_key_bytes()?;
     let ipv4: std::net::Ipv4Addr = identity
         .ipv4
         .parse()
         .map_err(|_| AetherError::Other("invalid ipv4".into()))?;
+    if real_traffic {
+        let (_, session) = wireguard::verify_endpoint_keep_session(
+            peer,
+            private_key,
+            peer_public,
+            identity.client_id,
+            ipv4,
+            profile,
+            std::time::Duration::from_secs(8),
+            None,
+        )
+        .await?;
+        let params = tunnelping::WgPingParams {
+            local_ipv4: ipv4,
+            local_ipv6: "::1".parse().unwrap(),
+            aethernoize: profile.clone(),
+        };
+        return tunnelping::wg_http_ping_established(
+            session,
+            &params,
+            std::time::Duration::from_secs(15),
+        )
+        .await;
+    }
     wireguard::verify_endpoint(
         peer,
         private_key,
@@ -1127,6 +1163,15 @@ pub async fn scan_embedded(
     limit: usize,
     cancelled: &AtomicBool,
 ) -> Result<Vec<EmbeddedScanResult>> {
+    scan_embedded_observed(config, limit, cancelled, &|_| {}).await
+}
+
+pub async fn scan_embedded_observed(
+    config: &EmbeddedConfig,
+    limit: usize,
+    cancelled: &AtomicBool,
+    observer: scan::ScanObserver<'_>,
+) -> Result<Vec<EmbeddedScanResult>> {
     tls::check_tls_options()?;
     account::check_enroll_address()?;
     let _ech_session = tls::EchSession::start(
@@ -1144,15 +1189,21 @@ pub async fn scan_embedded(
         config.protocol(),
         Protocol::WireGuard | Protocol::WarpInWarp
     ) {
-        return scan_embedded_wg(config, limit, cancelled).await;
+        return scan_embedded_wg(config, limit, cancelled, observer).await;
     }
-    let identity = load_or_provision_masque(&config.identity_site()).await?;
+    let mut identity = load_or_provision_masque(&config.identity_site()).await?;
+    // The registration endpoint is often outside the old seed list. Discovery
+    // must include it just as connecting does, even when the pool is blocked.
+    let preferred = assigned_masque_peers_updated(&mut identity).await;
+    persist_masque_profile(&config.identity_site(), &identity).await?;
     let probe = masque_probe(&identity, prober::IpScan::parse(&config.ip_scan)).await?;
-    let results = prober::scan_gateways(
+    let results = prober::scan_gateways_observed(
         &probe,
         prober::ScanMode::parse(&config.scan_mode),
         limit,
         cancelled,
+        &preferred,
+        observer,
     )
     .await?;
     Ok(results
@@ -1186,6 +1237,10 @@ pub async fn test_embedded_peer(config: &EmbeddedConfig) -> Result<EmbeddedScanR
         Protocol::WireGuard | Protocol::WarpInWarp
     ) {
         let identity = load_or_provision_warp(&config.identity_site()).await?;
+        if config.scan_mode == "ironclad" {
+            let rtt = verify_wg_peer_mode(&identity, peer, &aethernoize_config(), true).await?;
+            return Ok(EmbeddedScanResult { peer, rtt });
+        }
         // Every profile, because an endpoint that refuses one may answer
         // another, and reporting the first refusal as "dead" would be wrong.
         let mut last = AetherError::NoCleanEndpoint;
@@ -1198,7 +1253,12 @@ pub async fn test_embedded_peer(config: &EmbeddedConfig) -> Result<EmbeddedScanR
         return Err(last);
     }
     let identity = load_or_provision_masque(&config.identity_site()).await?;
-    let rtt = verify_masque_peer(&identity, peer).await?;
+    let rtt = if config.scan_mode == "ironclad" {
+        let probe = masque_probe(&identity, prober::IpScan::parse(&config.ip_scan)).await?;
+        prober::verify_gateway_traffic(&probe, peer).await?
+    } else {
+        verify_masque_peer(&identity, peer).await?
+    };
     Ok(EmbeddedScanResult { peer, rtt })
 }
 
@@ -1577,6 +1637,7 @@ async fn scan_embedded_wg(
     config: &EmbeddedConfig,
     limit: usize,
     cancelled: &AtomicBool,
+    observer: scan::ScanObserver<'_>,
 ) -> Result<Vec<EmbeddedScanResult>> {
     let identity = load_or_provision_warp(&config.identity_site()).await?;
     let private_key = identity.private_key_bytes()?;
@@ -1596,11 +1657,12 @@ async fn scan_embedded_wg(
         excluded: HashSet::new(),
     };
 
-    let results = wg_prober::scan_wg_endpoints(
+    let results = wg_prober::scan_wg_endpoints_observed(
         &probe,
         wg_prober::WgScanMode::parse(&config.scan_mode),
         limit,
         cancelled,
+        observer,
     )
     .await?;
 
@@ -1722,7 +1784,7 @@ async fn run_wireguard_tunnel_embedded(
 }
 
 async fn select_embedded_peer(
-    identity: &account::Identity,
+    identity: &mut account::Identity,
     config: &EmbeddedConfig,
     config_path: &str,
 ) -> Result<SocketAddr> {
@@ -1791,8 +1853,10 @@ async fn select_embedded_peer(
             return Ok(peer);
         }
     }
-    for peer in assigned_masque_peers(identity).await {
-        if Some(peer) == stored_masque_peer(identity) {
+    let tried_stored = stored_masque_peer(identity);
+    let previous_ipv4 = identity.ipv4.clone();
+    for peer in assigned_masque_peers_updated(identity).await {
+        if Some(peer) == tried_stored && identity.ipv4 == previous_ipv4 {
             continue;
         }
         if peer_matches_ip_scan(peer, &config.ip_scan)
@@ -1847,6 +1911,10 @@ fn stored_masque_peer(identity: &account::Identity) -> Option<SocketAddr> {
 }
 
 async fn assigned_masque_peers(identity: &account::Identity) -> Vec<SocketAddr> {
+    assigned_masque_peers_updated(&mut identity.clone()).await
+}
+
+async fn assigned_masque_peers_updated(identity: &mut account::Identity) -> Vec<SocketAddr> {
     fn on_443(host: &str) -> Option<SocketAddr> {
         let host = host.trim();
         if host.is_empty() {
@@ -1878,6 +1946,7 @@ async fn assigned_masque_peers(identity: &account::Identity) -> Vec<SocketAddr> 
     match asked {
         Err(_) => log::debug!("[-] no answer in time about which endpoint is assigned"),
         Ok(Ok(reg)) => {
+            account::apply_interface_profile(identity, &reg);
             if let Some(current) = on_443(&account::endpoint_from(&reg)) {
                 if !peers.contains(&current) {
                     if peers.is_empty() {
@@ -1900,6 +1969,16 @@ async fn assigned_masque_peers(identity: &account::Identity) -> Vec<SocketAddr> 
 /// Short on purpose: it is an optimisation on the way to a connect, and the
 /// search behind it works without an answer.
 const ASSIGNED_ENDPOINT_LOOKUP: std::time::Duration = std::time::Duration::from_secs(4);
+
+async fn persist_masque_profile(site: &IdentitySite, identity: &account::Identity) -> Result<()> {
+    let _provisioning = provisioning_lock().lock().await;
+    let mut loaded = identity::load(&site.store_path, &site.legacy)?;
+    // A late result must not replace a different identity installed meanwhile.
+    if loaded.store.device_id(site.slot) == Some(identity.device_id.as_str()) {
+        record(&mut loaded.store, site, identity)?;
+    }
+    Ok(())
+}
 
 /// How one MASQUE hop is sized, and what it may skip.
 ///
@@ -2744,6 +2823,15 @@ async fn provision_within_budget(
     let through_proxy = crate::upstream::configured().is_some();
     registration_may_go(store, through_proxy, account::now_unix())?;
 
+    // Persist before the POST: dropping this future on stop/timeout cannot
+    // forget an ambiguous registration and spend the quota again immediately.
+    store.registration_budget(through_proxy).failed(
+        account::now_unix(),
+        "registration interrupted before its outcome was saved",
+        None,
+    );
+    identity::save(&site.store_path, store)?;
+
     match provision_account().await {
         Ok(identity) => {
             store
@@ -2752,11 +2840,10 @@ async fn provision_within_budget(
             Ok(identity)
         }
         Err(error) => {
-            store.registration_budget(through_proxy).failed(
-                account::now_unix(),
-                &error.to_string(),
-                error.retry_after(),
-            );
+            let budget = store.registration_budget(through_proxy);
+            // Update the pre-recorded attempt instead of counting it twice.
+            budget.attempts = budget.attempts.saturating_sub(1);
+            budget.failed(account::now_unix(), &error.to_string(), error.retry_after());
             if let Err(write) = identity::save(&site.store_path, store) {
                 log::warn!("[-] could not record what the registration attempt cost: {write}");
             }
@@ -2836,6 +2923,37 @@ async fn load_or_provision_warp(site: &IdentitySite) -> Result<account::Identity
     Ok(identity)
 }
 
+fn pending_enrollment_key(store: &identity::Store, id: &str) -> Result<account::MasqueKeyPair> {
+    let pending = store
+        .device(id)
+        .filter(|device| !device.pending_key_pem.is_empty());
+    let Some(device) = pending else {
+        return account::generate_masque_keypair();
+    };
+    let key = boring::pkey::PKey::private_key_from_pem(device.pending_key_pem.as_bytes())
+        .map_err(|_| AetherError::Other("saved pending enrollment key is invalid".into()))?;
+    let cert = boring::x509::X509::from_pem(device.pending_cert_pem.as_bytes()).map_err(|_| {
+        AetherError::Other("saved pending enrollment certificate is invalid".into())
+    })?;
+    let spki_der = key
+        .public_key_to_der()
+        .map_err(|error| AetherError::Tls(error.to_string()))?;
+    let cert_spki = cert
+        .public_key()
+        .and_then(|key| key.public_key_to_der())
+        .map_err(|error| AetherError::Tls(error.to_string()))?;
+    if cert_spki != spki_der {
+        return Err(AetherError::Other(
+            "saved pending enrollment certificate and key do not match".into(),
+        ));
+    }
+    Ok(account::MasqueKeyPair {
+        key_pem: device.pending_key_pem.as_bytes().to_vec(),
+        cert_pem: device.pending_cert_pem.as_bytes().to_vec(),
+        spki_der,
+    })
+}
+
 /// Enrols a MASQUE key onto `identity`, recording the attempt before it is made.
 ///
 /// The marker is written and flushed first, and cleared by the write that
@@ -2849,18 +2967,16 @@ async fn enrol_and_record(
     site: &IdentitySite,
     identity: account::Identity,
 ) -> Result<account::Identity> {
+    let pair = pending_enrollment_key(store, &identity.device_id)?;
     if let Some(device) = store.device_mut(&identity.device_id) {
         device.enrolment_pending_since = account::now_unix();
+        device.pending_key_pem = String::from_utf8_lossy(&pair.key_pem).into_owned();
+        device.pending_cert_pem = String::from_utf8_lossy(&pair.cert_pem).into_owned();
     }
     identity::save(&site.store_path, store)?;
 
-    let enrollment = account::ensure_masque_enrolled(&identity).await?;
-    let identity = account::Identity {
-        cert_pem: enrollment.cert_pem,
-        key_pem: enrollment.key_pem,
-        cert_issued_at: enrollment.issued_at,
-        ..identity
-    };
+    let enrollment = account::ensure_masque_enrolled_with_key(&identity, Some(pair)).await?;
+    let identity = enrollment.apply(identity);
     let identity = adopt_team_profile(identity).await;
     record(store, site, &identity)?;
     // The file an earlier build reads has no store to tell it any of this, and
@@ -2878,7 +2994,7 @@ async fn load_or_provision_masque(site: &IdentitySite) -> Result<account::Identi
     if let Some((id, device)) = loaded.store.take_usable(site.slot) {
         let identity = identity::identity_from(&id, &device)?;
 
-        if identity.has_masque_credentials() {
+        if identity.has_masque_credentials() && device.enrolment_pending_since == 0 {
             log::info!("[+] loaded existing masque identity for device {id}");
             let identity = adopt_team_profile(identity).await;
             if !identity.refused {
@@ -5932,6 +6048,88 @@ mod identity_tests {
             "the reason Cloudflare gave has to survive: {error}",
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn cancelling_registration_preserves_the_attempt_on_disk() {
+        let _upstream = crate::upstream::hold_setting().await;
+        let _options = crate::tls::hold_options().await;
+        isolated();
+        let dir = scratch("cancel-registration");
+        let base = dir.join("aether.toml");
+        let site = identity_site(base.to_str().unwrap(), identity::Slot::Masque);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        std::env::set_var(
+            "AETHER_ENROLL_ADDRESS",
+            listener.local_addr().unwrap().to_string(),
+        );
+        let mut store = identity::Store::default();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            provision_within_budget(&mut store, &site),
+        )
+        .await;
+        std::env::remove_var("AETHER_ENROLL_ADDRESS");
+        assert!(
+            result.is_err(),
+            "the stalled local TLS server must time out"
+        );
+        let mut loaded = identity::load(&site.store_path, &site.legacy).unwrap();
+        assert_eq!(loaded.store.registration.attempts, 1);
+        assert!(registration_may_go(&mut loaded.store, false, account::now_unix()).is_err());
+        assert_eq!(loaded.store.ids().count(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn interrupted_enrollment_reuses_its_saved_key_instead_of_registering_again() {
+        let _upstream = crate::upstream::hold_setting().await;
+        let _options = crate::tls::hold_options().await;
+        isolated();
+        let dir = scratch("resume-enrollment");
+        let base = dir.join("aether.toml");
+        let site = identity_site(base.to_str().unwrap(), identity::Slot::Masque);
+        let identity = account::handshake_identity();
+        let original_key = identity.key_pem.clone();
+        let mut store = identity::Store::default();
+        record(&mut store, &site, &identity).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        std::env::set_var(
+            "AETHER_ENROLL_ADDRESS",
+            listener.local_addr().unwrap().to_string(),
+        );
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            enrol_and_record(&mut store, &site, identity)
+        )
+        .await
+        .is_err());
+        let first = identity::load(&site.store_path, &site.legacy).unwrap();
+        let pending_key = first
+            .store
+            .device("device")
+            .unwrap()
+            .pending_key_pem
+            .clone();
+        assert!(!pending_key.is_empty());
+        assert_ne!(pending_key.as_bytes(), original_key);
+        // Even with an unexpired old certificate, the pending enrollment must
+        // finish with the same key after a restart.
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            load_or_provision_masque(&site)
+        )
+        .await
+        .is_err());
+        std::env::remove_var("AETHER_ENROLL_ADDRESS");
+        let second = identity::load(&site.store_path, &site.legacy).unwrap();
+        assert_eq!(
+            second.store.device("device").unwrap().pending_key_pem,
+            pending_key
+        );
+        assert_eq!(second.store.ids().count(), 1);
+        assert_eq!(second.store.registration.attempts, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

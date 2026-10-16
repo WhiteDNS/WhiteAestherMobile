@@ -406,6 +406,16 @@ pub async fn scan_wg_endpoints(
     limit: usize,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<Vec<WgProbeResult>> {
+    scan_wg_endpoints_observed(probe, mode, limit, cancelled, &|_| {}).await
+}
+
+pub async fn scan_wg_endpoints_observed(
+    probe: &WgProbe,
+    mode: WgScanMode,
+    limit: usize,
+    cancelled: &std::sync::atomic::AtomicBool,
+    observer: crate::scan::ScanObserver<'_>,
+) -> Result<Vec<WgProbeResult>> {
     let mut st = mode.strategy();
     st.concurrency = crate::sysprofile::cap_concurrency(st.concurrency);
     // Stopping at the first hit is right for connecting and wrong for listing.
@@ -432,6 +442,9 @@ pub async fn scan_wg_endpoints(
 
     let ironclad = mode == WgScanMode::Ironclad;
     begin_probe_pass();
+    let started = Instant::now();
+    let mut progress = crate::scan::ScanProgress::new(candidates.len());
+    progress.publish(started, String::new(), observer);
     let stream = futures::stream::iter(
         candidates
             .into_iter()
@@ -459,13 +472,20 @@ pub async fn scan_wg_endpoints(
         tokio::select! {
             item = stream.next() => match item {
                 None => break,
-                Some(None) => continue,
+                Some(None) => {
+                    progress.completed += 1;
+                    progress.publish(started, probe_pass_summary(), observer);
+                },
                 Some(Some(result)) => {
+                    progress.completed += 1;
+                    progress.hit(SocketAddr::new(result.ip, result.port), result.rtt);
+                    progress.publish(started, probe_pass_summary(), observer);
                     log::info!("[+] wg endpoint ok {}:{} rtt={:?}", result.ip, result.port, result.rtt);
                     found.push(result);
                 }
             },
             _ = tokio::time::sleep(remaining) => break,
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {},
         }
     }
 
@@ -473,7 +493,10 @@ pub async fn scan_wg_endpoints(
     if found.is_empty() {
         // The one line that says which kind of failure this was.
         log::info!("[-] wireguard scan found nothing: {}", probe_pass_summary());
-        return Err(AetherError::NoCleanEndpoint);
+        return Err(AetherError::Other(format!(
+            "no working WireGuard endpoint: {}",
+            probe_pass_summary()
+        )));
     }
     Ok(found)
 }

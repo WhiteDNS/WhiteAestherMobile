@@ -24,6 +24,18 @@ data class NativeResult(
 data class EndpointScanResult(
     val peer: String,
     val rttMillis: Long,
+    val profile: EndpointProbeProfile? = null,
+    val successfulChecks: Int = 0,
+    val attemptedChecks: Int = 0,
+    val jitterMillis: Long = 0,
+)
+
+data class NativeScanProgress(
+    val completed: Int = 0,
+    val total: Int = 0,
+    val failures: String = "",
+    val results: List<EndpointScanResult> = emptyList(),
+    val scanId: Long = 0,
 )
 
 object NativeAetherBridge {
@@ -131,6 +143,22 @@ object NativeAetherBridge {
 
     fun cancelScan(): Boolean = isLoaded && nativeCancelScan()
 
+    fun scanProgress(): NativeScanProgress? = call { nativeScanProgress() }.getOrNull()?.let { raw ->
+        runCatching {
+            val json = JSONObject(raw)
+            val results = json.optJSONArray("results")
+            NativeScanProgress(
+                completed = json.optInt("completed"),
+                total = json.optInt("total"),
+                failures = json.optString("failures"),
+                scanId = json.optLong("scanId"),
+                results = if (results == null) emptyList() else List(results.length()) {
+                    results.getJSONObject(it).toEndpointScanResult()
+                },
+            )
+        }.getOrNull()
+    }
+
     /**
      * Ends a [prepare] that is still running.
      *
@@ -210,6 +238,9 @@ object NativeAetherBridge {
 
     @JvmStatic
     private external fun nativeScan(configJson: String): String
+
+    @JvmStatic
+    private external fun nativeScanProgress(): String
 
     @JvmStatic
     private external fun nativeTestEndpoint(configJson: String): String

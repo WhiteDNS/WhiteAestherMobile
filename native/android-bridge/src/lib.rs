@@ -24,7 +24,7 @@ use tokio::sync::{mpsc, oneshot};
 
 const BRIDGE_VERSION: &str = "0.3.1";
 const PACKET_QUEUE: usize = 1_024;
-const SCAN_RESULT_LIMIT: usize = 6;
+const SCAN_RESULT_LIMIT: usize = 12;
 // Android coroutine/JNI callers can have only a small native stack. Both the
 // root future and Tokio tasks need room for the engine's async call chains.
 const CORE_STACK_BYTES: usize = 8 << 20;
@@ -79,6 +79,8 @@ impl Drop for PendingTunDescriptor {
 }
 static SCAN_RUNNING: AtomicBool = AtomicBool::new(false);
 static SCAN_CANCELLED: AtomicBool = AtomicBool::new(false);
+static SCAN_PROGRESS: Lazy<Mutex<(u64, aether::scan::ScanProgress)>> =
+    Lazy::new(|| Mutex::new((0, aether::scan::ScanProgress::default())));
 static PREPARE_RUNNING: AtomicBool = AtomicBool::new(false);
 static PREPARE_CANCELLED: AtomicBool = AtomicBool::new(false);
 
@@ -177,6 +179,11 @@ struct BridgeConfig {
     peer_fallback: bool,
     #[serde(default = "default_scan_mode")]
     scan_mode: String,
+    /// Discovery passes have their own bound, including enrollment and ECH.
+    #[serde(default)]
+    scan_budget_millis: Option<u64>,
+    #[serde(default)]
+    scan_id: u64,
     #[serde(default = "default_ip_scan")]
     ip_scan: String,
     #[serde(default = "default_transport")]
@@ -978,16 +985,34 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
             SCAN_CANCELLED.store(false, Ordering::SeqCst);
             let raw = read_java_string(&mut env, &config)?;
             let config = BridgeConfig::parse(&raw)?;
+            *SCAN_PROGRESS.lock() = (config.scan_id, aether::scan::ScanProgress::default());
             config.apply_environment();
             let embedded = config.embedded(None)?;
             let results = core_thread("whiteaesther-scan", || {
-                runtime()?
-                    .block_on(Box::pin(aether::scan_embedded(
-                        &embedded,
-                        SCAN_RESULT_LIMIT,
-                        &SCAN_CANCELLED,
-                    )))
-                    .map_err(|error| error.to_string())
+                runtime()?.block_on(async {
+                    let observer = |progress| SCAN_PROGRESS.lock().1 = progress;
+                    let scan = aether::scan_embedded_observed(
+                        &embedded, SCAN_RESULT_LIMIT, &SCAN_CANCELLED, &observer,
+                    );
+                    tokio::pin!(scan);
+                    tokio::select! {
+                        result = &mut scan => result.map_err(|error| error.to_string()),
+                        _ = until_cancelled(&SCAN_CANCELLED) => Err("endpoint scan cancelled".into()),
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(
+                            config.scan_budget_millis.unwrap_or(600_000).clamp(1_000, 600_000)
+                        )) => {
+                            let snapshot = SCAN_PROGRESS.lock().1.clone();
+                            if snapshot.results.is_empty() {
+                                Err(format!("scan time budget reached: {}", snapshot.failures))
+                            } else {
+                                Ok(snapshot.results.into_iter().map(|hit| aether::EmbeddedScanResult {
+                                    peer: hit.peer,
+                                    rtt: std::time::Duration::from_millis(hit.rtt_ms),
+                                }).collect())
+                            }
+                        }
+                    }
+                })
             })?;
             Ok(response(
                 true,
@@ -1013,17 +1038,30 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
 ) -> jstring {
     catch_unwind(AssertUnwindSafe(|| {
         let result = (|| -> Result<String, String> {
-            if RUN_CONTROL.lock().active || SCAN_RUNNING.load(Ordering::SeqCst) {
+            if RUN_CONTROL.lock().active || PREPARE_RUNNING.load(Ordering::SeqCst) {
                 return Err("disconnect and stop scanning before testing an endpoint".into());
             }
+            if SCAN_RUNNING.swap(true, Ordering::SeqCst) {
+                return Err("endpoint scan is already running".into());
+            }
+            let _guard = ScanRunningGuard;
+            SCAN_CANCELLED.store(false, Ordering::SeqCst);
             let raw = read_java_string(&mut env, &config)?;
             let config = BridgeConfig::parse(&raw)?;
             config.apply_environment();
             let embedded = config.embedded(None)?;
             let result = core_thread("whiteaesther-test", || {
-                runtime()?
-                    .block_on(Box::pin(aether::test_embedded_peer(&embedded)))
-                    .map_err(|error| error.to_string())
+                runtime()?.block_on(async {
+                    tokio::select! {
+                        result = Box::pin(aether::test_embedded_peer(&embedded)) =>
+                            result.map_err(|error| error.to_string()),
+                        _ = until_cancelled(&SCAN_CANCELLED) => Err("endpoint test cancelled".into()),
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(
+                            config.scan_budget_millis.unwrap_or(30_000).clamp(1_000, 30_000)
+                        )) =>
+                            Err("endpoint confirmation timed out".into()),
+                    }
+                })
             })?;
             Ok(response(
                 true,
@@ -1037,6 +1075,17 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
         java_string(env, &result)
     }))
     .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeScanProgress(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+) -> jstring {
+    let (scan_id, progress) = SCAN_PROGRESS.lock().clone();
+    let mut value = serde_json::to_value(&progress).unwrap_or_else(|_| json!({}));
+    value["scanId"] = json!(scan_id);
+    java_string(env, &value.to_string())
 }
 
 #[no_mangle]

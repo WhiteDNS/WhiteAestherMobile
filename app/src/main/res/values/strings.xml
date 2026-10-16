@@ -590,4 +590,22 @@
     <string name="tls_options_error">TLS options must be short single-line values.</string>
     <string name="scan_verified">Verified edges</string>
     <string name="scan_verified_description">Prefers known gateways and separates nested hops when possible.</string>
+    <string name="scan_preparing">Preparing discovery…</string>
+    <string name="scan_on">on</string>
+    <string name="scan_off">off</string>
+    <string name="scan_offline">Connect to Wi-Fi or mobile data before searching.</string>
+    <string name="scan_rechecking">Rechecking saved routes on this network…</string>
+    <string name="scan_confirming">Checking real traffic and stability…</string>
+    <string name="scan_searching">Pass %1$d · %2$s</string>
+    <string name="scan_finished">%1$d routes found · %2$d passed the internet check</string>
+    <string name="scan_no_route">No route answered on this network. See the scan details for the failed stages.</string>
+    <string name="scan_network_changed">The network changed. Search again on the new connection.</string>
+    <string name="scan_progress_counts">%1$d / %2$d addresses checked · %3$d s</string>
+    <string name="scan_profile_details">%1$s · TLS split: %2$s · ECH: %3$s</string>
+    <string name="scan_stable">Internet checked %1$d/%2$d · variation %3$d ms</string>
+    <string name="scan_handshake_only">Tunnel answered · internet not confirmed</string>
+    <string name="scan_pending_check">Tunnel answered · waiting for internet check</string>
+    <string name="scan_details">Scan details</string>
+    <string name="scan_help">Searches both MASQUE connection methods, then tries TLS recovery and a wider search when needed. Saved routes are checked again. Stop to choose a result.</string>
+    <string name="scan_nested_note">For a nested tunnel, these checks confirm its outer hop. The second hop is checked when connecting.</string>
 </resources>

@@ -288,6 +288,21 @@ async fn connect_tls(
         let stream = FragmentingStream::new(tcp, fragment);
         match tokio_boring::connect(tls_config, &cfg.sni, stream).await {
             Ok(tls) => {
+                // Some existing tunnel edges omit ALPN. Retain that fallback;
+                // an explicitly negotiated HTTP/1.1 cannot carry H2 frames.
+                if tls
+                    .ssl()
+                    .selected_alpn_protocol()
+                    .is_some_and(|protocol| protocol != b"h2")
+                {
+                    return Err(AetherError::Masque(format!(
+                        "h2 ALPN: gateway selected {} instead of h2",
+                        tls.ssl()
+                            .selected_alpn_protocol()
+                            .map(|protocol| String::from_utf8_lossy(protocol).into_owned())
+                            .unwrap_or_else(|| "no protocol".into()),
+                    )));
+                }
                 if ech.is_some() {
                     // Nothing goes over a handshake that went without the key it was given.
                     if !tls.ssl().ech_accepted() {
@@ -865,6 +880,99 @@ fn bytes_to_ip(version: u8, bytes: &[u8]) -> Option<IpAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn local_tls_peer(
+        alpn: Option<&'static [u8]>,
+    ) -> (H2TunnelConfig, tokio::task::JoinHandle<()>) {
+        let identity = crate::account::handshake_identity();
+        let cert = X509::from_pem(&identity.cert_pem).unwrap();
+        let key = PKey::private_key_from_pem(&identity.key_pem).unwrap();
+        let pin = ring::digest::digest(
+            &ring::digest::SHA256,
+            &cert.public_key().unwrap().public_key_to_der().unwrap(),
+        )
+        .as_ref()
+        .to_vec();
+        let mut acceptor =
+            boring::ssl::SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+        acceptor.set_certificate(&cert).unwrap();
+        acceptor.set_private_key(&key).unwrap();
+        if let Some(alpn) = alpn {
+            acceptor.set_alpn_select_callback(move |_, offered| {
+                boring::ssl::select_next_proto(alpn, offered).ok_or(boring::ssl::AlpnError::NOACK)
+            });
+        }
+        let acceptor = acceptor.build();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let peer = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let _tls = tokio_boring::accept(&acceptor, tcp).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        (
+            H2TunnelConfig {
+                peer,
+                sni: "localhost".into(),
+                authority: "edge.test".into(),
+                path: "/".into(),
+                cert_pem: identity.cert_pem,
+                key_pem: identity.key_pem,
+                local_ipv4: Ipv4Addr::new(172, 16, 0, 2),
+                quiet: true,
+                pin_endpoint: true,
+                expected_pins: vec![pin],
+                ech_config_list: None,
+            },
+            task,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_pinned_tls_peer_without_h2_is_rejected_before_sending_a_connect_request() {
+        let _upstream = crate::upstream::hold_setting().await;
+        let _options = crate::tls::hold_options().await;
+        let (cfg, server) = local_tls_peer(Some(b"\x08http/1.1")).await;
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(3),
+            connect_tls(&cfg, FragmentConfig::from_env()),
+        )
+        .await;
+        server.abort();
+        let message = match outcome {
+            Ok(Err(error)) => error.to_string(),
+            _ => panic!("a non-h2 peer must produce a specific ALPN error, without hanging"),
+        };
+        assert!(message.contains("h2 ALPN"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn a_pinned_peer_negotiating_h2_still_passes_tls_setup() {
+        let _upstream = crate::upstream::hold_setting().await;
+        let _options = crate::tls::hold_options().await;
+        let (cfg, server) = local_tls_peer(Some(b"\x02h2")).await;
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(3),
+            connect_tls(&cfg, FragmentConfig::from_env()),
+        )
+        .await;
+        server.abort();
+        assert!(matches!(outcome, Ok(Ok(_))));
+    }
+
+    #[tokio::test]
+    async fn a_pinned_legacy_edge_without_alpn_keeps_its_existing_h2_fallback() {
+        let _upstream = crate::upstream::hold_setting().await;
+        let _options = crate::tls::hold_options().await;
+        let (cfg, server) = local_tls_peer(None).await;
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(3),
+            connect_tls(&cfg, FragmentConfig::from_env()),
+        )
+        .await;
+        server.abort();
+        assert!(matches!(outcome, Ok(Ok(_))));
+    }
 
     /// A connect-ip stream to an edge that loses the first probe it is sent and
     /// answers every one after it, over memory rather than a network.
