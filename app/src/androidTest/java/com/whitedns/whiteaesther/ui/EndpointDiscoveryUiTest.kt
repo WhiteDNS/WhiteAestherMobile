@@ -3,6 +3,7 @@ package com.whitedns.whiteaesther.ui
 import android.graphics.Bitmap
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -44,7 +45,7 @@ class EndpointDiscoveryUiTest {
     private fun screen(busy: Boolean = false, persian: Boolean = false, onSettings: (AppSettings) -> Unit = {}) {
         compose.setContent {
             val context = LocalContext.current
-            val config = android.content.res.Configuration(context.resources.configuration).apply {
+            val config = android.content.res.Configuration(LocalConfiguration.current).apply {
                 setLocale(Locale(if (persian) "fa" else "en"))
             }
             CompositionLocalProvider(
