@@ -8,6 +8,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.whitedns.whiteaesther.core.ChainController
 import com.whitedns.whiteaesther.core.ChainNode
+import com.whitedns.whiteaesther.core.EndpointDiscovery
+import com.whitedns.whiteaesther.core.NativeEndpointDiscovery
+import com.whitedns.whiteaesther.core.DiscoveryStage
+import com.whitedns.whiteaesther.core.DiscoveryUpdate
+import com.whitedns.whiteaesther.data.EndpointDiscoveryMemory
 import com.whitedns.whiteaesther.core.EndpointScanResult
 import com.whitedns.whiteaesther.core.MoatClient
 import com.whitedns.whiteaesther.core.TorBridges
@@ -70,6 +75,7 @@ data class EndpointScannerState(
     val results: List<EndpointScanResult> = emptyList(),
     val message: String? = null,
     val error: String? = null,
+    val discovery: DiscoveryUpdate? = null,
 )
 
 /**
@@ -153,6 +159,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val endpointScannerState = mutableEndpointScannerState.asStateFlow()
     private var updateJob: Job? = null
     private var endpointJob: Job? = null
+    private var endpointDiscovery: EndpointDiscovery? = null
+    private val endpointMemory = EndpointDiscoveryMemory(application)
     private var realAddressJob: Job? = null
     private var bridgeJob: Job? = null
 
@@ -762,6 +770,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun resetEndpoint(settings: AppSettings) {
         val cleared = settings.withoutPinnedEndpoint()
+        endpointMemory.forget(NetworkIdentity.current(getApplication()).key, settings)
         save(cleared)
         AetherVpnService.forgetLastGoodTransport(getApplication())
         mutableEndpointScannerState.value = EndpointScannerState()
@@ -845,91 +854,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun scanEndpoints(settings: AppSettings) {
         if (!canRunEndpointOperation()) return
+        val network = NetworkIdentity.current(getApplication())
+        if (!network.online) {
+            mutableEndpointScannerState.value = EndpointScannerState(error = say(R.string.scan_offline))
+            return
+        }
+        val sameNetwork = {
+            val current = NetworkIdentity.current(getApplication())
+            current.online && current.key == network.key && current.handle == network.handle
+        }
+        val discovery = EndpointDiscovery(
+            backend = NativeEndpointDiscovery(getApplication(), sameNetwork),
+            networkUnchanged = sameNetwork,
+        )
+        endpointDiscovery = discovery
         endpointJob = viewModelScope.launch {
             mutableEndpointScannerState.value = EndpointScannerState(
                 operation = EndpointOperation.SCANNING,
-                results = mutableEndpointScannerState.value.results,
-                message = say(R.string.msg_scanning_routes, say(settings.transport.probedAs.label)),
+                message = say(R.string.scan_preparing),
             )
-            val base = settings
-                .copy(endpointMode = EndpointMode.AUTOMATIC, customEndpoint = "")
-                // The bridge takes a real transport, and which one is not this
-                // screen's decision to make: asking the planner is what keeps a
-                // scan looking for what a connect would actually try. Scanning
-                // H2 first regardless was a third answer to that question, and
-                // it disagreed with the race on Wi-Fi.
-                .let {
-                    if (!it.transport.isAutomatic) it else {
-                        it.copy(transport = scanFirstFraming())
-                    }
+            val hints = withContext(Dispatchers.IO) { endpointMemory.read(network.key, settings) }
+            try {
+                val finished = discovery.discover(settings, scanFirstFraming(), hints) { update ->
+                    val cancelling = mutableEndpointScannerState.value.operation == EndpointOperation.CANCELLING
+                    val terminal = update.stage in setOf(
+                        DiscoveryStage.COMPLETE, DiscoveryStage.CANCELLED, DiscoveryStage.NETWORK_CHANGED,
+                    )
+                    val results = if (update.stage == DiscoveryStage.NETWORK_CHANGED) emptyList() else update.results
+                    mutableEndpointScannerState.value = EndpointScannerState(
+                        operation = if (terminal) null else if (cancelling) EndpointOperation.CANCELLING else EndpointOperation.SCANNING,
+                        results = results,
+                        message = when {
+                            cancelling && !terminal -> say(R.string.msg_cancelling_scan)
+                            update.stage == DiscoveryStage.REMEMBERED -> say(R.string.scan_rechecking)
+                            update.stage == DiscoveryStage.CONFIRMING -> say(R.string.scan_confirming)
+                            update.stage == DiscoveryStage.CANCELLED -> say(R.string.msg_scan_cancelled)
+                            update.stage == DiscoveryStage.NETWORK_CHANGED -> say(R.string.scan_network_changed)
+                            update.stage == DiscoveryStage.COMPLETE -> say(R.string.scan_finished, results.size, results.count { it.successfulChecks > 0 })
+                            else -> say(R.string.scan_searching, update.pass, say(update.profile?.transport?.label ?: R.string.protocol_automatic))
+                        },
+                        error = if (update.stage == DiscoveryStage.COMPLETE && results.isEmpty()) say(R.string.scan_no_route) else null,
+                        discovery = update,
+                    )
                 }
-            var result = withContext(Dispatchers.IO) {
-                NativeAetherBridge.scan(base.toNativeJson(getApplication()))
-            }
-            // The MASQUE prober picks TCP or UDP from the framing it is handed:
-            // H2 probes over TCP, H3 over QUIC. Scanning with the configured one
-            // therefore searches UDP only on the default profile, and a network
-            // that blocks UDP returns nothing at all -- which is what Iranian
-            // mobile users were seeing. Sweep the other rather than reporting an
-            // empty network.
-            val other = when (base.transport) {
-                // Reached only if the planner ever answers with something that
-                // is not a framing; sweeping the other one is still the useful
-                // move.
-                TunnelProtocol.AUTO -> TunnelProtocol.H3
-                TunnelProtocol.H3 -> TunnelProtocol.H2
-                TunnelProtocol.H2 -> TunnelProtocol.H3
-                // Nested MASQUE probes over QUIC, like H3, because its hops
-                // are H3 unless the whole profile is H2. So the sweep worth
-                // making after it is the TCP one, over the same edges.
-                TunnelProtocol.MASQUE_IN_MASQUE -> TunnelProtocol.H2
-                // The Android nested mode uses H2 for its outer hop. A QUIC-only
-                // endpoint found in a second sweep cannot serve that profile.
-                TunnelProtocol.WIREGUARD_OVER_MASQUE -> null
-                // Neither WireGuard nor its nested form has another framing to
-                // sweep. Their endpoints are their own, so falling back to
-                // MASQUE would list addresses the chosen protocol cannot use.
-                TunnelProtocol.WIREGUARD, TunnelProtocol.WARP_IN_WARP -> null
-            }
-            if (other != null &&
-                result.getOrNull()?.isEmpty() != false &&
-                mutableEndpointScannerState.value.operation == EndpointOperation.SCANNING
-            ) {
-                mutableEndpointScannerState.value = mutableEndpointScannerState.value.copy(
-                    message = say(R.string.msg_nothing_over_trying, say(base.transport.label), say(other.label)),
-                )
-                result = withContext(Dispatchers.IO) {
-                    NativeAetherBridge.scan(base.copy(transport = other).toNativeJson(getApplication()))
+                if (finished.stage == DiscoveryStage.COMPLETE) {
+                    withContext(Dispatchers.IO) { endpointMemory.write(network.key, settings, finished.results) }
                 }
+            } finally {
+                endpointDiscovery = null
+                val state = mutableEndpointScannerState.value
+                if (state.operation != null) mutableEndpointScannerState.value = state.copy(operation = null)
             }
-            result.fold(
-                onSuccess = { endpoints ->
-                    if (mutableEndpointScannerState.value.operation == EndpointOperation.CANCELLING) {
-                        mutableEndpointScannerState.value = EndpointScannerState(
-                            results = mutableEndpointScannerState.value.results,
-                            message = say(R.string.msg_scan_cancelled),
-                        )
-                    } else {
-                        mutableEndpointScannerState.value = EndpointScannerState(
-                            results = endpoints,
-                            message = "${endpoints.size} validated endpoint${if (endpoints.size == 1) "" else "s"} found",
-                        )
-                    }
-                },
-                onFailure = { error ->
-                    if (mutableEndpointScannerState.value.operation == EndpointOperation.CANCELLING) {
-                        mutableEndpointScannerState.value = EndpointScannerState(
-                            results = mutableEndpointScannerState.value.results,
-                            message = say(R.string.msg_scan_cancelled),
-                        )
-                    } else if (mutableEndpointScannerState.value.operation == EndpointOperation.SCANNING) {
-                        mutableEndpointScannerState.value = EndpointScannerState(
-                            results = mutableEndpointScannerState.value.results,
-                            error = error.message ?: say(R.string.msg_scan_failed),
-                        )
-                    }
-                },
-            )
         }
     }
 
@@ -972,10 +947,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun cancelEndpointScan() {
         if (mutableEndpointScannerState.value.operation != EndpointOperation.SCANNING) return
+        endpointDiscovery?.cancel()
         NativeAetherBridge.cancelScan()
-        mutableEndpointScannerState.value = EndpointScannerState(
+        mutableEndpointScannerState.value = mutableEndpointScannerState.value.copy(
             operation = EndpointOperation.CANCELLING,
-            results = mutableEndpointScannerState.value.results,
             message = say(R.string.msg_cancelling_scan),
         )
     }
@@ -994,6 +969,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         runCatching { regionWatch.stopWatching() }
+        endpointDiscovery?.cancel()
         NativeAetherBridge.cancelScan()
         endpointJob?.cancel()
         chainJob?.cancel()

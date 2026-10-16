@@ -117,6 +117,10 @@ pub struct Device {
     /// trip. WireGuard may not, until the answer is confirmed.
     #[serde(default)]
     pub enrolment_pending_since: u64,
+    #[serde(default)]
+    pub pending_key_pem: String,
+    #[serde(default)]
+    pub pending_cert_pem: String,
 
     #[serde(default)]
     pub cert_pem: String,
@@ -182,7 +186,7 @@ impl RegistrationBudget {
         self.last_reason = reason.to_string();
         let step =
             BACKOFF_STEPS_SECS[(self.attempts as usize - 1).min(BACKOFF_STEPS_SECS.len() - 1)];
-        self.next_attempt_at = now + retry_after.unwrap_or(step).max(step);
+        self.next_attempt_at = now.saturating_add(retry_after.unwrap_or(step).max(step));
     }
 
     /// Records a registration that was kept, which clears the debt.
@@ -477,6 +481,8 @@ pub fn device_from(identity: &Identity, registered_at: u64) -> Device {
             TunnelType::Masque
         },
         enrolment_pending_since: 0,
+        pending_key_pem: String::new(),
+        pending_cert_pem: String::new(),
         cert_pem: persisted.cert_pem,
         key_pem: persisted.key_pem,
         cert_issued_at: persisted.cert_issued_at,

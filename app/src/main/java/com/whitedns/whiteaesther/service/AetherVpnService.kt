@@ -723,7 +723,7 @@ class AetherVpnService : VpnService() {
             } else {
                 configJson
             }
-        val engineConfig = if (useChain) withEngineMode(resolved, EngineMode.PROXY) else resolved
+        var engineConfig = if (useChain) withEngineMode(resolved, EngineMode.PROXY) else resolved
 
         // Record what this attempt is actually configured with. Without it a
         // diagnostics report cannot answer the question it was collected for --
@@ -771,9 +771,10 @@ class AetherVpnService : VpnService() {
         }
 
         val prepared = if (engineInPath) {
-            withContext(Dispatchers.IO) {
-                NativeAetherBridge.prepare(engineConfig)
-            }.getOrElse { error ->
+            com.whitedns.whiteaesther.core.prepareEndpointEngine(
+                this, engineConfig,
+                if (autoStepDeadline > 0) (autoStepDeadline - System.currentTimeMillis()).coerceAtLeast(1) else 300_000L,
+            ).getOrElse { error ->
                 val reason = error.message ?: sayNow(R.string.err_native_prepare)
                 // Retrying a refused registration is not merely useless, it is
                 // what keeps it refused: every attempt is another registration
@@ -794,6 +795,10 @@ class AetherVpnService : VpnService() {
                 }
                 scheduleReconnect(configJson, sessionGeneration, mode, reason)
                 return
+            }.let { preparation ->
+                engineConfig = preparation.config
+                if (automatic) autoRunningRoute = AutoRoute.ofEngineConfig(engineConfig)
+                preparation.engine
             }
         } else {
             null
@@ -1011,7 +1016,9 @@ class AetherVpnService : VpnService() {
 
             Carrier.AETHER -> {
                 aetherCarrier?.let { runCatching { it.stop() } }
-                AetherCarrierClient(serviceScope, carrierEngineConfig(configJson, upstream))
+                AetherCarrierClient(serviceScope, carrierEngineConfig(configJson, upstream)) { config, budget ->
+                    com.whitedns.whiteaesther.core.prepareEndpointEngine(this, config, budget)
+                }
                     .also { aetherCarrier = it }
             }
         }
@@ -1734,14 +1741,16 @@ class AetherVpnService : VpnService() {
             // For the engine, what it actually ran with. A rung that carries
             // no tactic leaves the user's own in place, and whichever one got
             // out is what the next connect here has to repeat.
+            val winningEngineConfig = (winner.client as? AetherCarrierClient)?.preparedConfig
+                ?: raceEngineConfig(winner.route)
             autoRunningRoute = if (winner.route.racesEngine) {
-                AutoRoute.ofEngineConfig(raceEngineConfig(winner.route))
+                AutoRoute.ofEngineConfig(winningEngineConfig)
             } else {
                 winner.route
             }
             // The framing that got Aether out, so the direct engine starts on
             // it next time -- the memory sends that connect to the direct path.
-            if (winner.route.racesEngine) rememberWorkingTransport(raceEngineConfig(winner.route))
+            if (winner.route.racesEngine) rememberWorkingTransport(winningEngineConfig)
             startedHops.clear()
             startedHops += carrier to winner.client
             hopStages.clear()
@@ -1987,7 +1996,9 @@ class AetherVpnService : VpnService() {
         // holds the plan to that.
         Carrier.AETHER -> {
             check(route.racesEngine) { "the direct engine is not raced" }
-            AetherCarrierClient(serviceScope, carrierEngineConfig(raceEngineConfig(route), 0))
+            AetherCarrierClient(serviceScope, carrierEngineConfig(raceEngineConfig(route), 0)) { config, budget ->
+                com.whitedns.whiteaesther.core.prepareEndpointEngine(this, config, budget)
+            }
                 .also { aetherCarrier = it }
         }
     }

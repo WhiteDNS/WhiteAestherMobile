@@ -33,6 +33,19 @@ at least one API 26 device and one current target-API device.
 5. Verify Custom first falls back to scanning while Custom only fails closed.
 6. Start a scan while disconnected, then immediately connect; confirm only one
    native operation runs and no unprotected upstream socket is created.
+7. Block UDP, scan from Automatic, and select an H2 result. Confirm the selected
+   transport and TLS recovery options match that result, including after restart.
+8. Confirm results appear before completion and distinguish a tunnel handshake
+   from one or two successful internet checks. Stop during registration, ECH
+   lookup, address probing and traffic confirmation; partial fresh results remain.
+9. Switch between Wi-Fi and mobile data during a scan. It must stop, discard the
+   old network's results, and ask for a new search. Repeat between two Wi-Fi links.
+10. Repeat discovery on the same network, then a different network: saved hints
+    must be tested again and never appear as fresh successes just from storage.
+11. On a dual-stack network with blocked IPv4, confirm IPv6 is tried near the
+    start of each pass. Repeat with port 443 blocked and a working fallback port.
+12. For nested protocols, verify the scanner describes its checks as outer-hop
+    checks; an unusable inner hop must still fail honestly during connection.
 
 ## Lifecycle and security
 

@@ -77,7 +77,7 @@ class AutoPlannerTest {
                     "ech: the gateway requires an ECH configuration and refused the one sent",
             ),
         )
-        assertEquals(AutoRoute.AETHER_H3_ECH, told.first())
+        assertEquals(AutoRoute.AETHER_H2_ECH, told.first())
         // Reordered, not rewritten: nothing is lost from the lane.
         assertEquals(blind.toSet(), told.toSet())
         assertEquals(blind.size, told.size)
@@ -282,16 +282,12 @@ class AutoPlannerTest {
     }
 
     /**
-     * With nothing proven, the kind of network decides.
-     *
-     * Operators have dropped QUIC for weeks at a time, so H2 leads on mobile
-     * data; H3 leads elsewhere, which is what the Wi-Fi in the log that
-     * prompted this needed.
+     * With nothing proven, use HTTPS over TCP on both mobile and Wi-Fi.
      */
     @Test
-    fun withNothingProvenTheNetworkDecides() {
+    fun withNothingProvenH2LeadsOnEveryNetwork() {
         assertEquals(listOf("h2", "h3"), AutoPlanner.framingOrder(null, onMobileData = true))
-        assertEquals(listOf("h3", "h2"), AutoPlanner.framingOrder(null, onMobileData = false))
+        assertEquals(listOf("h2", "h3"), AutoPlanner.framingOrder(null, onMobileData = false))
     }
 
     /** Both framings are always offered, whichever leads. */
@@ -384,9 +380,7 @@ class AutoPlannerTest {
 
     @Test
     fun aetherRacesInBothFramingsQuickFirst() {
-        // The log that prompted this: a Wi-Fi network that carried QUIC and
-        // not TCP, where 1.6.0 tried only H2 before giving up on Aether.
-        //
+        // H2 starts on an unproven network, with H3 available for recovery.
         // Both framings plain first, then the tactic each framing has, then one
         // deep search, then the nested tunnel. The second pass at greater depth
         // became a pass at a different handshake: since the engine tries the
@@ -394,12 +388,12 @@ class AutoPlannerTest {
         // the answer is and the handshake was never varied at all.
         assertEquals(
             listOf(
-                AutoRoute.AETHER_H3_QUICK,
                 AutoRoute.AETHER_H2_QUICK,
+                AutoRoute.AETHER_H3_QUICK,
                 AutoRoute.AETHER_H2_RECORDS,
-                AutoRoute.AETHER_H3_ECH,
-                AutoRoute.AETHER_H2_ECH,
                 AutoRoute.AETHER_H2_FRAGMENT,
+                AutoRoute.AETHER_H2_ECH,
+                AutoRoute.AETHER_H3_ECH,
                 AutoRoute.AETHER_H2_COMPACT,
                 AutoRoute.AETHER_H2_IPV6,
                 AutoRoute.AETHER_WOM,

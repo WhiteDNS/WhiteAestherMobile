@@ -335,6 +335,11 @@ pub enum ProbeFailure {
     ConnectIpRefused,
     /// A tunnel opened and closed before carrying anything.
     NoDataPlane,
+    /// The connection ended before CONNECT-IP was accepted.
+    HandshakeClosed,
+    AlpnRejected,
+    EchRejected,
+    ClientCertificateRejected,
     Other,
 }
 
@@ -347,6 +352,10 @@ impl ProbeFailure {
             ProbeFailure::TlsRejected => "tls refused",
             ProbeFailure::ConnectIpRefused => "connect-ip refused",
             ProbeFailure::NoDataPlane => "opened, carried nothing",
+            ProbeFailure::HandshakeClosed => "closed before tunnel opened",
+            ProbeFailure::AlpnRejected => "tunnel protocol not supported",
+            ProbeFailure::EchRejected => "ECH refused",
+            ProbeFailure::ClientCertificateRejected => "client certificate refused",
             ProbeFailure::Other => "other",
         }
     }
@@ -367,6 +376,21 @@ impl ProbeFailure {
     fn of(error: &AetherError) -> Self {
         let text = error.to_string().to_ascii_lowercase();
         match error {
+            AetherError::Ech(_) => ProbeFailure::EchRejected,
+            _ if text.contains("code=0x178")
+                || text.contains("no application protocol")
+                || text.contains("h2 alpn") =>
+            {
+                ProbeFailure::AlpnRejected
+            }
+            _ if text.contains("this end closed it: code=0x12e") => ProbeFailure::PinMismatch,
+            _ if text.contains("the gateway closed it:")
+                && ["code=0x12a", "code=0x130", "code=0x174"]
+                    .iter()
+                    .any(|code| text.contains(code)) =>
+            {
+                ProbeFailure::ClientCertificateRejected
+            }
             AetherError::Tls(_) if text.contains("application verification") => {
                 ProbeFailure::PinMismatch
             }
@@ -378,10 +402,20 @@ impl ProbeFailure {
                 ProbeFailure::NoAnswer
             }
             _ if text.contains("connect-ip status") => ProbeFailure::ConnectIpRefused,
-            _ if text.contains("before data-plane") || text.contains("carried anything") => {
+            _ if text.contains("before data-plane")
+                || text.contains("stream closed before data") =>
+            {
                 ProbeFailure::NoDataPlane
             }
-            _ if text.contains("timed out") || text.contains("deadline") => ProbeFailure::NoAnswer,
+            _ if text.contains("closed before the tunnel carried anything") => {
+                ProbeFailure::HandshakeClosed
+            }
+            _ if text.contains("timed out")
+                || text.contains("timeout")
+                || text.contains("deadline") =>
+            {
+                ProbeFailure::NoAnswer
+            }
             _ if text.contains("refused") => ProbeFailure::Refused,
             _ => ProbeFailure::Other,
         }
@@ -393,6 +427,22 @@ impl ProbeFailure {
 pub struct FailureTally {
     counts: std::collections::BTreeMap<ProbeFailure, usize>,
     total: usize,
+    examples: std::collections::BTreeMap<ProbeFailure, String>,
+}
+
+#[derive(Debug)]
+struct ProbeError {
+    kind: ProbeFailure,
+    detail: String,
+}
+
+impl From<AetherError> for ProbeError {
+    fn from(error: AetherError) -> Self {
+        Self {
+            kind: ProbeFailure::of(&error),
+            detail: error.to_string(),
+        }
+    }
 }
 
 /// Probes to see before one repeated answer is believed to be about all of them.
@@ -405,6 +455,30 @@ impl FailureTally {
     fn record(&mut self, kind: ProbeFailure) {
         *self.counts.entry(kind).or_insert(0) += 1;
         self.total += 1;
+    }
+
+    fn record_error(&mut self, error: ProbeError) {
+        self.record(error.kind);
+        self.examples.entry(error.kind).or_insert_with(|| {
+            error
+                .detail
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(320)
+                .collect()
+        });
+    }
+
+    fn details(&self) -> String {
+        let mut kinds: Vec<_> = self.counts.iter().collect();
+        kinds.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
+        let mut text = self.summary();
+        for (kind, _) in kinds.into_iter().take(3) {
+            if let Some(example) = self.examples.get(kind) {
+                text.push_str(&format!("; {} example: {example}", kind.label()));
+            }
+        }
+        text
     }
 
     /// The kind that is answering for effectively all of them, if there is one.
@@ -580,6 +654,17 @@ pub async fn scan_gateways(
     limit: usize,
     cancelled: &AtomicBool,
 ) -> Result<Vec<ProbeResult>> {
+    scan_gateways_observed(probe, mode, limit, cancelled, &[], &|_| {}).await
+}
+
+pub async fn scan_gateways_observed(
+    probe: &MasqueProbe,
+    mode: ScanMode,
+    limit: usize,
+    cancelled: &AtomicBool,
+    preferred: &[SocketAddr],
+    observer: crate::scan::ScanObserver<'_>,
+) -> Result<Vec<ProbeResult>> {
     let mut st = mode.strategy();
     st.concurrency = crate::sysprofile::cap_concurrency(st.concurrency);
     let timeout = st.per_probe_timeout;
@@ -591,12 +676,20 @@ pub async fn scan_gateways(
             return Err(AetherError::NoCleanEndpoint);
         }
     }
-    let candidates = build_candidates(&st, &probe.ports, effective_ip);
+    let candidates = discovery_candidates(
+        preferred,
+        build_candidates(&st, &probe.ports, effective_ip),
+        effective_ip,
+    );
     let ironclad = mode == ScanMode::Ironclad;
+    let started = Instant::now();
+    let mut progress = crate::scan::ScanProgress::new(candidates.len());
+    let mut failures = FailureTally::default();
+    progress.publish(started, String::new(), observer);
     let stream = futures::stream::iter(
         candidates
             .into_iter()
-            .map(|(ip, port)| verify_one(probe, ip, port, timeout, ironclad)),
+            .map(|(ip, port)| verify_one_detailed(probe, ip, port, timeout, ironclad)),
     )
     .buffer_unordered(st.concurrency);
     tokio::pin!(stream);
@@ -620,8 +713,19 @@ pub async fn scan_gateways(
             item = stream.next() => {
                 match item {
                     None => break,
-                    Some(Err(_)) => continue,
+                    Some(Err(error)) => {
+                        progress.completed += 1;
+                        failures.record_error(error);
+                        progress.publish(started, failures.details(), observer);
+                        // Web/CDN addresses can reject the tunnel immediately while
+                        // an assigned gateway is still handshaking. Their failures
+                        // must not cancel that pending candidate.
+                        continue;
+                    },
                     Some(Ok(result)) => {
+                        progress.completed += 1;
+                        progress.hit(SocketAddr::new(result.ip, result.port), result.rtt);
+                        progress.publish(started, failures.details(), observer);
                         if !results.iter().any(|existing: &ProbeResult| {
                             existing.ip == result.ip && existing.port == result.port
                         }) {
@@ -647,10 +751,31 @@ pub async fn scan_gateways(
         return Err(AetherError::Other("endpoint scan cancelled".into()));
     }
     if results.is_empty() {
-        Err(AetherError::NoCleanEndpoint)
+        Err(AetherError::Other(format!(
+            "no working MASQUE endpoint: {}",
+            failures.details()
+        )))
     } else {
         Ok(results)
     }
+}
+
+/// Strong confirmation for a short list, using the exact framing and TLS options.
+pub async fn verify_gateway_traffic(probe: &MasqueProbe, peer: SocketAddr) -> Result<Duration> {
+    let params = crate::tunnelping::MasquePingParams {
+        peer,
+        sni: probe.sni.clone(),
+        authority: probe.authority.clone(),
+        path: probe.path.clone(),
+        cert_pem: probe.cert_pem.to_vec(),
+        key_pem: probe.key_pem.to_vec(),
+        ech_config_list: probe.ech_config_list.as_ref().map(|a| a.to_vec()),
+        noize: probe.noize.clone(),
+        local_ipv4: probe.local_ipv4,
+        local_ipv4_str: probe.local_ipv4.to_string(),
+        local_ipv6_str: String::new(),
+    };
+    crate::tunnelping::masque_http_ping(&params, Duration::from_secs(15)).await
 }
 
 async fn verify_one(
@@ -660,6 +785,18 @@ async fn verify_one(
     timeout: Duration,
     ironclad: bool,
 ) -> std::result::Result<ProbeResult, ProbeFailure> {
+    verify_one_detailed(probe, ip, port, timeout, ironclad)
+        .await
+        .map_err(|error| error.kind)
+}
+
+async fn verify_one_detailed(
+    probe: &MasqueProbe,
+    ip: IpAddr,
+    port: u16,
+    timeout: Duration,
+    ironclad: bool,
+) -> std::result::Result<ProbeResult, ProbeError> {
     if ironclad {
         let params = crate::tunnelping::MasquePingParams {
             peer: SocketAddr::new(ip, port),
@@ -684,7 +821,7 @@ async fn verify_one(
             }
             Err(e) => {
                 log::debug!("[-] ironclad {ip}:{port} failed real http check: {e}");
-                Err(ProbeFailure::of(&e))
+                Err(ProbeError::from(e))
             }
         };
     }
@@ -710,7 +847,7 @@ async fn verify_one(
             Ok(rtt) => Ok(ProbeResult { ip, port, rtt }),
             Err(e) => {
                 log::debug!("h2 probe {ip}:{port} -> {e}");
-                Err(ProbeFailure::of(&e))
+                Err(ProbeError::from(e))
             }
         };
     }
@@ -732,7 +869,7 @@ async fn verify_one(
         Ok(rtt) => Ok(ProbeResult { ip, port, rtt }),
         Err(e) => {
             log::debug!("probe {ip}:{port} -> {e}");
-            Err(ProbeFailure::of(&e))
+            Err(ProbeError::from(e))
         }
     }
 }
@@ -844,7 +981,101 @@ fn build_candidates(st: &Strategy, ports: &[u16], ip: IpScan) -> Vec<(IpAddr, u1
         }
     }
 
-    out
+    fair_candidates(out)
+}
+
+// Give IPv6 and alternate ports a turn before the deadline, even when IPv4
+// contributes thousands of candidates. Preserve priority within each lane.
+fn fair_candidates(candidates: Vec<(IpAddr, u16)>) -> Vec<(IpAddr, u16)> {
+    type Lane = ((bool, u16), std::collections::VecDeque<(IpAddr, u16)>);
+    let mut lanes: Vec<Lane> = Vec::new();
+    for candidate in candidates {
+        let key = (candidate.0.is_ipv6(), candidate.1);
+        if let Some((_, lane)) = lanes.iter_mut().find(|(k, _)| *k == key) {
+            lane.push_back(candidate);
+        } else {
+            lanes.push((key, std::collections::VecDeque::from([candidate])));
+        }
+    }
+    let mut ordered = Vec::new();
+    loop {
+        let before = ordered.len();
+        for (_, lane) in &mut lanes {
+            if let Some(candidate) = lane.pop_front() {
+                ordered.push(candidate);
+            }
+        }
+        if before == ordered.len() {
+            return ordered;
+        }
+    }
+}
+
+fn discovery_candidates(
+    preferred: &[SocketAddr],
+    pool: Vec<(IpAddr, u16)>,
+    ip: IpScan,
+) -> Vec<(IpAddr, u16)> {
+    let mut seen = HashSet::new();
+    preferred
+        .iter()
+        .filter(|peer| {
+            if peer.is_ipv4() {
+                ip.want_v4()
+            } else {
+                ip.want_v6()
+            }
+        })
+        .map(|peer| (peer.ip(), peer.port()))
+        .chain(pool)
+        .filter(|candidate| seen.insert(*candidate))
+        .collect()
+}
+
+#[cfg(test)]
+mod discovery_fairness_tests {
+    use super::*;
+
+    #[test]
+    fn assigned_candidates_are_first_deduplicated_and_respect_the_ip_family() {
+        let v4: SocketAddr = "162.159.192.2:443".parse().unwrap();
+        let v6: SocketAddr = "[2606:4700:d0::1]:443".parse().unwrap();
+        let pool = vec![
+            (v4.ip(), v4.port()),
+            ("162.159.197.9".parse().unwrap(), 443),
+        ];
+        let result = discovery_candidates(&[v6, v4, v4], pool, IpScan::V4);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], (v4.ip(), v4.port()));
+        assert!(result.iter().all(|(ip, _)| ip.is_ipv4()));
+    }
+
+    #[test]
+    fn ipv6_and_alternate_ports_are_not_starved_by_a_large_ipv4_pool() {
+        let mut input: Vec<_> = (1..=200)
+            .map(|last| (IpAddr::V4(Ipv4Addr::new(162, 159, 197, last)), 443))
+            .collect();
+        let v6: IpAddr = "2606:4700:d0::1".parse().unwrap();
+        let alternate = (input[0].0, 8443);
+        input.push((v6, 443));
+        input.push(alternate);
+        let output = fair_candidates(input.clone());
+        assert!(output[..3].contains(&(v6, 443)));
+        assert!(output[..3].contains(&alternate));
+        assert_eq!(output.len(), input.len());
+        let input_set: HashSet<_> = input.into_iter().collect();
+        assert_eq!(output.iter().copied().collect::<HashSet<_>>(), input_set);
+        // Dedicated seed priority within a lane survives interleaving.
+        let primary: Vec<_> = output
+            .into_iter()
+            .filter(|(ip, port)| ip.is_ipv4() && *port == 443)
+            .collect();
+        assert_eq!(primary[0].0, IpAddr::V4(Ipv4Addr::new(162, 159, 197, 1)));
+        assert_eq!(
+            primary[199].0,
+            IpAddr::V4(Ipv4Addr::new(162, 159, 197, 200))
+        );
+    }
 }
 
 fn parse_cidr_v4(cidr: &str) -> Option<(u32, u8)> {
@@ -1085,6 +1316,49 @@ mod tests {
         for (error, expected) in cases {
             assert_eq!(expected, ProbeFailure::of(&error), "{error}");
         }
+    }
+
+    #[test]
+    fn a_pre_tunnel_tls_close_is_never_called_a_working_tunnel_without_traffic() {
+        let cases = [
+            ("closed before the tunnel carried anything; the gateway closed it: code=0x178 (tls: no application protocol)", ProbeFailure::AlpnRejected),
+            ("closed before the tunnel carried anything; this end closed it: code=0x12e (tls: certificate unknown)", ProbeFailure::PinMismatch),
+            ("closed before the tunnel carried anything; the gateway closed it: code=0x130 (tls: unknown certificate authority)", ProbeFailure::ClientCertificateRejected),
+            ("closed before the tunnel carried anything; neither end said why", ProbeFailure::HandshakeClosed),
+            ("CONNECT-IP accepted but closed before data-plane confirmation", ProbeFailure::NoDataPlane),
+            ("h2 stream closed before data", ProbeFailure::NoDataPlane),
+            ("h2 ALPN: gateway selected no protocol instead of h2", ProbeFailure::AlpnRejected),
+            ("verify timeout", ProbeFailure::NoAnswer),
+        ];
+        for (message, expected) in cases {
+            assert_eq!(
+                ProbeFailure::of(&AetherError::Masque(message.into())),
+                expected,
+                "{message}"
+            );
+        }
+        assert_eq!(
+            ProbeFailure::of(&AetherError::Ech("the handshake went without ECH".into())),
+            ProbeFailure::EchRejected
+        );
+    }
+
+    #[test]
+    fn scan_details_preserve_a_bounded_example_of_the_actual_failure() {
+        let mut tally = FailureTally::default();
+        let message = "closed before the tunnel carried anything; the gateway closed it: code=0x178 (tls: no application protocol)";
+        tally.record_error(ProbeError::from(AetherError::Masque(message.into())));
+        tally.record_error(ProbeError::from(AetherError::Masque(message.into())));
+        let details = tally.details();
+        assert!(details.contains("tunnel protocol not supported=2"));
+        assert!(details.contains("code=0x178"));
+        assert_eq!(details.matches("example:").count(), 1);
+        tally.record_error(ProbeError::from(AetherError::Other("é\n".repeat(2000))));
+        assert!(tally
+            .examples
+            .values()
+            .all(|example| example.chars().count() <= 320));
+        assert!(!tally.details().contains('\n'));
     }
 
     /// The summary names every kind it saw, so a report can be read.

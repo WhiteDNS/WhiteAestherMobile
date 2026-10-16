@@ -584,4 +584,22 @@
     <string name="tls_options_error">تنظیمات TLS باید کوتاه و تک‌خطی باشند.</string>
     <string name="scan_verified">endpointهای تأییدشده</string>
     <string name="scan_verified_description">gatewayهای شناخته‌شده را ترجیح می‌دهد و در صورت امکان، دو گام تونل تو‌در‌تو را در محدوده‌های متفاوت انتخاب می‌کند.</string>
+    <string name="scan_preparing">در حال آماده‌سازی جست‌وجو…</string>
+    <string name="scan_on">روشن</string>
+    <string name="scan_off">خاموش</string>
+    <string name="scan_offline">پیش از جست‌وجو به وای‌فای یا اینترنت همراه وصل شوید.</string>
+    <string name="scan_rechecking">در حال بررسی دوبارهٔ مسیرهای ذخیره‌شده روی این شبکه…</string>
+    <string name="scan_confirming">در حال آزمایش عبور واقعی اینترنت و پایداری…</string>
+    <string name="scan_searching">مرحلهٔ %1$d · %2$s</string>
+    <string name="scan_finished">%1$d مسیر پیدا شد · %2$d مسیر آزمون اینترنت را گذراند</string>
+    <string name="scan_no_route">هیچ مسیری روی این شبکه پاسخ نداد. جزئیات اسکن را برای دیدن مراحل ناموفق باز کنید.</string>
+    <string name="scan_network_changed">شبکه عوض شد. روی اتصال جدید دوباره جست‌وجو کنید.</string>
+    <string name="scan_progress_counts">%1$d از %2$d آدرس بررسی شد · %3$d ثانیه</string>
+    <string name="scan_profile_details">%1$s · تقسیم TLS: %2$s · ECH: %3$s</string>
+    <string name="scan_stable">آزمون اینترنت: %1$d از %2$d · نوسان %3$d میلی‌ثانیه</string>
+    <string name="scan_handshake_only">تونل پاسخ داد · اینترنت تأیید نشد</string>
+    <string name="scan_pending_check">تونل پاسخ داد · در انتظار آزمون اینترنت</string>
+    <string name="scan_details">جزئیات اسکن</string>
+    <string name="scan_help">هر دو روش اتصال MASQUE بررسی می‌شوند؛ در صورت نیاز، روش‌های بازیابی TLS و جست‌وجوی گسترده‌تر هم امتحان می‌شوند. مسیرهای ذخیره‌شده دوباره آزمایش می‌شوند. برای انتخاب نتیجه، اسکن را متوقف کنید.</string>
+    <string name="scan_nested_note">در تونل‌های تودرتو، این آزمون‌ها مسیر بیرونی را تأیید می‌کنند. مسیر دوم هنگام اتصال بررسی می‌شود.</string>
 </resources>

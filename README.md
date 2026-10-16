@@ -102,14 +102,16 @@ captures IPv4, IPv6 and DNS, or exposes a loopback SOCKS5 proxy.
   device into it. Both are slower, and one of them is someone else's network, so
   they are there for the networks Aether cannot get out of rather than as equal
   choices. Tor carries no UDP, which the app declares rather than discovers
-- **Transports** — MASQUE over HTTP/3 (QUIC) and HTTP/2 (TLS over TCP, for
-  networks that block UDP)
+- **Transports** — MASQUE over HTTP/2 (TLS over TCP) first on an unproven network,
+  with HTTP/3 (QUIC) available during recovery. The tunnel uses `www.cloudflare.com`
+  as its TLS server name; a route that worked on this network takes priority next time
 - **Obfuscation** — padding profiles that make tunnel traffic harder to
   fingerprint
 - **Endpoints** — discovered automatically, or pinned to a specific `IP:port`
   with optional fallback
-- **Identity** — provisioned on first connect, private key kept in app-private
-  storage, never leaves the device
+- **Identity** — provisioned on first connect. By default, TCP edge probes feed a
+  race between raw TLS, split ClientHello and ECH; only the winning authenticated
+  handshake sends the API request. The private key stays in app-private storage
 - **Exit chain** — an optional second hop after the tunnel, so sites see your
   own node rather than Cloudflare. Nodes come from a subscription or pasted
   links, and are dialled from inside the tunnel by default so neither your

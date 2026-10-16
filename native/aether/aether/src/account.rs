@@ -262,10 +262,11 @@ fn backoff_delay(attempt: u32) -> std::time::Duration {
 
 fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<std::time::Duration> {
     let raw = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
-    let seconds = raw.trim().parse::<u64>().ok()?;
-    Some(std::time::Duration::from_secs(
-        seconds.min(API_RETRY_AFTER_CAP_SECS),
-    ))
+    let seconds = raw.trim().parse::<u64>().ok().or_else(|| {
+        let date = chrono::DateTime::parse_from_rfc2822(raw.trim()).ok()?;
+        Some((date.timestamp() - chrono::Utc::now().timestamp()).max(0) as u64)
+    })?;
+    Some(std::time::Duration::from_secs(seconds))
 }
 
 fn refuses_identity(status: reqwest::StatusCode) -> bool {
@@ -448,6 +449,8 @@ pub fn check_enroll_address() -> Result<()> {
 /// core's TLS fingerprint (see `https`), offering the ECH key of --ech when it is given, through
 /// the upstream proxy when there is one. Retried on a transient answer, after as long as the API
 /// asks to wait when it does.
+/// Without explicit ECH or an enrollment address, authenticated raw, split and
+/// ECH handshakes race over TCP-reachable edges before one HTTP request is sent.
 async fn api_call(
     label: &str,
     method: &str,
@@ -457,9 +460,20 @@ async fn api_call(
     jwt: Option<&str>,
 ) -> Result<AccountData> {
     let (address, port) = enroll_address()?;
+    // Explicit ECH and enrollment addresses remain strict manual policies.
+    // Otherwise bootstrap all three methods without waiting for a failed direct call.
+    let adaptive = std::env::var("AETHER_ENROLL_ADDRESS")
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+        && std::env::var("AETHER_ECH")
+            .unwrap_or_default()
+            .trim()
+            .is_empty();
     // The system resolver looks a name up outside the socket mark; through the upstream proxy,
     // the proxy looks it up and only the marked connection to the proxy leaves.
     if crate::egress::mark() != 0
+        && !adaptive
         && crate::upstream::configured().is_none()
         && address.parse::<std::net::IpAddr>().is_err()
     {
@@ -501,7 +515,17 @@ async fn api_call(
             tokio::time::sleep(wait).await;
         }
 
-        let sent = crate::https::send(&request, &fingerprint, ech.as_mut(), API_TIMEOUT).await;
+        let sent = if adaptive {
+            match apifront::send(&request, &fingerprint, API_TIMEOUT).await {
+                Ok((response, key)) => {
+                    ech = key;
+                    Ok(response)
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            crate::https::send(&request, &fingerprint, ech.as_mut(), API_TIMEOUT).await
+        };
         if let Some(key) = &ech {
             // A key a server handed back is the one the later calls offer.
             remember_api_ech(key.clone());
@@ -510,39 +534,10 @@ async fn api_call(
         let response = match sent {
             Ok(response) => response,
             Err(error) => {
-                // The request never became an HTTP exchange at all: the name did
-                // not resolve, the connection was refused, or it was reset or
-                // timed out on the way out. Repeating it cannot change any of
-                // those, because what failed is the route rather than the
-                // answer -- and it used to be repeated four more times at twenty
-                // seconds each. That is a hundred seconds spent before the
-                // camouflaged route was allowed to start, on exactly the
-                // networks where the camouflaged route is the only one that can
-                // work. Measured on a phone in Iran: 18:13:26 to 18:15:08.
-                //
-                // The retry ladder below is kept for the answers that ask for
-                // one -- 429, 5xx and Retry-After -- because those did reach
-                // Cloudflare and are worth asking again.
-                log::warn!(
-                    "[!] {label}: the direct route did not complete a request ({error}); \
-                     handing over to the camouflaged route rather than repeating it"
-                );
-                if ech.is_none()
-                    && std::env::var("AETHER_ENROLL_ADDRESS")
-                        .unwrap_or_default()
-                        .trim()
-                        .is_empty()
-                {
-                    return fallback_call(
-                        label,
-                        method,
-                        path,
-                        body.map(<[u8]>::to_vec),
-                        bearer,
-                        jwt,
-                    )
-                    .await;
-                }
+                // Only explicit HTTP refusals asking for a retry enter the
+                // backoff below. An ambiguous failed POST is never sent again
+                // over another route: the server may already have accepted it.
+                log::warn!("[!] {label}: API route failed ({error})");
                 return Err(error);
             }
         };
@@ -562,6 +557,16 @@ async fn api_call(
         }
 
         let described = format!("{label}: {}", describe_rejection(status, &body));
+        // Preserve the server's full hold. Sleeping for a truncated hold and
+        // submitting four more registrations only prolongs rate limiting.
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+            || cooldown.is_some_and(|wait| wait.as_secs() > API_RETRY_AFTER_CAP_SECS)
+        {
+            return Err(AetherError::RateLimited {
+                reason: described,
+                retry_after: cooldown.map(|wait| wait.as_secs()),
+            });
+        }
         last_error = if refuses_identity(status) {
             AetherError::IdentityRefused(described)
         } else {
@@ -909,17 +914,57 @@ pub struct MasqueEnrollment {
     pub key_pem: Vec<u8>,
     pub issued_at: u64,
     pub renewed: bool,
+    pub profile: Option<AccountData>,
+}
+
+impl MasqueEnrollment {
+    pub fn apply(self, identity: Identity) -> Identity {
+        let mut identity = Identity {
+            cert_pem: self.cert_pem,
+            key_pem: self.key_pem,
+            cert_issued_at: self.issued_at,
+            ..identity
+        };
+        if let Some(profile) = self.profile {
+            apply_interface_profile(&mut identity, &profile);
+        }
+        identity
+    }
+}
+
+/// Enrollment and device refresh can move both the edge and tunnel addresses.
+pub fn apply_interface_profile(identity: &mut Identity, profile: &AccountData) {
+    let ipv4 = profile.config.interface.addresses.v4.trim();
+    let ipv6 = profile.config.interface.addresses.v6.trim();
+    if !ipv4.is_empty() {
+        identity.ipv4 = ipv4.into();
+    }
+    if !ipv6.is_empty() {
+        identity.ipv6 = ipv6.into();
+    }
+    let endpoint = endpoint_from(profile);
+    if !endpoint.is_empty() {
+        identity.assigned_endpoint = endpoint;
+    }
 }
 
 pub async fn ensure_masque_enrolled(identity: &Identity) -> Result<MasqueEnrollment> {
+    ensure_masque_enrolled_with_key(identity, None).await
+}
+
+pub(crate) async fn ensure_masque_enrolled_with_key(
+    identity: &Identity,
+    prepared: Option<MasqueKeyPair>,
+) -> Result<MasqueEnrollment> {
     let usable = !identity.cert_pem.is_empty() && !identity.key_pem.is_empty();
 
-    if usable && !masque_cert_expiring(identity.cert_issued_at) {
+    if prepared.is_none() && usable && !masque_cert_expiring(identity.cert_issued_at) {
         return Ok(MasqueEnrollment {
             cert_pem: identity.cert_pem.clone(),
             key_pem: identity.key_pem.clone(),
             issued_at: identity.cert_issued_at,
             renewed: false,
+            profile: None,
         });
     }
 
@@ -929,7 +974,11 @@ pub async fn ensure_masque_enrolled(identity: &Identity) -> Result<MasqueEnrollm
         log::info!("[+] enrolling MASQUE key for device {}", identity.device_id);
     }
 
-    let keypair = generate_masque_keypair()?;
+    let resumable = prepared.is_some();
+    let keypair = match prepared {
+        Some(pair) => pair,
+        None => generate_masque_keypair()?,
+    };
     match enroll_key(
         &identity.device_id,
         &identity.access_token,
@@ -938,16 +987,17 @@ pub async fn ensure_masque_enrolled(identity: &Identity) -> Result<MasqueEnrollm
     )
     .await
     {
-        Ok(_) => {
+        Ok(profile) => {
             log::info!("[+] MASQUE key enrolled");
             Ok(MasqueEnrollment {
                 cert_pem: keypair.cert_pem,
                 key_pem: keypair.key_pem,
                 issued_at: now_unix(),
                 renewed: true,
+                profile: Some(profile),
             })
         }
-        Err(error) if cert_still_usable(identity) => {
+        Err(error) if !resumable && cert_still_usable(identity) => {
             log::warn!(
                 "[!] key enrollment failed ({error}); keeping the certificate already on disk"
             );
@@ -956,6 +1006,7 @@ pub async fn ensure_masque_enrolled(identity: &Identity) -> Result<MasqueEnrollm
                 key_pem: identity.key_pem.clone(),
                 issued_at: identity.cert_issued_at,
                 renewed: false,
+                profile: None,
             })
         }
         Err(error) => Err(error),
@@ -1157,7 +1208,7 @@ mod tests {
     }
 
     #[test]
-    fn a_retry_after_header_is_honoured_but_capped() {
+    fn a_retry_after_header_is_preserved_for_the_persistent_hold() {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::RETRY_AFTER,
@@ -1165,8 +1216,84 @@ mod tests {
         );
         assert_eq!(
             retry_after(&headers),
-            Some(std::time::Duration::from_secs(API_RETRY_AFTER_CAP_SECS))
+            Some(std::time::Duration::from_secs(120))
         );
+    }
+
+    #[tokio::test]
+    async fn a_rate_limit_is_returned_once_with_its_full_server_hold() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let _upstream = crate::upstream::hold_setting().await;
+        let _options = crate::tls::hold_options().await;
+        let (address, listener, acceptor) = crate::https::test_server(b"\x08http/1.1").await;
+        std::env::set_var("AETHER_ENROLL_ADDRESS", address.to_string());
+        std::env::remove_var("AETHER_ECH");
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut tls = tokio_boring::accept(&acceptor, tcp).await.unwrap();
+            let mut request = Vec::new();
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let mut buffer = [0; 1024];
+                let read = tls.read(&mut buffer).await.unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&buffer[..read]);
+            }
+            tls.write_all(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 3600\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+            tokio::time::timeout(std::time::Duration::from_millis(300), listener.accept())
+                .await
+                .is_ok()
+        });
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            api_call("registration", "POST", "/reg", Some(b"{}"), None, None),
+        )
+        .await;
+        std::env::remove_var("AETHER_ENROLL_ADDRESS");
+        let error = result
+            .expect("a hold must not be slept out inside the API call")
+            .unwrap_err();
+        assert_eq!(error.retry_after(), Some(3600));
+        assert!(
+            !server.await.unwrap(),
+            "a rate-limited registration was sent again"
+        );
+    }
+
+    #[test]
+    fn enrollment_applies_the_new_interface_and_edge_without_losing_credentials() {
+        let mut old = handshake_identity();
+        old.ipv4 = "172.16.0.2".into();
+        old.assigned_endpoint = "162.159.192.2".into();
+        let profile = serde_json::from_str(r#"{"id":"device","config":{"interface":{"addresses":{"v4":"172.16.1.4","v6":"2606:4700::4"}},"peers":[{"public_key":"","endpoint":{"v4":"162.159.198.2:2408"}}]}}"#).unwrap();
+        let updated = MasqueEnrollment {
+            cert_pem: old.cert_pem.clone(),
+            key_pem: old.key_pem.clone(),
+            issued_at: old.cert_issued_at,
+            renewed: true,
+            profile: Some(profile),
+        }
+        .apply(old);
+        assert_eq!(updated.ipv4, "172.16.1.4");
+        assert_eq!(updated.ipv6, "2606:4700::4");
+        assert_eq!(updated.assigned_endpoint, "162.159.198.2");
+        assert_eq!(updated.access_token, "token");
+        assert!(updated.has_masque_credentials());
+    }
+
+    #[test]
+    fn partial_enrollment_metadata_does_not_erase_a_saved_interface() {
+        let old = handshake_identity();
+        let ipv4 = old.ipv4.clone();
+        let profile = serde_json::from_str(r#"{"id":"device"}"#).unwrap();
+        let updated = MasqueEnrollment {
+            cert_pem: old.cert_pem.clone(),
+            key_pem: old.key_pem.clone(),
+            issued_at: old.cert_issued_at,
+            renewed: true,
+            profile: Some(profile),
+        }
+        .apply(old);
+        assert_eq!(updated.ipv4, ipv4);
     }
 
     #[test]
@@ -1336,60 +1463,5 @@ mod identity_refusal_tests {
                 "{status} cannot be both retryable and a dead identity"
             );
         }
-    }
-}
-
-async fn fallback_call(
-    label: &str,
-    method: &str,
-    path: &str,
-    body: Option<Vec<u8>>,
-    bearer: Option<&str>,
-    jwt: Option<&str>,
-) -> Result<AccountData> {
-    log::info!(
-        "[*] {label} retrying over a camouflaged route: random cloudflare edge address, \
-         no dns lookup, split client hello, alternate tls fingerprints"
-    );
-
-    let request = apifront::ApiRequest {
-        method: method.to_string(),
-        host: api_host().to_string(),
-        path: path.to_string(),
-        headers: front_headers(bearer, jwt),
-        body,
-    };
-
-    let response = apifront::fetch(&request).await?;
-
-    if (200..300).contains(&response.status) {
-        log::info!(
-            "[+] {label} went through the camouflaged route ({})",
-            response.route
-        );
-        return serde_json::from_str::<AccountData>(&response.body).map_err(|e| {
-            AetherError::Api(format!(
-                "{label} decode over {}: {e} ({} byte answer)",
-                response.route,
-                response.body.len()
-            ))
-        });
-    }
-
-    let described = format!(
-        "{label} over {}: {}",
-        response.route,
-        describe_status(response.status, &response.body)
-    );
-    if matches!(response.status, 401 | 404 | 410) {
-        return Err(AetherError::IdentityRefused(described));
-    }
-    Err(AetherError::Api(described))
-}
-
-fn describe_status(status: u16, body: &str) -> String {
-    match reqwest::StatusCode::from_u16(status) {
-        Ok(code) => describe_rejection(code, body),
-        Err(_) => format!("status {status}: {body}"),
     }
 }

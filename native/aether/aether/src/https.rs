@@ -11,6 +11,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::error::{AetherError, Result};
+use crate::fragment::{FragmentConfig, FragmentingStream};
 use crate::tls::Fingerprint;
 
 /// ALPN: HTTP/2, then HTTP/1.1, as Chrome offers them.
@@ -30,6 +31,7 @@ const MAX_LINE: usize = 8 * 1024;
 /// `path` the path with its query. The connection goes to `host` on `port`, and the ClientHello
 /// names `host`, unless `address` and `sni` name others; offering ECH, the name goes inside the
 /// encrypted ClientHello.
+#[derive(Clone, Copy)]
 pub struct Request<'a> {
     pub method: &'a str,
     pub host: &'a str,
@@ -64,7 +66,9 @@ pub async fn send(
     ech: Option<&mut Vec<u8>>,
     timeout: Duration,
 ) -> Result<Response> {
-    tokio::time::timeout(timeout, exchange(request, fingerprint, ech))
+    // The TLS exchange future is large in debug builds. Keeping it inline in
+    // Timeout copies it through the nested DNS/ECH/provisioning call chain.
+    tokio::time::timeout(timeout, Box::pin(exchange(request, fingerprint, ech)))
         .await
         .map_err(|_| {
             AetherError::Api(format!(
@@ -78,12 +82,30 @@ pub async fn send(
 async fn exchange(
     request: &Request<'_>,
     fingerprint: &Fingerprint,
-    mut ech: Option<&mut Vec<u8>>,
+    ech: Option<&mut Vec<u8>>,
 ) -> Result<Response> {
+    let tls = open(request, fingerprint, ech, FragmentConfig::disabled(), None).await?;
+    send_on_session(tls, request).await
+}
+
+/// Establish and authenticate TLS without sending an HTTP request. Callers can
+/// race handshakes, drop the losers, and send a registration exactly once.
+pub(crate) async fn open(
+    request: &Request<'_>,
+    fingerprint: &Fingerprint,
+    mut ech: Option<&mut Vec<u8>>,
+    fragments: FragmentConfig,
+    maximum_version: Option<boring::ssl::SslVersion>,
+) -> Result<tokio_boring::SslStream<FragmentingStream<TcpStream>>> {
     let (address, port) = request.address.unwrap_or((request.host, request.port));
     let mut retried = false;
     let tls = loop {
         let mut config = configuration(fingerprint)?;
+        if let Some(version) = maximum_version {
+            config
+                .set_max_proto_version(Some(version))
+                .map_err(|e| AetherError::Tls(e.to_string()))?;
+        }
         if let Some(list) = ech.as_deref() {
             // BoringSSL takes a key it offers nothing from, and the name would go in the clear.
             crate::tls::ensure_offerable(list)?;
@@ -93,7 +115,8 @@ async fn exchange(
         }
         let tcp = dial(address, port).await?;
         let _ = tcp.set_nodelay(true);
-        match tokio_boring::connect(config, request.sni.unwrap_or(request.host), tcp).await {
+        let stream = FragmentingStream::new(tcp, fragments);
+        match tokio_boring::connect(config, request.sni.unwrap_or(request.host), stream).await {
             Ok(tls) => break tls,
             Err(e) => {
                 let message = e.to_string();
@@ -128,6 +151,13 @@ async fn exchange(
     if ech.is_some() && !tls.ssl().ech_accepted() {
         return Err(AetherError::Ech("the handshake went without ECH".into()));
     }
+    Ok(tls)
+}
+
+pub(crate) async fn send_on_session(
+    tls: tokio_boring::SslStream<FragmentingStream<TcpStream>>,
+    request: &Request<'_>,
+) -> Result<Response> {
     if tls.ssl().selected_alpn_protocol() == Some(b"h2") {
         over_http2(tls, request).await
     } else {
@@ -175,7 +205,9 @@ fn configuration(fingerprint: &Fingerprint) -> Result<ConnectConfiguration> {
     {
         let pins = test_pins().lock().unwrap().clone();
         let pins: Vec<_> = pins.iter().map(Vec::as_slice).collect();
-        crate::tls::install_verification(&mut builder, true, &pins)?;
+        if !pins.is_empty() {
+            crate::tls::install_verification(&mut builder, true, &pins)?;
+        }
     }
     let config = builder
         .build()
@@ -316,7 +348,9 @@ where
     tls.flush().await.map_err(failed)?;
 
     let mut answer = Http1Answer::default();
-    let mut chunk = [0u8; 8192];
+    // This buffer lives across awaits and therefore enlarges every enclosing
+    // API/provisioning future when stored inline. Allocate it directly on the heap.
+    let mut chunk = vec![0u8; 8192].into_boxed_slice();
     loop {
         match tls.read(&mut chunk).await {
             // The connection ended, with a close_notify or without one, which BoringSSL tells

@@ -22,6 +22,7 @@ object NetworkIdentity {
         val online: Boolean,
         /** See [NetworkKey]; null when the network could not be named. */
         val key: String?,
+        val handle: Long? = null,
     )
 
     fun current(context: Context): Snapshot {
@@ -31,9 +32,9 @@ object NetworkIdentity {
             ?: return Snapshot(online = true, key = null)
         val network = underlying(connectivity) ?: return Snapshot(online = false, key = null)
         val capabilities = connectivity.getNetworkCapabilities(network)
-            ?: return Snapshot(online = true, key = null)
+            ?: return Snapshot(online = true, key = null, handle = network.networkHandle)
         val key = runCatching { keyFor(context, connectivity, network, capabilities) }.getOrNull()
-        return Snapshot(online = true, key = key)
+        return Snapshot(online = true, key = key, handle = network.networkHandle)
     }
 
     /**
