@@ -42,15 +42,16 @@ sideloaded APK.
 
 ## First run
 
-**1. Leave Coverage on "Whole device".** Under **Traffic**, this is the default
-and what almost everyone wants — every app on the phone is carried through the
-tunnel. *Proxy only* runs a local SOCKS5 listener instead and routes nothing by
-itself; traffic only goes through it if you point an app at `127.0.0.1:1819`. If
-you pick it by accident, it looks like the app connected but did nothing.
+**1. Leave the mode on VPN on the Connect screen.** This protects the whole
+device by default. The **Apps** row opens per-app routing. **Proxy** only starts
+the local SOCKS5 listener; apps must be pointed at 127.0.0.1:1819 to use it.
 
-**2. Leave the profile on "Adaptive".** Under **Routes**. It balances how hard
-the engine searches against how quickly it connects. The other profiles are
-narrower:
+**2. Leave Connection method on Automatic.** Select it directly on Connect, or
+open **Methods** to choose Aether, Psiphon or Tor. Automatic finds a working
+method for the network and remembers what succeeded.
+
+Network presets remain available under **Methods → Advanced**. Adaptive is the
+default; these presets tune the Aether transport and discovery settings:
 
 | Profile | For |
 | --- | --- |
@@ -59,19 +60,20 @@ narrower:
 | **Strict network** | Office or campus Wi-Fi that blocks a lot — quieter probing, slower |
 | **Manual** | You set the transport and search depth yourself |
 
-**3. Allow background running when asked.** Under **Settings**, a card appears if
+**3. Allow background running when asked.** Open **Settings** from the header gear. A card appears if
 Android is still allowed to suspend the app. Without the exemption the tunnel
 drops when the screen goes off — some manufacturers are far more aggressive about
 this than others.
 
 **4. Expect the first connect to take a moment.** The engine tests real network
 paths before accepting one. If a path fails it backs off and retries, and the
-status line tells you which attempt it is on.
+retry events are available under Connection details and Logs.
 
 ## When it will not connect
 
-The line under the big status heading is the engine's own message, not a generic
-error. It is the first thing to read.
+The Connect screen shows a short status and a useful action when an attempt
+fails. Open **Connection details** for the engine's original message, or **Logs**
+for the full diagnostic history.
 
 | What you see | What it means |
 | --- | --- |
@@ -82,11 +84,11 @@ error. It is the first thing to read.
 | `custom endpoint ... failed MASQUE validation` | The address you pinned is not reachable. Switch **Endpoint** back to Automatic. |
 | `Connected to a different endpoint` | Your pinned address failed and fallback substituted a working one. |
 
-Worth trying, in order: switch the profile to **Strict network**; set
-**Addresses** to *IPv4 only* under Traffic if the network handles IPv6 badly;
+Worth trying, in order: choose **Strict network** under **Methods → Advanced**; set
+**Addresses** to *IPv4 only* under **Tools** if the network handles IPv6 badly;
 turn **Obfuscation** up to *Aggressive*.
 
-Under **Settings → Diagnostics** you can raise the detail level, reproduce the
+Under **Logs** you can raise the detail level, reproduce the
 problem, and send a report. It shows you the exact text before anything is sent,
 and replaces IP addresses with placeholders unless you turn that off.
 
@@ -97,7 +99,7 @@ handshake against them, and only accepts a route once real traffic returns
 through it. The app then either raises an Android `VpnService` tunnel that
 captures IPv4, IPv6 and DNS, or exposes a loopback SOCKS5 proxy.
 
-- **Carrier** — Aether by default. Under **Routes**, Psiphon or Tor can carry
+- **Carrier** — Automatic by default. Under **Methods**, Aether, Psiphon or Tor can carry
   the tunnel instead: each finds its own way out and the app routes the whole
   device into it. Both are slower, and one of them is someone else's network, so
   they are there for the networks Aether cannot get out of rather than as equal

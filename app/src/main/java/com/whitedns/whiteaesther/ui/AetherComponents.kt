@@ -18,9 +18,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,10 +46,13 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -67,6 +73,7 @@ private fun strokeIcon(name: String, vararg pathData: String): ImageVector =
         defaultHeight = 24.dp,
         viewportWidth = 24f,
         viewportHeight = 24f,
+        autoMirror = name == "back" || name == "chevron",
     ).apply {
         pathData.forEach { d ->
             addPath(
@@ -100,9 +107,8 @@ object AetherIcons {
     )
     val Settings = strokeIcon(
         "settings",
-        "M4 7.6h7.4M17 7.6h3M4 16.4h3M12.6 16.4h7.4",
-        "M14.2 5.2a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8Z",
-        "M9.8 14a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8Z",
+        "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z",
+        "M9.4 2.6h5.2l.5 2.4 1.7 1 2.3-.8 2.6 4.5-1.8 1.6v2l1.8 1.6-2.6 4.5-2.3-.8-1.7 1-.5 2.4H9.4l-.5-2.4-1.7-1-2.3.8-2.6-4.5 1.8-1.6v-2L2.3 9.7l2.6-4.5 2.3.8 1.7-1 .5-2.4Z",
     )
     val Power = strokeIcon("power", "M12 3v9", "M6.5 6.8a8 8 0 1 0 11 0")
     val Radar = strokeIcon(
@@ -208,7 +214,7 @@ internal fun Modifier.controllerFocus(
 @Composable
 fun SectionLabel(text: String, modifier: Modifier = Modifier) {
     Text(
-        text.uppercase(),
+        text,
         modifier = modifier,
         style = AetherTheme.type.Label,
         color = AetherTheme.colors.text3,
@@ -282,7 +288,7 @@ fun AetherCard(
     tvFocusable: Boolean = false,
     content: @Composable ColumnScopeAlias.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(20.dp)
+    val shape = RoundedCornerShape(22.dp)
     val tvInteraction = remember { MutableInteractionSource() }
     val canReceiveTvFocus = tvFocusable && LocalTvMode.current
     Column(
@@ -353,13 +359,13 @@ fun RowCard(
                     Modifier
                 },
             )
-            .padding(horizontal = 15.dp, vertical = 14.dp),
+            .padding(horizontal = 15.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(13.dp),
     ) {
         Box(
             Modifier
-                .size(38.dp)
+                .size(32.dp)
                 .clip(RoundedCornerShape(11.dp))
                 .background(AetherTheme.colors.ink3)
                 .border(1.dp, AetherTheme.colors.line, RoundedCornerShape(11.dp)),
@@ -380,22 +386,27 @@ fun RowCard(
 /** Read-only key/value. Values that line up in a column use the mono face. */
 @Composable
 fun FactRow(key: String, value: String, mono: Boolean = false) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 15.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(key, style = AetherTheme.type.Body, color = AetherTheme.colors.text2)
-        Spacer(Modifier.weight(1f))
-        Text(
-            value,
-            style = if (mono) AetherTheme.type.Data else AetherTheme.type.RowTitle,
-            color = AetherTheme.colors.text,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+    val configuration = LocalConfiguration.current
+    val colors = AetherTheme.colors
+    val valueStyle = (if (mono) AetherTheme.type.Data else AetherTheme.type.RowTitle).copy(
+        textDirection = if (mono) TextDirection.Ltr else TextDirection.Content,
+    )
+    if (configuration.fontScale > 1.3f || configuration.screenWidthDp < 360) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+            Text(key, style = AetherTheme.type.Small, color = colors.text2)
+            Spacer(Modifier.height(4.dp))
+            Text(value, style = valueStyle, color = colors.text)
+        }
+    } else {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(key, style = AetherTheme.type.Body, color = colors.text2, modifier = Modifier.weight(0.9f))
+            Text(value, style = valueStyle, color = colors.text, modifier = Modifier.weight(1.1f),
+                textAlign = TextAlign.End, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 
@@ -500,7 +511,7 @@ fun <T> SegGroup(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .focusGroup()
+            .selectableGroup().focusGroup()
             .clip(RoundedCornerShape(13.dp))
             .background(AetherTheme.colors.ink3)
             .border(1.dp, AetherTheme.colors.line, RoundedCornerShape(13.dp))
@@ -514,7 +525,8 @@ fun <T> SegGroup(
             Box(
                 Modifier
                     .weight(1f)
-                    .height(38.dp)
+                    .heightIn(min = 48.dp)
+                    .padding(vertical = 8.dp)
                     .clip(shape)
                     .background(if (active) AetherTheme.colors.ink2 else Color.Transparent)
                     .then(
@@ -529,7 +541,7 @@ fun <T> SegGroup(
                         },
                     )
                     .tvControllerActivation { onSelect(option) }
-                    .clickable(interaction, LocalIndication.current) { onSelect(option) }
+                    .selectable(selected = active, role = Role.RadioButton, interactionSource = interaction, indication = LocalIndication.current, onClick = { onSelect(option) })
                     .controllerFocus(interaction, shape)
                     .testTag("seg-${label(option).lowercase().replace(' ', '-')}"),
                 contentAlignment = Alignment.Center,
@@ -570,7 +582,7 @@ fun ChoiceCard(
                 shape,
             )
             .tvControllerActivation(onClick = onClick)
-            .clickable(interaction, LocalIndication.current, onClick = onClick)
+            .selectable(selected = selected, role = Role.RadioButton, interactionSource = interaction, indication = LocalIndication.current, onClick = onClick)
             .controllerFocus(interaction, shape)
             .testTag("choice-${name.lowercase().replace(' ', '-')}")
             .padding(13.dp),
@@ -615,6 +627,7 @@ fun OptionRow(
     title: String,
     subtitle: String,
     selected: Boolean,
+    tag: String? = null,
     onClick: () -> Unit,
 ) {
     val colors = AetherTheme.colors
@@ -631,9 +644,9 @@ fun OptionRow(
                 shape,
             )
             .tvControllerActivation(onClick = onClick)
-            .clickable(interaction, LocalIndication.current, onClick = onClick)
+            .selectable(selected = selected, role = Role.RadioButton, interactionSource = interaction, indication = LocalIndication.current, onClick = onClick)
             .controllerFocus(interaction, shape)
-            .testTag("option-${title.lowercase().replace(' ', '-')}")
+            .testTag(tag ?: "option-${title.lowercase().replace(' ', '-')}")
             .padding(horizontal = 10.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -693,6 +706,7 @@ fun AdvancedSection(
     badge: String,
     expanded: Boolean,
     onToggle: () -> Unit,
+    tag: String = "advanced-toggle",
     content: @Composable ColumnScopeAlias.() -> Unit,
 ) {
     val rotation by animateFloatAsState(if (expanded) 180f else 0f, label = "advanced-chevron")
@@ -705,7 +719,7 @@ fun AdvancedSection(
                 .tvControllerActivation(onClick = onToggle)
                 .clickable(interaction, LocalIndication.current, onClick = onToggle)
                 .controllerFocus(interaction, shape)
-                .testTag("advanced-toggle")
+                .testTag(tag)
                 .padding(horizontal = 15.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(9.dp),
@@ -718,9 +732,10 @@ fun AdvancedSection(
                     .rotate(rotation),
                 AetherTheme.colors.text2,
             )
-            Text(stringResource(R.string.advanced), style = AetherTheme.type.RowTitle, color = AetherTheme.colors.text2)
-            Spacer(Modifier.weight(1f))
-            SectionLabel(badge)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(stringResource(R.string.advanced), style = AetherTheme.type.RowTitle, color = AetherTheme.colors.text)
+                SectionLabel(badge)
+            }
         }
         AnimatedVisibility(expanded) {
             Column(content = content)
@@ -745,25 +760,28 @@ fun AttentionCard(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Icon(AetherIcons.Warning, null, Modifier.size(20.dp), tone)
-        Column {
+        Column(Modifier.weight(1f)) {
             Text(title, style = AetherTheme.type.RowTitle, color = AetherTheme.colors.text)
             Spacer(Modifier.height(2.dp))
             Text(body, style = AetherTheme.type.Small, color = AetherTheme.colors.text2)
             if (actions.isNotEmpty()) {
                 Spacer(Modifier.height(11.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     actions.forEach { (label, action) ->
                         val interaction = remember(label) { MutableInteractionSource() }
                         Box(
                             Modifier
-                                .clip(CircleShape)
-                                .border(1.dp, tone.copy(alpha = 0.42f), CircleShape)
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .border(1.dp, tone.copy(alpha = 0.42f), RoundedCornerShape(8.dp))
                                 .tvControllerActivation(onClick = action)
                                 .clickable(interaction, LocalIndication.current, onClick = action)
-                                .controllerFocus(interaction, CircleShape)
+                                .controllerFocus(interaction, RoundedCornerShape(8.dp))
                                 .padding(horizontal = 13.dp, vertical = 7.dp),
                         ) {
-                            Text(label, style = AetherTheme.type.Small, color = tone)
+                            Text(label, style = AetherTheme.type.Small,
+                                color = if (AetherTheme.colors.isDark) tone else AetherTheme.colors.text)
                         }
                     }
                 }
@@ -782,21 +800,22 @@ fun PrimaryButton(
 ) {
     val colors = AetherTheme.colors
     val interaction = remember { MutableInteractionSource() }
-    val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape(8.dp)
     Row(
         modifier = modifier
-            .height(50.dp)
+            .heightIn(min = 48.dp)
+            .padding(vertical = 10.dp)
             .clip(shape)
             .background(if (enabled) colors.brand else colors.brand.copy(alpha = 0.4f))
             .tvControllerActivation(enabled = enabled, onClick = onClick)
-            .clickable(interaction, LocalIndication.current, enabled = enabled, onClick = onClick)
+            .clickable(interaction, LocalIndication.current, enabled = enabled, role = Role.Button, onClick = onClick)
             .controllerFocus(interaction, shape, enabled)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp, Alignment.CenterHorizontally),
     ) {
         if (icon != null) Icon(icon, null, Modifier.size(17.dp), colors.onBrand)
-        Text(text, style = AetherTheme.type.RowTitle, color = colors.onBrand, maxLines = 1)
+        Text(text, style = AetherTheme.type.RowTitle, color = colors.onBrand, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -810,15 +829,16 @@ fun OutlineButton(
 ) {
     val colors = AetherTheme.colors
     val interaction = remember { MutableInteractionSource() }
-    val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape(8.dp)
     Row(
         modifier = modifier
-            .height(50.dp)
+            .heightIn(min = 48.dp)
+            .padding(vertical = 10.dp)
             .clip(shape)
             .background(colors.ink2)
             .border(1.dp, colors.line, shape)
             .tvControllerActivation(enabled = enabled, onClick = onClick)
-            .clickable(interaction, LocalIndication.current, enabled = enabled, onClick = onClick)
+            .clickable(interaction, LocalIndication.current, enabled = enabled, role = Role.Button, onClick = onClick)
             .controllerFocus(interaction, shape, enabled)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -826,7 +846,7 @@ fun OutlineButton(
     ) {
         val tint = if (enabled) colors.text else colors.text3
         if (icon != null) Icon(icon, null, Modifier.size(17.dp), tint)
-        Text(text, style = AetherTheme.type.RowTitle, color = tint, maxLines = 1)
+        Text(text, style = AetherTheme.type.RowTitle, color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

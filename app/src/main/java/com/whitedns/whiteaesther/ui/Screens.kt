@@ -186,7 +186,7 @@ internal fun ScreenColumn(content: @Composable ColumnScopeAlias.() -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 18.dp)
+            .padding(horizontal = 16.dp)
             .padding(bottom = 26.dp)
             // Inside the scroll, so the keyboard adds room to scroll into rather
             // than shrinking the page. Without it the control below a field is
@@ -281,11 +281,16 @@ fun HomeScreen(
     onGoToRoutes: () -> Unit,
     onGoToEndpoint: () -> Unit,
     onGoToTraffic: () -> Unit,
+    onSettingsChange: (AppSettings) -> Unit = {},
+    onGoToApps: () -> Unit = {},
+    onGoToDiagnostics: () -> Unit = {},
     connectModifier: Modifier = Modifier,
     compact: Boolean = false,
 ) {
     val colors = AetherTheme.colors
     val state = status.stage.toConnectState()
+    val configuration = LocalConfiguration.current
+    var detailsExpanded by rememberSaveable { mutableStateOf(false) }
 
     // Measured from the moment the service recorded, not from when this screen
     // first saw it, so rotating the device or returning to a recreated activity
@@ -319,32 +324,16 @@ fun HomeScreen(
     }
 
     ScreenColumn {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .height(58.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(11.dp),
-        ) {
-            // The launcher icon itself, not a drawn stand-in. Image rather than
-            // Icon because it carries its own colour and tinting it would flatten
-            // it to a silhouette, and larger than the 30dp it replaces because
-            // the launcher foreground is a 108dp canvas holding a 72dp mark --
-            // sized to the canvas, the mark itself would come out smaller than
-            // what it replaced.
-            Image(
-                painterResource(R.mipmap.ic_launcher_foreground),
-                null,
-                Modifier.size(44.dp),
-            )
-            Text(stringResource(R.string.app_name), style = AetherTheme.type.CardTitle, color = colors.text)
-        }
-
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             ConnectOrb(
                 state = state,
                 modifier = connectModifier,
-                diameter = if (compact) 210.dp else 262.dp,
+                diameter = when {
+                    compact -> 210.dp
+                    configuration.fontScale > 1.5f -> 256.dp
+                    configuration.screenHeightDp < 600 -> 216.dp
+                    else -> 240.dp
+                },
                 enabled = status.stage != EngineStage.STOPPING,
                 caption = when (status.stage) {
                     EngineStage.IDLE -> stringResource(R.string.tap_to_connect)
@@ -357,103 +346,59 @@ fun HomeScreen(
             )
         }
 
-        Spacer(Modifier.height(16.dp))
         Column(
-            Modifier.fillMaxWidth(),
+            Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            val signal = when (state) {
-                ConnectState.IDLE -> colors.signalIdle
-                ConnectState.WORKING -> colors.signalWorking
-                ConnectState.LIVE -> colors.signalLive
-                ConnectState.FAILED -> colors.signalFailed
-            }
-            Row(
-                Modifier
-                    .clip(CircleShape)
-                    .background(signal.copy(alpha = 0.09f))
-                    .border(1.dp, signal.copy(alpha = 0.34f), CircleShape)
-                    .padding(start = 10.dp, end = 13.dp, top = 5.dp, bottom = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Box(
-                    Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(signal),
-                )
-                Text(
-                    when (status.stage) {
-                        EngineStage.IDLE -> stringResource(R.string.not_connected)
-                        EngineStage.PREPARING -> stringResource(R.string.stage_preparing)
-                        EngineStage.CONNECTING -> stringResource(R.string.stage_connecting)
-                        EngineStage.CONNECTED -> stringResource(R.string.stage_connected)
-                        EngineStage.STOPPING -> stringResource(R.string.stage_stopping)
-                        EngineStage.ERROR -> stringResource(R.string.not_connected)
-                    },
-                    style = AetherTheme.type.Label,
-                    color = signal,
-                )
-            }
-            Spacer(Modifier.height(8.dp))
             Text(
-                when (status.stage) {
-                    EngineStage.IDLE -> stringResource(R.string.ready_when_you_are)
-                    EngineStage.PREPARING, EngineStage.CONNECTING ->
-                        if (status.message.contains("retry")) stringResource(R.string.still_trying) else stringResource(R.string.finding_a_working_route)
-                    EngineStage.CONNECTED -> stringResource(R.string.you_re_connected)
-                    EngineStage.STOPPING -> stringResource(R.string.status_disconnecting)
-                    EngineStage.ERROR -> stringResource(R.string.couldn_t_connect)
+                stringResource(when (status.stage) {
+                    EngineStage.IDLE -> R.string.home_state_idle
+                    EngineStage.PREPARING -> R.string.home_state_preparing
+                    EngineStage.CONNECTING -> R.string.home_state_connecting
+                    EngineStage.CONNECTED -> R.string.home_state_connected
+                    EngineStage.STOPPING -> R.string.home_state_stopping
+                    EngineStage.ERROR -> R.string.couldn_t_connect
+                }),
+                style = AetherTheme.type.RowTitle,
+                color = when (state) {
+                    ConnectState.LIVE -> colors.signalLive
+                    ConnectState.FAILED -> colors.signalFailed
+                    else -> colors.text2
                 },
-                style = AetherTheme.type.StatusHead,
-                color = colors.text,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
-            Spacer(Modifier.height(6.dp))
-            // The engine's own words -- never a number this app invented.
-            Text(
-                status.message.ifBlank { stringResource(R.string.status_ready) },
-                style = AetherTheme.type.Body,
-                color = if (status.stage == EngineStage.ERROR) colors.signalFailed else colors.text2,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            )
+            if (status.stage == EngineStage.CONNECTED && status.connectedAtMillis != null) {
+                Text(
+                    String.format(java.util.Locale.ROOT, "%02d:%02d:%02d",
+                        elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60),
+                    style = AetherTheme.type.Data, color = colors.text2,
+                    modifier = Modifier.testTag("home-connected-for"),
+                )
+            }
             if (status.path.size > 1) {
-                Spacer(Modifier.height(10.dp))
                 CarrierPathRow(status.path)
             } else if (status.attempts.isNotEmpty() && status.stage != EngineStage.CONNECTED) {
-                // What Automatic has tried, while it is still trying. Once it
-                // has connected, the line above names the route that won.
-                Spacer(Modifier.height(10.dp))
                 CarrierPathRow(status.attempts, ordered = false)
             }
-            val searchingNow = status.searchStartedAtMillis != null &&
-                (status.stage == EngineStage.PREPARING || status.stage == EngineStage.CONNECTING)
-            if (searchingNow) {
-                // A clock and one sentence. The first search on a hard network
-                // takes minutes, and the first log from Iran shows someone
-                // stopping at two -- with Psiphon still working on it.
-                Spacer(Modifier.height(10.dp))
+            if (status.searchStartedAtMillis != null &&
+                status.stage in setOf(EngineStage.PREPARING, EngineStage.CONNECTING)
+            ) {
                 Text(
-                    stringResource(
-                        R.string.auto_searching_for,
-                        // Latin digits, as for the connected clock below.
-                        String.format(java.util.Locale.ROOT, "%d:%02d", searching / 60, searching % 60),
-                    ),
-                    style = AetherTheme.type.Label,
-                    color = colors.text2,
+                    stringResource(R.string.auto_searching_for,
+                        String.format(java.util.Locale.ROOT, "%d:%02d", searching / 60, searching % 60)),
+                    style = AetherTheme.type.Small, color = colors.text2,
                 )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    stringResource(R.string.auto_patience),
-                    style = AetherTheme.type.Small,
-                    color = colors.text3,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
+                Text(stringResource(R.string.auto_patience),
+                    style = AetherTheme.type.Small, color = colors.text2,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             }
         }
-
-        Spacer(Modifier.height(16.dp))
+        HomeTrafficStrip(traffic, active = status.stage == EngineStage.CONNECTED)
+        HomeConnectionControls(
+            settings = settings, status = status,
+            onSettingsChange = onSettingsChange, onGoToRoutes = onGoToRoutes,
+            onGoToApps = onGoToApps, onGoToTools = onGoToTraffic,
+        )
 
         val attention = homeAttention(settings, status)
         if (attention != null) {
@@ -467,37 +412,11 @@ fun HomeScreen(
                             AttentionTarget.ROUTES -> onGoToRoutes()
                             AttentionTarget.ENDPOINT -> onGoToEndpoint()
                             AttentionTarget.TRAFFIC -> onGoToTraffic()
+                            AttentionTarget.LOGS -> onGoToDiagnostics()
                         }
                     }
                 },
             )
-            Spacer(Modifier.height(12.dp))
-        }
-
-        if (status.stage == EngineStage.CONNECTED) {
-            AetherCard(
-                modifier = Modifier.testTag("home-connected-for"),
-                tvFocusable = true,
-            ) {
-                Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                    SectionLabel(stringResource(R.string.connected_for))
-                    Spacer(Modifier.height(3.dp))
-                    Text(
-                        String.format(
-                            // Latin digits and Latin order: a clock read against
-                            // a Persian default came out in Arabic-Indic digits,
-                            // which reorder around the colons.
-                            java.util.Locale.ROOT,
-                            stringResource(R.string.elapsed_clock),
-                            elapsed / 3600,
-                            (elapsed % 3600) / 60,
-                            elapsed % 60,
-                        ),
-                        style = AetherTheme.type.DataLarge,
-                        color = colors.text,
-                    )
-                }
-            }
             Spacer(Modifier.height(12.dp))
         }
 
@@ -523,6 +442,148 @@ fun HomeScreen(
             Spacer(Modifier.height(12.dp))
         }
 
+        AetherCard {
+            HomeSelectionRow(
+                stringResource(R.string.home_details),
+                stringResource(if (detailsExpanded) R.string.home_hide_details else R.string.home_details_summary),
+                "home-details-toggle", onClick = { detailsExpanded = !detailsExpanded },
+            )
+        }
+        if (detailsExpanded) {
+            Spacer(Modifier.height(12.dp))
+            if (status.stage == EngineStage.CONNECTED || addresses.real != null) {
+                AetherCard(
+                    modifier = Modifier.testTag("home-address"),
+                    tvFocusable = true,
+                ) {
+                    CardHead(stringResource(R.string.your_address))
+                    Spacer(Modifier.height(6.dp))
+                    FactRow(
+                        stringResource(R.string.without_the_tunnel),
+                        // Absent until the app has been open while disconnected:
+                        // reading it during a session would send the real address
+                        // out past the thing hiding it.
+                        addresses.real ?: stringResource(R.string.not_measured_yet),
+                        mono = addresses.real != null,
+                    )
+                    Divider()
+                    val viaChain = settings.chain.enabled && settings.mode == EngineMode.TUN
+                    FactRow(
+                        stringResource(R.string.seen_by_websites),
+                        when {
+                            status.stage != EngineStage.CONNECTED -> stringResource(R.string.not_connected_3)
+                            // The chain's exit cannot be measured from here: this
+                            // process is kept off its own interface while mihomo
+                            // runs, so a probe leaves by the physical network and
+                            // would report the address the tunnel hides.
+                            viaChain -> chainSelection ?: stringResource(R.string.your_exit_chain_node)
+                            addresses.tunnel != null -> addresses.tunnel
+                            else -> stringResource(R.string.fact_checking)
+                        },
+                        mono = !viaChain && addresses.tunnel != null,
+                    )
+                    if (viaChain) {
+                        Text(
+                            stringResource(R.string.traffic_leaves_through_your_exit_chain_so),
+                            style = AetherTheme.type.Small,
+                            color = colors.text3,
+                            modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+
+            if (status.stage == EngineStage.CONNECTED || traffic.received > 0 || traffic.sent > 0) {
+                AetherCard(
+                    modifier = Modifier.testTag("home-session"),
+                    tvFocusable = true,
+                ) {
+                    CardHead(stringResource(R.string.this_session))
+                    Spacer(Modifier.height(6.dp))
+                    if (!traffic.supported) {
+                        Text(
+                            stringResource(R.string.this_phone_does_not_keep_per_app),
+                            style = AetherTheme.type.Small,
+                            color = colors.text2,
+                            modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
+                        )
+                    } else {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 15.dp, vertical = 11.dp),
+                            horizontalArrangement = Arrangement.spacedBy(15.dp),
+                        ) {
+                            RateColumn(
+                                label = stringResource(R.string.download),
+                                rate = formatRate(traffic.downloadPerSecond),
+                                total = formatBytes(traffic.received),
+                                tint = colors.signalLive,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("traffic-download"),
+                            )
+                            RateColumn(
+                                label = stringResource(R.string.upload),
+                                rate = formatRate(traffic.uploadPerSecond),
+                                total = formatBytes(traffic.sent),
+                                tint = colors.cyan,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("traffic-upload"),
+                            )
+                        }
+                        Divider()
+                        Text(
+                            stringResource(R.string.measured_on_the_encrypted_side_which_is),
+                            style = AetherTheme.type.Small,
+                            color = colors.text3,
+                            modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+
+            AetherCard(
+                modifier = Modifier.testTag("home-connection-details"),
+                tvFocusable = true,
+            ) {
+                if (status.stage == EngineStage.CONNECTED) {
+                    FactRow(stringResource(R.string.home_requested_transport), stringResource(settings.transport.label))
+                    Divider()
+                    FactRow(stringResource(R.string.fact_gateway), status.peer ?: stringResource(R.string.fact_negotiating), mono = true)
+                    Divider()
+                    FactRow(stringResource(R.string.fact_coverage), settings.coverageSummary())
+                    Divider()
+                    FactRow(stringResource(R.string.fact_addresses), if (settings.dualStack) stringResource(R.string.ipv4_ipv6) else stringResource(R.string.ipv4_only))
+                    if (settings.mode == EngineMode.PROXY) {
+                        Divider()
+                        FactRow(stringResource(R.string.local_proxy), settings.proxyBindLabel(), mono = true)
+                    }
+                } else {
+                    FactRow(stringResource(R.string.profile), stringResource(settings.activeProfile().label))
+                    Divider()
+                    FactRow(
+                        stringResource(R.string.endpoint),
+                        settings.endpointSummary(),
+                        mono = settings.endpointMode != EndpointMode.AUTOMATIC,
+                    )
+                    Divider()
+                    FactRow(stringResource(R.string.fact_coverage), settings.coverageSummary())
+                }
+            }
+            Note(stringResource(R.string.home_details_note))
+            if (status.message.isNotBlank()) {
+                AetherCard {
+                    CardHead(stringResource(R.string.home_engine_message))
+                    Text(status.message, style = AetherTheme.type.Small, color = colors.text2,
+                        modifier = Modifier.padding(16.dp))
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
         if (update != null) {
             AetherCard {
                 CardHead(
@@ -629,140 +690,10 @@ fun HomeScreen(
             Spacer(Modifier.height(12.dp))
         }
 
-        if (status.stage == EngineStage.CONNECTED || addresses.real != null) {
-            AetherCard(
-                modifier = Modifier.testTag("home-address"),
-                tvFocusable = true,
-            ) {
-                CardHead(stringResource(R.string.your_address))
-                Spacer(Modifier.height(6.dp))
-                FactRow(
-                    stringResource(R.string.without_the_tunnel),
-                    // Absent until the app has been open while disconnected:
-                    // reading it during a session would send the real address
-                    // out past the thing hiding it.
-                    addresses.real ?: stringResource(R.string.not_measured_yet),
-                    mono = addresses.real != null,
-                )
-                Divider()
-                val viaChain = settings.chain.enabled && settings.mode == EngineMode.TUN
-                FactRow(
-                    stringResource(R.string.seen_by_websites),
-                    when {
-                        status.stage != EngineStage.CONNECTED -> stringResource(R.string.not_connected_3)
-                        // The chain's exit cannot be measured from here: this
-                        // process is kept off its own interface while mihomo
-                        // runs, so a probe leaves by the physical network and
-                        // would report the address the tunnel hides.
-                        viaChain -> chainSelection ?: stringResource(R.string.your_exit_chain_node)
-                        addresses.tunnel != null -> addresses.tunnel
-                        else -> stringResource(R.string.fact_checking)
-                    },
-                    mono = !viaChain && addresses.tunnel != null,
-                )
-                if (viaChain) {
-                    Text(
-                        stringResource(R.string.traffic_leaves_through_your_exit_chain_so),
-                        style = AetherTheme.type.Small,
-                        color = colors.text3,
-                        modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
-                    )
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-        }
-
-        if (status.stage == EngineStage.CONNECTED || traffic.received > 0 || traffic.sent > 0) {
-            AetherCard(
-                modifier = Modifier.testTag("home-session"),
-                tvFocusable = true,
-            ) {
-                CardHead(stringResource(R.string.this_session))
-                Spacer(Modifier.height(6.dp))
-                if (!traffic.supported) {
-                    Text(
-                        stringResource(R.string.this_phone_does_not_keep_per_app),
-                        style = AetherTheme.type.Small,
-                        color = colors.text2,
-                        modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
-                    )
-                } else {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 15.dp, vertical = 11.dp),
-                        horizontalArrangement = Arrangement.spacedBy(15.dp),
-                    ) {
-                        RateColumn(
-                            label = stringResource(R.string.download),
-                            rate = formatRate(traffic.downloadPerSecond),
-                            total = formatBytes(traffic.received),
-                            tint = colors.signalLive,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("traffic-download"),
-                        )
-                        RateColumn(
-                            label = stringResource(R.string.upload),
-                            rate = formatRate(traffic.uploadPerSecond),
-                            total = formatBytes(traffic.sent),
-                            tint = colors.cyan,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("traffic-upload"),
-                        )
-                    }
-                    Divider()
-                    Text(
-                        stringResource(R.string.measured_on_the_encrypted_side_which_is),
-                        style = AetherTheme.type.Small,
-                        color = colors.text3,
-                        modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
-                    )
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-        }
-
-        AetherCard(
-            modifier = Modifier.testTag("home-connection-details"),
-            tvFocusable = true,
-        ) {
-            if (status.stage == EngineStage.CONNECTED) {
-                FactRow(stringResource(R.string.fact_transport), stringResource(settings.transport.label))
-                Divider()
-                FactRow(stringResource(R.string.fact_gateway), status.peer ?: stringResource(R.string.fact_negotiating), mono = true)
-                Divider()
-                FactRow(stringResource(R.string.fact_coverage), settings.coverageSummary())
-                Divider()
-                FactRow(stringResource(R.string.fact_addresses), if (settings.dualStack) stringResource(R.string.ipv4_ipv6) else stringResource(R.string.ipv4_only))
-                if (settings.mode == EngineMode.PROXY) {
-                    Divider()
-                    FactRow(stringResource(R.string.local_proxy), settings.proxyBindLabel(), mono = true)
-                }
-            } else {
-                FactRow(stringResource(R.string.profile), stringResource(settings.activeProfile().label))
-                Divider()
-                FactRow(
-                    stringResource(R.string.endpoint),
-                    settings.endpointSummary(),
-                    mono = settings.endpointMode != EndpointMode.AUTOMATIC,
-                )
-                Divider()
-                FactRow(stringResource(R.string.fact_coverage), settings.coverageSummary())
-            }
-        }
-        Note(
-            if (status.stage == EngineStage.CONNECTED) {
-                stringResource(R.string.live_values_change_them_under_routes_and)
-            } else {
-                stringResource(R.string.what_will_be_used_when_you_connect)
-            },
-        )
     }
 }
 
-private enum class AttentionTarget { ROUTES, ENDPOINT, TRAFFIC }
+private enum class AttentionTarget { ROUTES, ENDPOINT, TRAFFIC, LOGS }
 
 private data class Attention(
     val tone: Color,
@@ -798,27 +729,16 @@ private fun homeAttention(settings: AppSettings, status: EngineStatus): Attentio
         retrying -> Attention(
             tone = colors.signalWorking,
             title = stringResource(R.string.the_engine_keeps_retrying),
-            body = status.message.substringBefore(stringResource(R.string.retry)).ifBlank { status.message } +
-                ". " + status.message.substringAfter(" · ", "").replaceFirstChar(Char::uppercase) + ".",
-            actions = listOf(stringResource(R.string.change_profile) to AttentionTarget.ROUTES, stringResource(R.string.pin_an_endpoint) to AttentionTarget.ENDPOINT),
+            body = stringResource(R.string.home_retrying_help),
+            actions = listOf(stringResource(R.string.home_view_logs) to AttentionTarget.LOGS),
         )
         status.stage == EngineStage.ERROR -> Attention(
             tone = colors.signalFailed,
             title = stringResource(R.string.the_last_attempt_failed),
-            body = status.message.ifBlank { stringResource(R.string.the_engine_stopped_without_a_working_route) },
-            // The first action leads to the same screen either way; what
-            // changes is whether it says what is on it. Someone whose carrier
-            // has just failed every attempt is not looking for a profile to
-            // change -- they are looking for something that works, and this
-            // build has two more of those behind a switch they have never had
-            // a reason to find.
+            body = stringResource(R.string.home_error_help),
             actions = listOf(
-                if (settings.automaticCarrier) {
-                    stringResource(R.string.change_profile)
-                } else {
-                    stringResource(R.string.try_every_way_out)
-                } to AttentionTarget.ROUTES,
-                stringResource(R.string.pin_an_endpoint) to AttentionTarget.ENDPOINT,
+                stringResource(R.string.home_view_logs) to AttentionTarget.LOGS,
+                stringResource(R.string.home_change_method) to AttentionTarget.ROUTES,
             ),
         )
         validationError != null -> Attention(
@@ -833,8 +753,7 @@ private fun homeAttention(settings: AppSettings, status: EngineStatus): Attentio
         settings.coverageIsRestricted() -> Attention(
             tone = colors.cyan,
             title = stringResource(R.string.only_some_apps_are_going_through),
-            body = "A per-app rule is limiting this to ${settings.coverageSummary().lowercase()}. " +
-                stringResource(R.string.everything_else_real_address),
+            body = stringResource(R.string.home_limited_apps_help, settings.coverageSummary()),
             actions = listOf(stringResource(R.string.change_which_apps) to AttentionTarget.TRAFFIC),
         )
         settings.mode == EngineMode.PROXY -> Attention(
@@ -897,8 +816,18 @@ fun RoutesScreen(
     chainModifier: Modifier = Modifier,
     routingRulesModifier: Modifier = Modifier,
 ) {
-    var advanced by rememberSaveable(settings.showAdvanced) { mutableStateOf(settings.showAdvanced) }
+    var advanced by rememberSaveable { mutableStateOf(settings.showAdvanced) }
+    var previousAdvancedDefault by rememberSaveable { mutableStateOf(settings.showAdvanced) }
+    LaunchedEffect(settings.showAdvanced) {
+        if (previousAdvancedDefault != settings.showAdvanced) {
+            advanced = settings.showAdvanced
+            previousAdvancedDefault = settings.showAdvanced
+        }
+    }
     val active = settings.activeProfile()
+    var multiHopExpanded by rememberSaveable {
+        mutableStateOf(settings.secondCarrier != null || settings.showAdvanced)
+    }
     // Held locally so typing is not fought by the settings flow round-tripping
     // through DataStore, and refreshed when something else writes them -- which
     // is what the fetch button does.
@@ -911,193 +840,133 @@ fun RoutesScreen(
     }
 
     ScreenColumn {
-        CrumbBar(stringResource(R.string.routes))
-        PageTitle(stringResource(R.string.how_it_connects), stringResource(R.string.pick_a_profile_and_you_re_done))
+        PageTitle(stringResource(R.string.home_methods_title), stringResource(R.string.home_methods_description))
 
         AetherCard {
-            CardHead(stringResource(R.string.profile), stringResource(R.string.describes_your_network_whiteaesther_picks_the_re))
-            Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ConnectionProfile.entries.chunked(2).forEach { pair ->
-                    // IntrinsicSize.Min makes both cards adopt the taller one's
-                    // height, so a card with a tag does not tower over its pair.
-                    Row(
-                        modifier = Modifier.height(IntrinsicSize.Min),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        pair.forEach { profile ->
-                            ChoiceCard(
-                                icon = profile.icon,
-                                name = stringResource(profile.label),
-                                description = stringResource(profile.description),
-                                tag = profile.tag?.let { stringResource(it) },
-                                selected = profile == active,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight(),
+            CardHead(stringResource(R.string.home_method))
+            Column(Modifier.padding(8.dp)) {
+                MethodChoices(settings, onSettingsChange)
+            }
+            if (!settings.automaticCarrier && settings.carrierPath.none { it.usesEngine }) {
+                Note(stringResource(R.string.carrier_not_engine_note), Modifier.padding(horizontal = 16.dp))
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        if (!settings.automaticCarrier) {
+            AetherCard {
+                AdvancedSection(
+                    badge = stringResource(R.string.home_multi_hop),
+                    expanded = multiHopExpanded,
+                    onToggle = { multiHopExpanded = !multiHopExpanded },
+                    tag = "multi-hop-toggle",
+                ) {
+                    Divider()
+
+                    // Two lists rather than one, because the pair is ordered and a
+                    // pair written side by side does not say which end is which. The
+                    // labels do the work an arrow would: what the network sees, and
+                    // what the internet sees.
+                    Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        SectionLabel(
+                            stringResource(R.string.carrier_first),
+                            Modifier.padding(start = 4.dp, bottom = 4.dp),
+                        )
+                        Carrier.entries.forEach { carrier ->
+                            OptionRow(
+                                code = carrier.wireName.take(3).uppercase(),
+                                title = stringResource(carrier.label),
+                                subtitle = carrierDetail(carrier),
+                                selected = settings.carrier == carrier,
+                                tag = "carrier-first-${carrier.wireName}",
                                 onClick = {
-                                    // Manual has no preset to apply -- it means
-                                    // "I will set these myself", so it opens the
-                                    // controls instead of silently doing nothing.
-                                    if (profile == ConnectionProfile.MANUAL) {
-                                        advanced = true
-                                    } else {
-                                        onSettingsChange(settings.applyProfile(profile))
-                                    }
+                                    // A carrier chained to itself is a hop to nowhere,
+                                    // so taking one for the first position gives up
+                                    // the second rather than leaving an impossible pair.
+                                    onSettingsChange(
+                                        settings.copy(
+                                            carrier = carrier,
+                                            secondCarrier = settings.secondCarrier?.takeIf { it != carrier },
+                                        ),
+                                    )
                                 },
                             )
                         }
-                        if (pair.size == 1) Spacer(Modifier.weight(1f))
                     }
-                }
-            }
-        }
 
-        Spacer(Modifier.height(12.dp))
-        AetherCard {
-            CardHead(
-                stringResource(R.string.carrier),
-                stringResource(R.string.carrier_subtitle),
-            )
-            // Automatic first, and above the lists rather than among them: it is
-            // not a carrier but the choice not to pick one, and it is the only
-            // row most people should ever need on this card.
-            Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                OptionRow(
-                    code = "AUTO",
-                    title = stringResource(R.string.carrier_automatic),
-                    subtitle = stringResource(R.string.carrier_automatic_detail),
-                    selected = settings.automaticCarrier,
-                    onClick = { onSettingsChange(settings.copy(automaticCarrier = true)) },
-                )
-                OptionRow(
-                    code = null,
-                    title = stringResource(R.string.carrier_manual),
-                    subtitle = stringResource(R.string.carrier_manual_detail),
-                    selected = !settings.automaticCarrier,
-                    onClick = { onSettingsChange(settings.copy(automaticCarrier = false)) },
-                )
-            }
+                    Divider()
 
-            if (settings.automaticCarrier) {
-                // What it will do, in one paragraph, so that a first connect
-                // taking minutes on a hard network reads as expected rather
-                // than as broken.
-                Note(
-                    stringResource(
-                        if (settings.mode == EngineMode.TUN) {
-                            R.string.carrier_automatic_note
-                        } else {
-                            R.string.carrier_automatic_proxy_note
-                        },
-                    ),
-                    Modifier.padding(horizontal = 13.dp),
-                )
-            } else {
-                Divider()
-
-                // Two lists rather than one, because the pair is ordered and a
-                // pair written side by side does not say which end is which. The
-                // labels do the work an arrow would: what the network sees, and
-                // what the internet sees.
-                Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    SectionLabel(
-                        stringResource(R.string.carrier_first),
-                        Modifier.padding(start = 4.dp, bottom = 4.dp),
-                    )
-                    Carrier.entries.forEach { carrier ->
+                    Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        SectionLabel(
+                            stringResource(R.string.carrier_then),
+                            Modifier.padding(start = 4.dp, bottom = 4.dp),
+                        )
                         OptionRow(
-                            code = carrier.wireName.take(3).uppercase(),
-                            title = stringResource(carrier.label),
-                            subtitle = carrierDetail(carrier),
-                            selected = settings.carrier == carrier,
-                            // OptionRow tags itself from the title, so this row
-                            // is reachable in a test as option-aether and so on.
+                            code = null,
+                            title = stringResource(R.string.carrier_second_none),
+                            subtitle = stringResource(R.string.carrier_second_none_detail),
+                            selected = settings.secondCarrier == null,
+                            onClick = { onSettingsChange(settings.copy(secondCarrier = null)) },
+                        )
+                        Carrier.entries.filter { it != settings.carrier }.forEach { carrier ->
+                            OptionRow(
+                                code = carrier.wireName.take(3).uppercase(),
+                                title = stringResource(carrier.label),
+                                subtitle = carrierDetail(carrier),
+                                selected = settings.secondCarrier == carrier,
+                                tag = "carrier-second-${carrier.wireName}",
+                                onClick = { onSettingsChange(settings.copy(secondCarrier = carrier)) },
+                            )
+                        }
+                    }
+
+                    // One tap, because trying the other order is the whole point of
+                    // offering two. Behind two menus nobody tries it.
+                    val second = settings.secondCarrier
+                    if (second != null) {
+                        OutlineButton(
+                            text = stringResource(R.string.carrier_swap),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 13.dp, vertical = 2.dp),
+                            icon = AetherIcons.Traffic,
                             onClick = {
-                                // A carrier chained to itself is a hop to nowhere,
-                                // so taking one for the first position gives up
-                                // the second rather than leaving an impossible pair.
                                 onSettingsChange(
-                                    settings.copy(
-                                        carrier = carrier,
-                                        secondCarrier = settings.secondCarrier?.takeIf { it != carrier },
-                                    ),
+                                    settings.copy(carrier = second, secondCarrier = settings.carrier),
                                 )
                             },
                         )
                     }
-                }
 
-                Divider()
-
-                Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    SectionLabel(
-                        stringResource(R.string.carrier_then),
-                        Modifier.padding(start = 4.dp, bottom = 4.dp),
-                    )
-                    OptionRow(
-                        code = null,
-                        title = stringResource(R.string.carrier_second_none),
-                        subtitle = stringResource(R.string.carrier_second_none_detail),
-                        selected = settings.secondCarrier == null,
-                        onClick = { onSettingsChange(settings.copy(secondCarrier = null)) },
-                    )
-                    Carrier.entries.filter { it != settings.carrier }.forEach { carrier ->
-                        OptionRow(
-                            code = carrier.wireName.take(3).uppercase(),
-                            title = stringResource(carrier.label),
-                            subtitle = carrierDetail(carrier),
-                            selected = settings.secondCarrier == carrier,
-                            onClick = { onSettingsChange(settings.copy(secondCarrier = carrier)) },
+                    // Said here rather than left for the user to discover at connect
+                    // time. Everything below this card -- the endpoint, the
+                    // protocol, the discovery depth -- describes a search for a
+                    // Cloudflare gateway, and a path that never looks for one makes
+                    // all of it inert. A screen full of controls that quietly do
+                    // nothing is worse than a sentence saying so.
+                    //
+                    // Padded to the card's own inset. Note adds only 2dp of its own,
+                    // which is right inside a column that already has padding and
+                    // wrong here, where it is a direct child of the card and the text
+                    // would sit on the border.
+                    val note = when {
+                        settings.carrierPath.none { it.usesEngine } ->
+                            stringResource(R.string.carrier_not_engine_note)
+                        // Aether behind something else cannot use the transports
+                        // that are datagrams, so the protocol control below is not
+                        // what this session will run.
+                        second?.usesEngine == true -> stringResource(R.string.carrier_chain_h2_note)
+                        else -> null
+                    }
+                    if (note != null) Note(note, Modifier.padding(horizontal = 13.dp))
+                    if (second == Carrier.TOR && settings.torBridge == TorBridge.SNOWFLAKE) {
+                        Note(
+                            stringResource(R.string.carrier_chain_snowflake_note),
+                            Modifier.padding(horizontal = 13.dp),
                         )
                     }
                 }
-
-                // One tap, because trying the other order is the whole point of
-                // offering two. Behind two menus nobody tries it.
-                val second = settings.secondCarrier
-                if (second != null) {
-                    OutlineButton(
-                        text = stringResource(R.string.carrier_swap),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 13.dp, vertical = 2.dp),
-                        icon = AetherIcons.Traffic,
-                        onClick = {
-                            onSettingsChange(
-                                settings.copy(carrier = second, secondCarrier = settings.carrier),
-                            )
-                        },
-                    )
-                }
-
-                // Said here rather than left for the user to discover at connect
-                // time. Everything below this card -- the endpoint, the
-                // protocol, the discovery depth -- describes a search for a
-                // Cloudflare gateway, and a path that never looks for one makes
-                // all of it inert. A screen full of controls that quietly do
-                // nothing is worse than a sentence saying so.
-                //
-                // Padded to the card's own inset. Note adds only 2dp of its own,
-                // which is right inside a column that already has padding and
-                // wrong here, where it is a direct child of the card and the text
-                // would sit on the border.
-                val note = when {
-                    settings.carrierPath.none { it.usesEngine } ->
-                        stringResource(R.string.carrier_not_engine_note)
-                    // Aether behind something else cannot use the transports
-                    // that are datagrams, so the protocol control below is not
-                    // what this session will run.
-                    second?.usesEngine == true -> stringResource(R.string.carrier_chain_h2_note)
-                    else -> null
-                }
-                if (note != null) Note(note, Modifier.padding(horizontal = 13.dp))
-                if (second == Carrier.TOR && settings.torBridge == TorBridge.SNOWFLAKE) {
-                    Note(
-                        stringResource(R.string.carrier_chain_snowflake_note),
-                        Modifier.padding(horizontal = 13.dp),
-                    )
-                }
             }
+            Spacer(Modifier.height(12.dp))
         }
 
         // Only under Psiphon, and only once Psiphon has said what it has.
@@ -1330,6 +1199,43 @@ fun RoutesScreen(
                 expanded = advanced,
                 onToggle = { advanced = !advanced },
             ) {
+                CardHead(stringResource(R.string.profile), stringResource(R.string.describes_your_network_whiteaesther_picks_the_re))
+                Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ConnectionProfile.entries.chunked(2).forEach { pair ->
+                        // IntrinsicSize.Min makes both cards adopt the taller one's
+                        // height, so a card with a tag does not tower over its pair.
+                        Row(
+                            modifier = Modifier.height(IntrinsicSize.Min),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            pair.forEach { profile ->
+                                ChoiceCard(
+                                    icon = profile.icon,
+                                    name = stringResource(profile.label),
+                                    description = stringResource(profile.description),
+                                    tag = profile.tag?.let { stringResource(it) },
+                                    selected = profile == active,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight(),
+                                    onClick = {
+                                        // Manual has no preset to apply -- it means
+                                        // "I will set these myself", so it opens the
+                                        // controls instead of silently doing nothing.
+                                        if (profile == ConnectionProfile.MANUAL) {
+                                            advanced = true
+                                        } else {
+                                            onSettingsChange(settings.applyProfile(profile))
+                                        }
+                                    },
+                                )
+                            }
+                            if (pair.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+
+                Divider()
                 CardHead(stringResource(R.string.protocol), stringResource(R.string.tried_first_on_every_connect_the_profile))
                 Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     TunnelProtocol.entries.forEach { transport ->
@@ -1684,9 +1590,19 @@ fun TrafficScreen(
     status: EngineStatus,
     onSettingsChange: (AppSettings) -> Unit,
     onGoToSplitTunnel: () -> Unit = {},
+    onGoToEndpoint: () -> Unit = {},
+    onGoToChain: () -> Unit = {},
+    onGoToRoutingRules: () -> Unit = {},
     appsModifier: Modifier = Modifier,
 ) {
-    var advanced by rememberSaveable(settings.showAdvanced) { mutableStateOf(settings.showAdvanced) }
+    var advanced by rememberSaveable { mutableStateOf(settings.showAdvanced) }
+    var previousAdvancedDefault by rememberSaveable { mutableStateOf(settings.showAdvanced) }
+    LaunchedEffect(settings.showAdvanced) {
+        if (previousAdvancedDefault != settings.showAdvanced) {
+            advanced = settings.showAdvanced
+            previousAdvancedDefault = settings.showAdvanced
+        }
+    }
     var portText by remember(settings.proxyPort) { mutableStateOf(settings.proxyPort.toString()) }
     // Keyed on the switch, not on the stored value. Saving is a round trip
     // through DataStore, so a field bound straight to settings is rewritten
@@ -1699,15 +1615,26 @@ fun TrafficScreen(
     val colors = AetherTheme.colors
 
     ScreenColumn {
-        CrumbBar(stringResource(R.string.traffic))
-        PageTitle(stringResource(R.string.what_is_protected), stringResource(R.string.choose_how_much_of_the_device_is))
+        PageTitle(stringResource(R.string.home_tools_title), stringResource(R.string.home_tools_description))
+        AetherCard {
+            RowCard(AetherIcons.Radar, stringResource(R.string.home_scan_endpoints),
+                stringResource(R.string.home_scan_endpoints_summary),
+                modifier = Modifier.testTag("tools-endpoint"), onClick = onGoToEndpoint)
+            Divider()
+            RowCard(AetherIcons.Globe, stringResource(R.string.exit_chain), settings.chainSummary(),
+                modifier = Modifier.testTag("tools-chain"), onClick = onGoToChain)
+            Divider()
+            RowCard(AetherIcons.Routes, stringResource(R.string.routing_rules), settings.routingSummary(),
+                modifier = Modifier.testTag("tools-routing-rules"), onClick = onGoToRoutingRules)
+        }
+        Spacer(Modifier.height(12.dp))
 
         if (settings.mode == EngineMode.TUN) {
             AetherCard {
                 RowCard(
                     icon = AetherIcons.Sliders,
                     title = stringResource(R.string.apps),
-                    subtitle = settings.splitTunnel.summary(),
+                    subtitle = settings.coverageSummary(),
                     iconTint = AetherTheme.colors.cyan,
                     modifier = appsModifier.testTag("traffic-apps"),
                     onClick = onGoToSplitTunnel,
@@ -2420,9 +2347,10 @@ fun SettingsScreen(
     identityModifier: Modifier = Modifier,
     diagnosticsModifier: Modifier = Modifier,
     aboutModifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
 ) {
     ScreenColumn {
-        CrumbBar(stringResource(R.string.settings))
+        CrumbBar(stringResource(R.string.settings), onBack = onBack)
         PageTitle(stringResource(R.string.settings), stringResource(R.string.the_app_itself_nothing_here_changes_how))
 
         AetherCard {
@@ -2760,7 +2688,7 @@ fun DiagnosticsScreen(
     status: EngineStatus,
     nativeVersion: String?,
     entries: List<LogEntry>,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
     onShare: (String) -> Unit,
     onCopy: (String) -> Unit,
     onClear: () -> Unit,
@@ -2780,8 +2708,8 @@ fun DiagnosticsScreen(
     }
 
     ScreenColumn {
-        CrumbBar(stringResource(R.string.settings_diagnostics), onBack = onBack)
-        PageTitle(stringResource(R.string.diagnostics), stringResource(R.string.if_something_is_broken_send_this_to))
+        if (onBack != null) CrumbBar(stringResource(R.string.home_logs_title), onBack = onBack)
+        PageTitle(stringResource(R.string.home_logs_title), stringResource(R.string.if_something_is_broken_send_this_to))
 
         AetherCard {
             CardHead(stringResource(R.string.detail_level), stringResource(R.string.turn_verbose_on_reproduce_the_problem_then))

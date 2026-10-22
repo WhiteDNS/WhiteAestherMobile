@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -180,9 +181,12 @@ class ChainScreenTest {
         )
         openChain()
 
+        // Bring the nested list into the page viewport before scrolling its rows.
+        // Scrolling a LazyColumn item alone only scrolls its nearest ancestor.
+        compose.onNodeWithTag("chain-node-list").performScrollTo()
         compose.onNodeWithTag("chain-node-tokyo-01").performScrollTo().assertExists()
         compose.onNodeWithText("180 ms").assertExists()
-        compose.onNodeWithTag("chain-node-osaka-02").performScrollTo().performClick()
+        compose.onNodeWithTag("chain-node-osaka-02").performScrollTo().assertIsDisplayed().performClick()
         assertEquals("osaka-02", selected)
         compose.onNodeWithTag("chain-node-reality-03").performScrollTo().assertIsNotEnabled()
     }
