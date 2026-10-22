@@ -1,9 +1,16 @@
 package com.whitedns.whiteaesther.ui
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.activity.compose.BackHandler
 import androidx.annotation.StringRes
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -13,7 +20,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,7 +27,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -47,11 +52,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.whitedns.whiteaesther.AddressPair
 import com.whitedns.whiteaesther.ChainState
@@ -67,18 +70,17 @@ import com.whitedns.whiteaesther.service.EngineStatus
 import com.whitedns.whiteaesther.service.LogEntry
 import com.whitedns.whiteaesther.service.TrafficSample
 import com.whitedns.whiteaesther.ui.theme.AetherTheme
-import com.whitedns.whiteaesther.ui.theme.AetherType
 import java.io.File
 
 private enum class Tab(@StringRes val label: Int, val icon: ImageVector) {
-    HOME(R.string.tab_home, AetherIcons.Home),
-    ROUTES(R.string.tab_routes, AetherIcons.Routes),
-    TRAFFIC(R.string.tab_traffic, AetherIcons.Traffic),
-    SETTINGS(R.string.tab_settings, AetherIcons.Settings),
+    HOME(R.string.home_tab_connect, AetherIcons.Power),
+    ROUTES(R.string.home_tab_methods, AetherIcons.Routes),
+    TRAFFIC(R.string.home_tab_tools, AetherIcons.Sliders),
+    LOGS(R.string.home_tab_logs, AetherIcons.Pulse),
 }
 
 /** Sub-screens keep their parent tab selected. */
-private enum class Destination(val tab: Tab) {
+private enum class Destination(val tab: Tab?) {
     HOME(Tab.HOME),
     ROUTES(Tab.ROUTES),
     ENDPOINT(Tab.ROUTES),
@@ -86,10 +88,10 @@ private enum class Destination(val tab: Tab) {
     ROUTING_RULES(Tab.ROUTES),
     TRAFFIC(Tab.TRAFFIC),
     SPLIT_TUNNEL(Tab.TRAFFIC),
-    SETTINGS(Tab.SETTINGS),
-    DIAGNOSTICS(Tab.SETTINGS),
-    IDENTITY(Tab.SETTINGS),
-    ABOUT(Tab.SETTINGS),
+    SETTINGS(null),
+    DIAGNOSTICS(Tab.LOGS),
+    IDENTITY(null),
+    ABOUT(null),
 }
 
 @Composable
@@ -142,7 +144,21 @@ fun WhiteAestherApp(
     onAddWidget: () -> Unit = {},
     television: Boolean? = null,
 ) {
-    var destination by rememberSaveable { mutableStateOf(Destination.HOME) }
+    var navigation by rememberSaveable(
+        stateSaver = listSaver<List<Destination>, String>(
+            save = { stack -> stack.map { it.name } },
+            restore = { names -> names.map { Destination.valueOf(it) } },
+        ),
+    ) { mutableStateOf(listOf(Destination.HOME)) }
+    val destination = navigation.last()
+    val activeTab = navigation.asReversed().firstNotNullOfOrNull {
+        when (it) {
+            Destination.HOME, Destination.ROUTES, Destination.TRAFFIC, Destination.DIAGNOSTICS -> it.tab
+            else -> null
+        }
+    }
+    val screenState = rememberSaveableStateHolder()
+    val settingsFocus = remember { FocusRequester() }
     val isTelevision = television ?: TvUiPolicy.isTelevision(LocalConfiguration.current.uiMode)
     val inputModeManager = LocalInputModeManager.current
     val connectFocus = remember { FocusRequester() }
@@ -156,26 +172,20 @@ fun WhiteAestherApp(
     var returnDestination by remember { mutableStateOf<Destination?>(null) }
     var returnFocus by remember { mutableStateOf<FocusRequester?>(null) }
 
-    fun parentOf(detail: Destination): Destination? = when (detail) {
-        Destination.CHAIN, Destination.ENDPOINT, Destination.ROUTING_RULES -> Destination.ROUTES
-        Destination.SPLIT_TUNNEL -> Destination.TRAFFIC
-        Destination.DIAGNOSTICS, Destination.IDENTITY, Destination.ABOUT -> Destination.SETTINGS
-        else -> null
-    }
-
-    fun openDetail(detail: Destination, requester: FocusRequester) {
-        returnDestination = parentOf(detail)
+    fun openDetail(detail: Destination, requester: FocusRequester? = null) {
+        if (destination == detail) return
+        returnDestination = destination
         returnFocus = requester
-        destination = detail
+        navigation = navigation + detail
     }
 
     fun goBack(): Boolean {
-        parentOf(destination)?.let {
-            destination = it
+        if (navigation.size > 1) {
+            navigation = navigation.dropLast(1)
             return true
         }
-        if (isTelevision && destination != Destination.HOME) {
-            destination = Destination.HOME
+        if (destination != Destination.HOME) {
+            navigation = listOf(Destination.HOME)
             return true
         }
         return false
@@ -196,165 +206,179 @@ fun WhiteAestherApp(
         }
     }
 
-    BackHandler(enabled = parentOf(destination) != null) { goBack() }
+    BackHandler(enabled = navigation.size > 1 || destination != Destination.HOME) { goBack() }
 
     CompositionLocalProvider(LocalTvMode provides isTelevision) {
         AetherAppShell(
-            selected = destination.tab,
+            selected = activeTab,
             isTelevision = isTelevision,
             onControllerBack = ::goBack,
+            onOpenSettings = {
+                if (destination == Destination.SETTINGS) goBack()
+                else openDetail(Destination.SETTINGS, settingsFocus)
+            },
+            settingsModifier = Modifier.focusRequester(settingsFocus),
             onSelect = { tab ->
                 returnDestination = null
                 returnFocus = null
-                destination = when (tab) {
+                navigation = listOf(when (tab) {
                     Tab.HOME -> Destination.HOME
                     Tab.ROUTES -> Destination.ROUTES
                     Tab.TRAFFIC -> Destination.TRAFFIC
-                    Tab.SETTINGS -> Destination.SETTINGS
-                }
+                    Tab.LOGS -> Destination.DIAGNOSTICS
+                })
             },
         ) {
-            when (destination) {
-                Destination.HOME -> HomeScreen(
-                    settings = settings,
-                    status = engineStatus,
-                    addresses = addresses,
-                    traffic = traffic,
-                    chainSelection = chainState.selected,
-                    update = update,
-                    updateDownload = updateDownload,
-                    canInstallUpdate = canInstallUpdate,
-                    updatesInPlace = updatesInPlace,
-                    onLiftBlock = onLiftBlock,
-                    onOpenUpdate = onOpenUpdate,
-                    onDownloadUpdate = onDownloadUpdate,
-                    onInstallUpdate = onInstallUpdate,
-                    onCancelUpdateDownload = onCancelUpdateDownload,
-                    onDismissUpdate = onDismissUpdate,
-                    // STOPPING is deliberately not actionable. The service takes
-                    // the stop through a mutex and waits on the session job, so a
-                    // second tap only queues another command behind the first and
-                    // makes the wait longer.
-                    onToggleConnection = {
-                        when (engineStatus.stage) {
-                            EngineStage.IDLE, EngineStage.ERROR -> onConnect(settings)
-                            EngineStage.STOPPING -> Unit
-                            else -> onStop()
-                        }
-                    },
-                    onGoToRoutes = { destination = Destination.ROUTES },
-                    onGoToEndpoint = {
-                        openDetail(Destination.ENDPOINT, endpointFocus)
-                    },
-                    onGoToTraffic = { destination = Destination.TRAFFIC },
-                    connectModifier = Modifier.focusRequester(connectFocus),
-                    compact = isTelevision,
-                )
-                Destination.ROUTES -> RoutesScreen(
-                    settings = settings,
-                    onSettingsChange = onSettingsChange,
-                    onGoToEndpoint = {
-                        openDetail(Destination.ENDPOINT, endpointFocus)
-                    },
-                    onGoToChain = { openDetail(Destination.CHAIN, chainFocus) },
-                    onGoToRoutingRules = {
-                        openDetail(Destination.ROUTING_RULES, rulesFocus)
-                    },
-                    onFetchBridges = onFetchBridges,
-                    bridgesFetching = bridgesFetching,
-                    bridgesMessage = bridgesMessage,
-                    detectedCountry = detectedCountry,
-                    psiphonRegions = psiphonRegions,
-                    endpointModifier = Modifier.focusRequester(endpointFocus),
-                    chainModifier = Modifier.focusRequester(chainFocus),
-                    routingRulesModifier = Modifier.focusRequester(rulesFocus),
-                )
-                Destination.CHAIN -> ChainScreen(
-                    settings = settings,
-                    status = engineStatus,
-                    chainState = chainState,
-                    onSettingsChange = onSettingsChange,
-                    onRefreshNodes = onRefreshChainNodes,
-                    onSelectNode = onSelectChainNode,
-                    onTestNodes = onTestChainNodes,
-                    onTestSelected = onTestChainNodesSelected,
-                    onCancelTests = onCancelChainTests,
-                    onBack = ::goBack,
-                )
-                Destination.ENDPOINT -> EndpointScreen(
-                    settings = settings,
-                    status = engineStatus,
-                    scannerState = endpointScannerState,
-                    onSettingsChange = onSettingsChange,
-                    onScanEndpoints = onScanEndpoints,
-                    onTestEndpoint = onTestEndpoint,
-                    onResetEndpoint = onResetEndpoint,
-                    onCancelEndpointScan = onCancelEndpointScan,
-                    onBack = ::goBack,
-                )
-                Destination.TRAFFIC -> TrafficScreen(
-                    settings = settings,
-                    status = engineStatus,
-                    onSettingsChange = onSettingsChange,
-                    onGoToSplitTunnel = {
-                        openDetail(Destination.SPLIT_TUNNEL, appsFocus)
-                    },
-                    appsModifier = Modifier.focusRequester(appsFocus),
-                )
-                Destination.SPLIT_TUNNEL -> SplitTunnelScreen(
-                    settings = settings,
-                    onSettingsChange = onSettingsChange,
-                    onBack = ::goBack,
-                )
-                Destination.ROUTING_RULES -> RoutingRulesScreen(
-                    settings = settings,
-                    onSettingsChange = onSettingsChange,
-                    onBack = ::goBack,
-                )
-                Destination.SETTINGS -> SettingsScreen(
-                    settings = settings,
-                    onSettingsChange = onSettingsChange,
-                    batteryExempt = batteryExempt,
-                    onRequestBatteryExemption = onRequestBatteryExemption,
-                    onOpenAppSettings = onOpenAppSettings,
-                    onAddTile = onAddTile,
-                    onAddWidget = onAddWidget,
-                    onGoToDiagnostics = {
-                        openDetail(Destination.DIAGNOSTICS, diagnosticsFocus)
-                    },
-                    onGoToAbout = {
-                        openDetail(Destination.ABOUT, aboutFocus)
-                    },
-                    onGoToIdentity = {
-                        openDetail(Destination.IDENTITY, identityFocus)
-                    },
-                    isTelevision = isTelevision,
-                    identityModifier = Modifier.focusRequester(identityFocus),
-                    diagnosticsModifier = Modifier.focusRequester(diagnosticsFocus),
-                    aboutModifier = Modifier.focusRequester(aboutFocus),
-                )
-                Destination.DIAGNOSTICS -> DiagnosticsScreen(
-                    settings = settings,
-                    status = engineStatus,
-                    nativeVersion = nativeVersion,
-                    entries = logEntries,
-                    onBack = ::goBack,
-                    onShare = onShareReport,
-                    onCopy = onCopyReport,
-                    onClear = onClearLog,
-                )
-                Destination.IDENTITY -> IdentityScreen(
-                    settings = settings,
-                    message = identityMessage,
-                    onExport = onExportIdentity,
-                    onImport = onImportIdentity,
-                    onBack = ::goBack,
-                )
-                Destination.ABOUT -> AboutScreen(
-                    nativeVersion = nativeVersion,
-                    settings = settings,
-                    onBack = ::goBack,
-                )
+            screenState.SaveableStateProvider(destination.name) {
+                when (destination) {
+                    Destination.HOME -> HomeScreen(
+                        settings = settings,
+                        status = engineStatus,
+                        addresses = addresses,
+                        traffic = traffic,
+                        chainSelection = chainState.selected,
+                        update = update,
+                        updateDownload = updateDownload,
+                        canInstallUpdate = canInstallUpdate,
+                        updatesInPlace = updatesInPlace,
+                        onLiftBlock = onLiftBlock,
+                        onOpenUpdate = onOpenUpdate,
+                        onDownloadUpdate = onDownloadUpdate,
+                        onInstallUpdate = onInstallUpdate,
+                        onCancelUpdateDownload = onCancelUpdateDownload,
+                        onDismissUpdate = onDismissUpdate,
+                        // STOPPING is deliberately not actionable. The service takes
+                        // the stop through a mutex and waits on the session job, so a
+                        // second tap only queues another command behind the first and
+                        // makes the wait longer.
+                        onToggleConnection = {
+                            when (engineStatus.stage) {
+                                EngineStage.IDLE, EngineStage.ERROR -> onConnect(settings)
+                                EngineStage.STOPPING -> Unit
+                                else -> onStop()
+                            }
+                        },
+                        onGoToRoutes = { openDetail(Destination.ROUTES) },
+                        onGoToEndpoint = {
+                            openDetail(Destination.ENDPOINT)
+                        },
+                        onGoToTraffic = { openDetail(Destination.TRAFFIC) },
+                        onSettingsChange = onSettingsChange,
+                        onGoToApps = { openDetail(Destination.SPLIT_TUNNEL) },
+                        onGoToDiagnostics = { openDetail(Destination.DIAGNOSTICS) },
+                        connectModifier = Modifier.focusRequester(connectFocus),
+                        compact = isTelevision,
+                    )
+                    Destination.ROUTES -> RoutesScreen(
+                        settings = settings,
+                        onSettingsChange = onSettingsChange,
+                        onGoToEndpoint = {
+                            openDetail(Destination.ENDPOINT, endpointFocus)
+                        },
+                        onGoToChain = { openDetail(Destination.CHAIN, chainFocus) },
+                        onGoToRoutingRules = {
+                            openDetail(Destination.ROUTING_RULES, rulesFocus)
+                        },
+                        onFetchBridges = onFetchBridges,
+                        bridgesFetching = bridgesFetching,
+                        bridgesMessage = bridgesMessage,
+                        detectedCountry = detectedCountry,
+                        psiphonRegions = psiphonRegions,
+                        endpointModifier = Modifier.focusRequester(endpointFocus),
+                        chainModifier = Modifier.focusRequester(chainFocus),
+                        routingRulesModifier = Modifier.focusRequester(rulesFocus),
+                    )
+                    Destination.CHAIN -> ChainScreen(
+                        settings = settings,
+                        status = engineStatus,
+                        chainState = chainState,
+                        onSettingsChange = onSettingsChange,
+                        onRefreshNodes = onRefreshChainNodes,
+                        onSelectNode = onSelectChainNode,
+                        onTestNodes = onTestChainNodes,
+                        onTestSelected = onTestChainNodesSelected,
+                        onCancelTests = onCancelChainTests,
+                        onBack = ::goBack,
+                    )
+                    Destination.ENDPOINT -> EndpointScreen(
+                        settings = settings,
+                        status = engineStatus,
+                        scannerState = endpointScannerState,
+                        onSettingsChange = onSettingsChange,
+                        onScanEndpoints = onScanEndpoints,
+                        onTestEndpoint = onTestEndpoint,
+                        onResetEndpoint = onResetEndpoint,
+                        onCancelEndpointScan = onCancelEndpointScan,
+                        onBack = ::goBack,
+                    )
+                    Destination.TRAFFIC -> TrafficScreen(
+                        settings = settings,
+                        status = engineStatus,
+                        onSettingsChange = onSettingsChange,
+                        onGoToSplitTunnel = {
+                            openDetail(Destination.SPLIT_TUNNEL, appsFocus)
+                        },
+                        onGoToEndpoint = { openDetail(Destination.ENDPOINT) },
+                        onGoToChain = { openDetail(Destination.CHAIN) },
+                        onGoToRoutingRules = { openDetail(Destination.ROUTING_RULES) },
+                        appsModifier = Modifier.focusRequester(appsFocus),
+                    )
+                    Destination.SPLIT_TUNNEL -> SplitTunnelScreen(
+                        settings = settings,
+                        onSettingsChange = onSettingsChange,
+                        onBack = ::goBack,
+                    )
+                    Destination.ROUTING_RULES -> RoutingRulesScreen(
+                        settings = settings,
+                        onSettingsChange = onSettingsChange,
+                        onBack = ::goBack,
+                    )
+                    Destination.SETTINGS -> SettingsScreen(
+                        settings = settings,
+                        onSettingsChange = onSettingsChange,
+                        batteryExempt = batteryExempt,
+                        onRequestBatteryExemption = onRequestBatteryExemption,
+                        onOpenAppSettings = onOpenAppSettings,
+                        onAddTile = onAddTile,
+                        onAddWidget = onAddWidget,
+                        onGoToDiagnostics = {
+                            openDetail(Destination.DIAGNOSTICS, diagnosticsFocus)
+                        },
+                        onGoToAbout = {
+                            openDetail(Destination.ABOUT, aboutFocus)
+                        },
+                        onGoToIdentity = {
+                            openDetail(Destination.IDENTITY, identityFocus)
+                        },
+                        isTelevision = isTelevision,
+                        identityModifier = Modifier.focusRequester(identityFocus),
+                        diagnosticsModifier = Modifier.focusRequester(diagnosticsFocus),
+                        aboutModifier = Modifier.focusRequester(aboutFocus),
+                        onBack = ::goBack,
+                    )
+                    Destination.DIAGNOSTICS -> DiagnosticsScreen(
+                        settings = settings,
+                        status = engineStatus,
+                        nativeVersion = nativeVersion,
+                        entries = logEntries,
+                        onBack = if (navigation.size > 1) ({ goBack() }) else null,
+                        onShare = onShareReport,
+                        onCopy = onCopyReport,
+                        onClear = onClearLog,
+                    )
+                    Destination.IDENTITY -> IdentityScreen(
+                        settings = settings,
+                        message = identityMessage,
+                        onExport = onExportIdentity,
+                        onImport = onImportIdentity,
+                        onBack = ::goBack,
+                    )
+                    Destination.ABOUT -> AboutScreen(
+                        nativeVersion = nativeVersion,
+                        settings = settings,
+                        onBack = ::goBack,
+                    )
+                }
             }
         }
     }
@@ -362,49 +386,72 @@ fun WhiteAestherApp(
 
 @Composable
 private fun AetherAppShell(
-    selected: Tab,
+    selected: Tab?,
     isTelevision: Boolean,
     onSelect: (Tab) -> Unit,
     onControllerBack: () -> Boolean,
+    onOpenSettings: () -> Unit,
+    settingsModifier: Modifier,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val colors = AetherTheme.colors
-    if (isTelevision) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(colors.ink1)
-                .padding(
-                    horizontal = TvUiPolicy.safeHorizontalInset,
-                    vertical = TvUiPolicy.safeVerticalInset,
-                ),
-            contentAlignment = Alignment.TopCenter,
-        ) {
-            Row(
-                Modifier
-                    .fillMaxSize()
-                    .widthIn(max = TvUiPolicy.maxShellWidth)
-                    .tvControllerBack(onControllerBack),
-            ) {
-                TvNavigationRail(selected = selected, onSelect = onSelect)
-                Box(Modifier.weight(1f).fillMaxSize(), content = content)
-            }
-        }
-    } else {
+    val expanded = isTelevision || LocalConfiguration.current.screenWidthDp >= 600
+    Row(
+        Modifier.fillMaxSize().background(colors.ink1).statusBarsPadding()
+            .then(if (isTelevision) Modifier.padding(
+                horizontal = TvUiPolicy.safeHorizontalInset,
+                vertical = TvUiPolicy.safeVerticalInset,
+            ) else Modifier)
+            .tvControllerBack(onControllerBack),
+    ) {
+        if (expanded) TvNavigationRail(selected, onSelect)
         Column(
-            Modifier
-                .fillMaxSize()
-                .background(colors.ink1)
-                .statusBarsPadding(),
+            Modifier.weight(1f).fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Box(Modifier.weight(1f), content = content)
-            TabBar(selected = selected, onSelect = onSelect)
+            FamilyHeader(onOpenSettings, settingsModifier)
+            Box(
+                Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.TopCenter,
+            ) {
+                Box(Modifier.widthIn(max = 520.dp).fillMaxSize(), content = content)
+            }
+            if (!expanded) TabBar(selected, onSelect)
         }
     }
 }
 
 @Composable
-private fun TvNavigationRail(selected: Tab, onSelect: (Tab) -> Unit) {
+private fun FamilyHeader(onOpenSettings: () -> Unit, settingsModifier: Modifier) {
+    val colors = AetherTheme.colors
+    val interaction = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(8.dp)
+    Row(
+        Modifier.widthIn(max = 520.dp).fillMaxWidth().heightIn(min = 56.dp)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Image(painterResource(R.mipmap.ic_launcher_foreground), null,
+            Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape))
+        Text(
+            stringResource(R.string.app_name), style = AetherTheme.type.RowTitle,
+            color = colors.text, modifier = Modifier.weight(1f),
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+        Box(
+            settingsModifier.size(48.dp).clip(shape)
+                .tvControllerActivation(onClick = onOpenSettings)
+                .clickable(interaction, LocalIndication.current, role = Role.Button, onClick = onOpenSettings)
+                .controllerFocus(interaction, shape).testTag("tab-settings"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(AetherIcons.Settings, stringResource(R.string.settings), Modifier.size(22.dp), colors.text2)
+        }
+    }
+}
+
+@Composable
+private fun TvNavigationRail(selected: Tab?, onSelect: (Tab) -> Unit) {
     val colors = AetherTheme.colors
     Column(
         modifier = Modifier
@@ -434,7 +481,7 @@ private fun TvNavigationRail(selected: Tab, onSelect: (Tab) -> Unit) {
                         shape,
                     )
                     .tvControllerActivation { onSelect(tab) }
-                    .clickable(interaction, LocalIndication.current) { onSelect(tab) }
+                    .selectable(selected = active, role = Role.Tab, interactionSource = interaction, indication = LocalIndication.current, onClick = { onSelect(tab) })
                     .controllerFocus(interaction, shape)
                     .testTag("tab-${tab.name.lowercase()}")
                     .padding(horizontal = 8.dp, vertical = 12.dp),
@@ -455,82 +502,55 @@ private fun TvNavigationRail(selected: Tab, onSelect: (Tab) -> Unit) {
             }
         }
         Spacer(Modifier.weight(1f))
-        SectionLabel(stringResource(R.string.tv))
     }
 }
 
-/**
- * The selected pill is derived from the measured cell rather than a fixed inset,
- * so the icon and its label share the cell's exact centre line.
- */
 @Composable
-private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit) {
+private fun TabBar(selected: Tab?, onSelect: (Tab) -> Unit) {
     val colors = AetherTheme.colors
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(colors.ink1)
-            .navigationBarsPadding(),
+    Box(
+        Modifier.fillMaxWidth().navigationBarsPadding()
+            .padding(start = 16.dp, end = 16.dp, bottom = 12.dp, top = 8.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(colors.line),
-        )
-        BoxWithConstraints(
-            Modifier
-                .fillMaxWidth()
-                .height(66.dp)
-                .padding(horizontal = 10.dp),
+        Row(
+            Modifier.widthIn(max = 520.dp).fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp)).background(colors.ink2).selectableGroup(),
         ) {
-            val cellWidth = maxWidth / Tab.entries.size
-            // The lambda overload of offset defers the read to the draw phase, so
-            // an animating indicator does not recompose the bar every frame.
-            val indicatorOffset by animateDpAsState(
-                targetValue = cellWidth * Tab.entries.indexOf(selected) + 4.dp,
-                animationSpec = tween(320),
-                label = "tab-indicator",
-            )
-            val density = LocalDensity.current
-            Box(
-                Modifier
-                    .offset { IntOffset(with(density) { indicatorOffset.roundToPx() }, 0) }
-                    .width(cellWidth - 8.dp)
-                    .fillMaxSize()
-                    .padding(vertical = 6.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(colors.brand.copy(alpha = 0.12f))
-                    .border(1.dp, colors.brand.copy(alpha = 0.26f), RoundedCornerShape(14.dp)),
-            )
-            Row(Modifier.fillMaxSize().focusGroup()) {
-                Tab.entries.forEach { tab ->
-                    val active = tab == selected
-                    val interaction = remember { MutableInteractionSource() }
-                    val shape = RoundedCornerShape(14.dp)
+            Tab.entries.forEach { tab ->
+                val active = tab == selected
+                val interaction = remember { MutableInteractionSource() }
+                val shape = RoundedCornerShape(16.dp)
+                val largeText = LocalConfiguration.current.fontScale > 1.5f
+                val label = stringResource(tab.label)
+                Box(
+                    Modifier.weight(if (largeText && active) 1.5f else 1f)
+                        .heightIn(min = 72.dp)
+                        .selectable(
+                            selected = active, role = Role.Tab,
+                            interactionSource = interaction, indication = LocalIndication.current,
+                            onClick = { onSelect(tab) },
+                        )
+                        .controllerFocus(interaction, shape)
+                        .testTag("tab-${tab.name.lowercase()}")
+                        .padding(horizontal = 4.dp, vertical = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
                     Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxSize()
-                            .clickable(interaction, LocalIndication.current) { onSelect(tab) }
-                            .controllerFocus(interaction, shape)
-                            .testTag("tab-${tab.name.lowercase()}"),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
+                        verticalArrangement = Arrangement.spacedBy(5.dp),
                     ) {
-                        Icon(
-                            tab.icon,
-                            null,
-                            Modifier.size(22.dp),
-                            if (active) colors.brand else colors.text3,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            stringResource(tab.label),
-                            style = AetherTheme.type.Small.copy(fontSize = AetherTheme.type.Label.fontSize),
-                            color = if (active) colors.brand else colors.text3,
-                        )
+                        Icon(tab.icon, label, Modifier.size(22.dp), if (active) colors.brand else colors.text2)
+                        if (!largeText || active) {
+                            Text(label, style = AetherTheme.type.Small,
+                                color = if (active) colors.brand else colors.text2,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
+                    if (active) Box(
+                        Modifier.align(Alignment.BottomCenter).width(28.dp).height(3.dp)
+                            .background(colors.brand, RoundedCornerShape(2.dp)),
+                    )
                 }
             }
         }

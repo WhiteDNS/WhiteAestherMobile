@@ -1,8 +1,12 @@
 # Design
 
-The approved UI direction, and the notes from porting it to Compose.
+The earlier UI prototype and notes from its original Compose port.
 
-`index.html` is a self-contained, clickable prototype of the shipped app: the
+The current native Android design follows WhiteDNS 1.6.9 and is documented in
+[DESIGN.md](../DESIGN.md). The HTML prototype below is historical reference;
+the native implementation is authoritative.
+
+`index.html` is a self-contained, clickable prototype of the earlier app: the
 four-state connect control, the four-tab layout, both themes, the endpoint
 scanner and the diagnostics report. Open it directly in a browser -- the fonts
 are inlined, so nothing is fetched.

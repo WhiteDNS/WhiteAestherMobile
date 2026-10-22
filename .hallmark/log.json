@@ -1,0 +1,12 @@
+[
+  {
+    "date": "2026-10-22",
+    "scope": "app",
+    "macrostructure": "Native connection workbench",
+    "theme": "studied-DNA",
+    "source": "WhiteDNS Android 1.6.9",
+    "enrichment": "none",
+    "brief": "Unify the WhiteDNS family and simplify everyday connection controls.",
+    "design_system": "DESIGN.md"
+  }
+]

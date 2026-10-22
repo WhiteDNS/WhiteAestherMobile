@@ -493,7 +493,8 @@ private fun NodesCard(
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 420.dp),
+                        .heightIn(max = 420.dp)
+                        .testTag("chain-node-list"),
                 ) {
                     items(ordered, key = { it.name }) { node ->
                     Divider()

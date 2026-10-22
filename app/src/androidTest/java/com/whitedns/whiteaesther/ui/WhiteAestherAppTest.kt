@@ -75,13 +75,14 @@ class WhiteAestherAppTest {
     }
 
     @Test
-    fun homeShowsStatusAndNoSettingsControls() {
+    fun homeOffersDirectConnectionControlsWithoutTechnicalDetails() {
         setApp()
 
         compose.onNodeWithTag("connect-orb").assertExists()
-        compose.onNodeWithText("Ready when you are").assertExists()
-        // Home reports the profile but offers no way to change it.
-        compose.onNodeWithText("Adaptive").assertExists()
+        compose.onNodeWithText("Not connected").assertExists()
+        compose.onNodeWithTag("home-method").assertExists()
+        compose.onNodeWithTag("home-mode").assertExists()
+        compose.onNodeWithTag("home-connection-details").assertDoesNotExist()
         compose.onNodeWithTag("choice-adaptive").assertDoesNotExist()
     }
 
@@ -145,7 +146,7 @@ class WhiteAestherAppTest {
         // search for a Cloudflare gateway. A carrier that never looks for one
         // leaves that whole half of the screen inert, and a screen full of
         // controls that quietly do nothing is worse than a sentence saying so.
-        setApp(initial = AppSettings(carrier = Carrier.PSIPHON))
+        setApp(initial = AppSettings(carrier = Carrier.PSIPHON, automaticCarrier = false))
 
         compose.onNodeWithTag("tab-routes").performClick()
         compose.onNodeWithText(
@@ -183,6 +184,7 @@ class WhiteAestherAppTest {
         setApp(onSettings = { saved = it })
 
         compose.onNodeWithTag("tab-routes").performClick()
+        compose.onNodeWithTag("advanced-toggle").performScrollTo().performClick()
         compose.onNodeWithTag("choice-strict-network").performScrollTo().performClick()
         compose.runOnIdle {
             assertEquals(com.whitedns.whiteaesther.data.ScanStrategy.STEALTH, saved?.scanStrategy)
@@ -215,20 +217,14 @@ class WhiteAestherAppTest {
             traffic = TrafficSample(received = 4_096, sent = 2_048),
         )
 
-        compose.onNodeWithTag("connect-orb")
+        compose.onNodeWithTag("connect-orb").assertIsFocused()
+        compose.onNodeWithTag("home-details-toggle")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
             .assertIsFocused()
-            .performKeyInput { pressKey(Key.DirectionDown) }
-        compose.onNodeWithTag("home-connected-for").assertIsFocused()
-
-        compose.onNodeWithTag("home-connected-for")
-            .performKeyInput { pressKey(Key.DirectionDown) }
-        compose.onNodeWithTag("home-address").assertIsFocused()
-            .performKeyInput { pressKey(Key.DirectionDown) }
-        compose.onNodeWithTag("home-session").assertIsFocused()
-            .performKeyInput { pressKey(Key.DirectionDown) }
-        compose.onNodeWithTag("home-connection-details")
-            .assertIsFocused()
-            .assertIsDisplayed()
+            .performKeyInput { pressKey(Key.DirectionCenter) }
+        compose.onNodeWithTag("home-address").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("home-connection-details").performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -244,13 +240,13 @@ class WhiteAestherAppTest {
             .performKeyInput { pressKey(Key.DirectionCenter) }
 
         compose.onNodeWithTag("tab-routes").assertIsFocused()
-        compose.onNodeWithText("How it connects").assertExists()
+        compose.onNodeWithText("Connection methods").assertExists()
 
         compose.onNodeWithTag("tab-home")
             .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
             .performKeyInput { pressKey(Key.DirectionCenter) }
             .assertIsFocused()
-        compose.onNodeWithText("Ready when you are").assertExists()
+        compose.onNodeWithText("Not connected").assertExists()
     }
 
     @Test
@@ -258,6 +254,7 @@ class WhiteAestherAppTest {
         var writes = 0
         setApp(television = true, onSettings = { writes++ })
         compose.onNodeWithTag("tab-routes").performClick()
+        compose.onNodeWithTag("advanced-toggle").performScrollTo().performClick()
 
         compose.onNodeWithTag("choice-strict-network")
             .performScrollTo()
