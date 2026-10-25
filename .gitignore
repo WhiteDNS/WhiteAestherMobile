@@ -4,6 +4,8 @@ build/
 **/build/
 !native/third-party/boring-sys/build/
 !native/third-party/boring-sys/build/**
+!native/third-party/boring-sys-5.3/build/
+!native/third-party/boring-sys-5.3/build/**
 **/target/
 local.properties
 *.iml

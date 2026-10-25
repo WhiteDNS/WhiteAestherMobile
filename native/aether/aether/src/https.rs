@@ -66,26 +66,39 @@ pub async fn send(
     ech: Option<&mut Vec<u8>>,
     timeout: Duration,
 ) -> Result<Response> {
-    // The TLS exchange future is large in debug builds. Keeping it inline in
-    // Timeout copies it through the nested DNS/ECH/provisioning call chain.
-    tokio::time::timeout(timeout, Box::pin(exchange(request, fingerprint, ech)))
-        .await
-        .map_err(|_| {
-            AetherError::Api(format!(
-                "{} did not answer within {}s",
-                authority(request.host, request.port),
-                timeout.as_secs()
-            ))
-        })?
+    send_fragmented(
+        request,
+        fingerprint,
+        ech,
+        timeout,
+        FragmentConfig::disabled(),
+    )
+    .await
 }
 
-async fn exchange(
+/// Send one request over an authenticated connection, with optional ClientHello fragmentation.
+pub async fn send_fragmented(
     request: &Request<'_>,
     fingerprint: &Fingerprint,
     ech: Option<&mut Vec<u8>>,
+    timeout: Duration,
+    fragments: FragmentConfig,
 ) -> Result<Response> {
-    let tls = open(request, fingerprint, ech, FragmentConfig::disabled(), None).await?;
-    send_on_session(tls, request).await
+    tokio::time::timeout(
+        timeout,
+        Box::pin(async {
+            let tls = open(request, fingerprint, ech, fragments, None).await?;
+            send_on_session(tls, request).await
+        }),
+    )
+    .await
+    .map_err(|_| {
+        AetherError::Api(format!(
+            "{} did not answer within {}s",
+            authority(request.host, request.port),
+            timeout.as_secs()
+        ))
+    })?
 }
 
 /// Establish and authenticate TLS without sending an HTTP request. Callers can
@@ -209,10 +222,11 @@ fn configuration(fingerprint: &Fingerprint) -> Result<ConnectConfiguration> {
             crate::tls::install_verification(&mut builder, true, &pins)?;
         }
     }
-    let config = builder
+    let mut config = builder
         .build()
         .configure()
         .map_err(|e| AetherError::Tls(e.to_string()))?;
+    fingerprint.prepare(&mut config, ALPN_H2_HTTP1)?;
     #[cfg(test)]
     let config = {
         let mut config = config;
@@ -765,6 +779,78 @@ mod tests {
         ]
     }
 
+    /// The length of the TLS record that starts `seen`, its header included.
+    fn record_len(seen: &[u8]) -> usize {
+        5 + u16::from_be_bytes([seen[3], seen[4]]) as usize
+    }
+
+    /// The TLS record a server gets first on a connection, and the size of each read it took.
+    async fn first_record(listener: tokio::net::TcpListener) -> (Vec<u8>, Vec<usize>) {
+        let (mut tcp, _) = listener.accept().await.expect("a connection");
+        let mut seen = Vec::new();
+        let mut reads = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while seen.len() < 5 || seen.len() < record_len(&seen) {
+            let read = tcp.read(&mut chunk).await.expect("the hello");
+            if read == 0 {
+                break;
+            }
+            reads.push(read);
+            seen.extend_from_slice(&chunk[..read]);
+        }
+        (seen, reads)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_fragmented_client_hello_reaches_the_server_in_pieces() {
+        let _setting = crate::upstream::hold_setting().await;
+        let headers = headers();
+        let fragment = FragmentConfig {
+            enabled: true,
+            size_min: 64,
+            size_max: 64,
+            delay_min_ms: 50,
+            delay_max_ms: 50,
+            sni_split: false,
+        };
+        for pieces in [Some(fragment), None] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("a listener");
+            let port = listener.local_addr().expect("its address").port();
+            let served = tokio::spawn(first_record(listener));
+            let request = Request {
+                method: "GET",
+                host: "127.0.0.1",
+                port,
+                address: None,
+                sni: Some("api.cloudflareclient.com"),
+                path: "/",
+                headers: &headers,
+                body: None,
+            };
+            // No server answers it: the ClientHello is all this is about.
+            let timeout = Duration::from_secs(10);
+            let _ = match pieces {
+                Some(fragment) => {
+                    send_fragmented(&request, &Fingerprint::default(), None, timeout, fragment)
+                        .await
+                }
+                None => send(&request, &Fingerprint::default(), None, timeout).await,
+            };
+
+            let (seen, reads) = served.await.expect("the server");
+            assert_eq!(&seen[..2], &[0x16, 0x03], "a TLS handshake record");
+            assert_eq!(seen.len(), record_len(&seen));
+            if pieces.is_some() {
+                assert!(reads.iter().all(|&read| read <= 64), "{reads:?}");
+                assert!(reads.len() >= seen.len() / 64, "{reads:?}");
+            } else {
+                assert!(reads[0] > 64, "{reads:?}");
+            }
+        }
+    }
+
     #[tokio::test]
     async fn a_request_goes_over_http2_when_the_server_picks_it() {
         let _setting = crate::upstream::hold_setting().await;
@@ -937,18 +1023,36 @@ mod tests {
         );
 
         // Every name BoringSSL knows, AES256-SHA among them, in the list's order.
+        // The TLS 1.3 suites in the list's order, and a key share for each group, where
+        // BoringSSL would send one for X25519 alone.
         let changed = Fingerprint {
             ciphers: Some(
                 "ECDHE-ECDSA-CHACHA20-POLY1305:AES256-SHA:ECDHE-RSA-AES128-GCM-SHA256".to_string(),
             ),
+            tls13_ciphers: Some("TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256".to_string()),
             groups: "X25519:P-256".to_string(),
+            key_shares: Some("X25519:P-256".to_string()),
             grease: false,
+            grease_sigalgs: false,
+            ..Fingerprint::default()
         };
         let listed = hello("api.example.test", &changed, None).await;
         assert_eq!(listed.tls12_suites(), [0xcca9, 0x0035, 0xc02f]);
+        assert_eq!(listed.tls13_suites(), [0x1303, 0x1301]);
         assert_eq!(listed.groups(), [0x001d, 0x0017]);
+        assert_eq!(listed.key_shares(), [0x001d, 0x0017]);
         assert!(!listed.has_grease());
+        assert!(!listed.has_grease_signature_algorithm());
         assert_eq!(listed.alpn(), own.alpn());
+
+        // ALPS for HTTP/2, which the calls offer first, and not for HTTP/1.1.
+        let alps = Fingerprint {
+            alps: Some("new".to_string()),
+            ..Fingerprint::default()
+        };
+        let alps = hello("api.example.test", &alps, None).await;
+        assert_eq!(alps.alps(0x44cd), Some(vec![b"h2".to_vec()]));
+        assert_eq!(own.alps(0x44cd), None);
     }
 
     /// Cloudflare's key of cloudflare-ech.com on 2026-10-01.

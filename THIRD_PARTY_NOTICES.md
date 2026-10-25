@@ -10,7 +10,7 @@ and the GPL-3.0 parts remain GPL-3.0.
 ## Aether — AGPL-3.0
 
 The native engine is vendored from `CluvexStudio/Aether` revision
-`6175b67df370ab856bcee07fe85b524031903956`, released as `v2.3.0`, with
+`d58f9d568083129ce2c767c85054021eb3ee6a38`, released as `v2.4.0`, with
 Android adaptations listed in `native/aether/UPSTREAM.md`. The original license and revision
 record are included under `native/aether/`.
 
@@ -141,11 +141,16 @@ licence; the GPL-3.0 text is in [licenses/GPL-3.0.txt](licenses/GPL-3.0.txt).
 
 ## BoringSSL Rust bindings — MIT
 
-`boring-sys` 5.2.0 is vendored under `native/third-party/boring-sys` under its
+`boring-sys` 5.3.0 is vendored under `native/third-party/boring-sys-5.3` under its
 MIT license. WhiteAesther normalizes `.exe` paths from cargo-ndk on Windows and
 quotes the generated NASM include path in BoringSSL's CMake file so host builds
 work in directories containing spaces. Cryptographic runtime source is not
 modified. Details are in `native/third-party/README.md`.
+
+Aether's optional TLS certificate compression links `flate2` (MIT OR Apache-2.0),
+`brotli-decompressor` (BSD-3-Clause OR MIT), and `zstd` / `zstd-safe` (BSD-3-Clause), with
+`zstd-sys` and the upstream Zstandard implementation (BSD-3-Clause). Their
+versions and transitive dependencies are recorded in both native Cargo lockfiles.
 
 ## Vazirmatn — SIL Open Font License 1.1
 

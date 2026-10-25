@@ -66,7 +66,9 @@
     <string name="finish_setting_it">Finish setting it</string>
     <string name="only_some_apps_are_going_through">Only some apps are going through</string>
     <string name="change_which_apps">Change which apps</string>
-    <string name="proxy_only_apps_are_not_routed_for">Proxy only: apps are not routed for you</string>
+    <string name="proxy_only_apps_are_not_routed_for">Proxy mode</string>
+    <string name="copy_proxy_address">Copy proxy address</string>
+    <string name="proxy_address_copied">Proxy address copied</string>
     <string name="change_coverage">Change coverage</string>
     <string name="fallback_is_off">Fallback is off</string>
     <string name="only_the_address_you_pinned_will_be">Only the address you pinned will be used. If it stops working the connection fails instead of finding another.</string>
@@ -434,7 +436,7 @@
     <string name="endpoint_example">Looks like 162.159.197.3:443</string>
     <string name="fallback_substituted">%1$s did not work, so fallback used %2$s instead. Turn off Fall back automatically if you would rather it failed than substituted.</string>
     <string name="everything_else_real_address">Everything else is using your real address, connected or not.</string>
-    <string name="proxy_needs_pointing">Nothing goes through the tunnel unless you point an app at %1$s. Choose Whole device under Traffic to cover everything.</string>
+    <string name="proxy_needs_pointing">Only apps configured to use this SOCKS5 address connect through the tunnel.</string>
     <string name="point_devices_at">Point other devices at %1$s:%2$d as a SOCKS5 proxy.</string>
     <string name="status_validating_engine">Validating native engine</string>
     <string name="status_connecting_to">Connecting to %1$s</string>
@@ -650,4 +652,9 @@
     <string name="home_scan_endpoints">Find an endpoint</string>
     <string name="home_scan_endpoints_summary">Scan and test addresses for Aether.</string>
     <string name="home_logs_title">Connection logs</string>
+    <string name="tls13_ciphers">TLS 1.3 cipher suites (optional)</string>
+    <string name="tls_key_shares">TLS key shares (optional)</string>
+    <string name="masque_sni">MASQUE server name (optional)</string>
+    <string name="warp_api_host">WARP API host (optional)</string>
+    <string name="warp_api_sni">WARP API server name (optional)</string>
 </resources>

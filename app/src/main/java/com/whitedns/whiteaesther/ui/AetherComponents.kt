@@ -779,6 +779,7 @@ fun AttentionCard(
                                 .clickable(interaction, LocalIndication.current, onClick = action)
                                 .controllerFocus(interaction, RoundedCornerShape(8.dp))
                                 .padding(horizontal = 13.dp, vertical = 7.dp),
+                            contentAlignment = Alignment.Center,
                         ) {
                             Text(label, style = AetherTheme.type.Small,
                                 color = if (AetherTheme.colors.isDark) tone else AetherTheme.colors.text)

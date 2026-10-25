@@ -1,0 +1,97 @@
+[package]
+name = "boring-sys"
+version = { workspace = true }
+authors = ["Alex Crichton <alex@alexcrichton.com>",
+           "Steven Fackler <sfackler@gmail.com>",
+           "Ivan Nikulin <ifaaan@gmail.com>"]
+license = "MIT"
+description = "FFI bindings to BoringSSL"
+repository = { workspace = true }
+documentation = "https://docs.rs/boring-sys"
+links = "boringssl"
+build = "build/main.rs"
+readme = "README.md"
+categories = ["cryptography", "external-ffi-bindings"]
+keywords = ["tls", "boringssl", "openssl", "fips", "ml-kem"]
+edition = { workspace = true }
+rust-version = { workspace = true }
+include = [
+    "/*.md",
+    "/*.toml",
+    "/LICENSE-MIT",
+    "/cmake/*.cmake",
+    "/deps/boringssl/**/*.[chS]",
+    "/deps/boringssl/**/*.inc",
+    "/deps/boringssl/**/*.asm",
+    "/deps/boringssl/**/*.pl",
+    "/deps/boringssl/**/*.go",
+    "/deps/boringssl/**/*.cmake",
+    "/deps/boringssl/**/go.mod",
+    "/deps/boringssl/**/go.sum",
+    "/deps/boringssl/crypto/obj/obj_mac.num",
+    "/deps/boringssl/crypto/obj/objects.txt",
+    "/deps/boringssl/crypto/err/*.errordata",
+    "/deps/boringssl/**/*.bzl",
+    "/deps/boringssl/**/*.cc",
+    "/deps/boringssl/**/*.cpp",
+    "/deps/boringssl/**/*.in",
+    "/deps/boringssl/**/CMakeLists.txt",
+    "/deps/boringssl/**/sources.cmake",
+    "/deps/boringssl/**/util/go_tests.txt",
+    "/deps/boringssl/LICENSE",
+    "/build/*",
+    "/src",
+    "/patches",
+]
+
+[package.metadata.docs.rs]
+features = ["rpk", "underscore-wildcards", "mlkem"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+# Compile boringssl using the FIPS build flag if building boringssl from
+# scratch.
+#
+# See
+# https://boringssl.googlesource.com/boringssl/+/master/crypto/fipsmodule/FIPS.md
+# for instructions and more details on the boringssl FIPS flag.
+fips = []
+
+# Enables Raw public key API (https://datatracker.ietf.org/doc/html/rfc7250)
+rpk = []
+
+# Require mlkem.h
+mlkem = []
+
+# Violate RFC 5280 5.1.2.1 and allow extensions on X.509 version 1 CRLs.
+# This feature is not guaranteed to be supported in future minor releases.
+allow-crl-extensions-bad-version = []
+
+# Applies a patch (`patches/underscore-wildcards.patch`) to enable
+# `ffi::X509_CHECK_FLAG_UNDERSCORE_WILDCARDS`. This feature is necessary in
+# order to compile the bindings for the default branch of boringSSL
+# (`deps/boringssl`). Alternatively, a version of boringSSL that implements the
+# same feature set can be provided by setting
+# `BORING_BSSL{,_FIPS}_SOURCE_PATH`.
+underscore-wildcards = []
+
+# Restores the historical BoringSSL default of not enforcing RSA keyUsage
+# during TLS handshakes. BoringSSL starting with `BORINGSSL_API_VERSION`
+# 19 (see `include/openssl/base.h`) changed `enforce_rsa_key_usage` to
+# `true`, making a client-side RSA leaf whose keyUsage does not include the
+# bit required by the negotiated cipher suite a fatal handshake error
+# (KEY_USAGE_BIT_INCORRECT). Upstream later removed the
+# `enforce_rsa_key_usage` config field entirely, so enabling this feature
+# applies a build-time patch that restores the conditional the flag used to
+# guard, hardwired to the relaxed behaviour, making RSA keyUsage mismatches
+# non-fatal again. Non-RSA keyUsage enforcement is unaffected.
+relax-cert-validation = []
+
+[build-dependencies]
+bindgen = { workspace = true }
+cmake = { workspace = true }
+fs_extra = { workspace = true }
+fslock = { workspace = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(const_fn)'] }

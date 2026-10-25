@@ -402,7 +402,13 @@ fun HomeScreen(
 
         val attention = homeAttention(settings, status)
         if (attention != null) {
-            AttentionCard(
+            if (attention.proxyAddress != null) {
+                val context = androidx.compose.ui.platform.LocalContext.current
+                ProxyModeNotice(address = attention.proxyAddress, onCopy = {
+                    context.getSystemService(android.content.ClipboardManager::class.java)
+                        ?.setPrimaryClip(android.content.ClipData.newPlainText("SOCKS5", attention.proxyAddress))
+                })
+            } else AttentionCard(
                 tone = attention.tone,
                 title = attention.title,
                 body = attention.body,
@@ -700,6 +706,7 @@ private data class Attention(
     val title: String,
     val body: String,
     val actions: List<Pair<String, AttentionTarget>>,
+    val proxyAddress: String? = null,
 )
 
 @Composable
@@ -759,8 +766,10 @@ private fun homeAttention(settings: AppSettings, status: EngineStatus): Attentio
         settings.mode == EngineMode.PROXY -> Attention(
             tone = colors.cyan,
             title = stringResource(R.string.proxy_only_apps_are_not_routed_for),
-            body = stringResource(R.string.proxy_needs_pointing, settings.proxyBindLabel()),
-            actions = listOf(stringResource(R.string.change_coverage) to AttentionTarget.TRAFFIC),
+            body = stringResource(R.string.proxy_needs_pointing),
+            actions = emptyList(),
+            // The wildcard used for LAN binding is not an address a local app can dial.
+            proxyAddress = "127.0.0.1:${settings.proxyPort}",
         )
         settings.endpointMode == EndpointMode.CUSTOM_ONLY -> Attention(
             tone = colors.signalWorking,
@@ -769,6 +778,58 @@ private fun homeAttention(settings: AppSettings, status: EngineStatus): Attentio
             actions = listOf(stringResource(R.string.change_this) to AttentionTarget.ENDPOINT),
         )
         else -> null
+    }
+}
+
+/** The local proxy is a supported connection mode, with an address apps can use. */
+@Composable
+internal fun ProxyModeNotice(address: String, onCopy: () -> Unit, modifier: Modifier = Modifier) {
+    val colors = AetherTheme.colors
+    var copied by remember(address) { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) { delay(2_000); copied = false }
+    }
+    AetherCard(modifier.testTag("home-proxy-notice")) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                Icon(AetherIcons.Proxy, null, Modifier.size(19.dp), colors.brand)
+                Text(stringResource(R.string.proxy_only_apps_are_not_routed_for),
+                    style = AetherTheme.type.RowTitle, color = colors.text)
+            }
+            Text(stringResource(R.string.proxy_needs_pointing),
+                style = AetherTheme.type.Small, color = colors.text2)
+            androidx.compose.runtime.CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(colors.ink3)
+                        .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Column(Modifier.weight(1f).padding(vertical = 5.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("SOCKS5", style = AetherTheme.type.Label, color = colors.text2)
+                        androidx.compose.foundation.text.selection.SelectionContainer {
+                            Text(address, modifier = Modifier.testTag("proxy-listener-address"),
+                                style = AetherTheme.type.Data.copy(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr),
+                                color = colors.text)
+                        }
+                    }
+                    val interaction = remember { MutableInteractionSource() }
+                    val copyShape = RoundedCornerShape(10.dp)
+                    Box(
+                        Modifier.size(48.dp).clip(copyShape)
+                            .tvControllerActivation { onCopy(); copied = true }
+                            .clickable(interaction, LocalIndication.current, role = Role.Button) { onCopy(); copied = true }
+                            .controllerFocus(interaction, copyShape)
+                            .testTag("proxy-copy-address"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(if (copied) AetherIcons.Check else AetherIcons.Copy,
+                            stringResource(if (copied) R.string.proxy_address_copied else R.string.copy_proxy_address),
+                            Modifier.size(20.dp), if (copied) colors.brand else colors.text2)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2011,6 +2072,26 @@ fun TrafficScreen(
                     Text(stringResource(R.string.tls_enroll_address), style = AetherTheme.type.Small, color = colors.text2)
                     SettingsPlainField(settings.tlsOptions.enrollAddress, "enroll-address-field") {
                         onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(enrollAddress = it)))
+                    }
+                    Text(stringResource(R.string.tls13_ciphers), style = AetherTheme.type.Small, color = colors.text2)
+                    SettingsPlainField(settings.tlsOptions.tls13Ciphers, "tls13-ciphers-field") {
+                        onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(tls13Ciphers = it)))
+                    }
+                    Text(stringResource(R.string.tls_key_shares), style = AetherTheme.type.Small, color = colors.text2)
+                    SettingsPlainField(settings.tlsOptions.tlsKeyShares, "tls-key-shares-field") {
+                        onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(tlsKeyShares = it)))
+                    }
+                    Text(stringResource(R.string.masque_sni), style = AetherTheme.type.Small, color = colors.text2)
+                    SettingsPlainField(settings.tlsOptions.masqueSni, "masque-sni-field") {
+                        onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(masqueSni = it)))
+                    }
+                    Text(stringResource(R.string.warp_api_host), style = AetherTheme.type.Small, color = colors.text2)
+                    SettingsPlainField(settings.tlsOptions.apiHost, "warp-api-host-field") {
+                        onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(apiHost = it)))
+                    }
+                    Text(stringResource(R.string.warp_api_sni), style = AetherTheme.type.Small, color = colors.text2)
+                    SettingsPlainField(settings.tlsOptions.apiSni, "warp-api-sni-field") {
+                        onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(apiSni = it)))
                     }
                     Note(stringResource(R.string.tls_fingerprint_scope))
                 }

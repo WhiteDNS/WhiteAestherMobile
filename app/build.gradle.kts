@@ -337,7 +337,7 @@ fun registerCargoNdkTask(name: String, release: Boolean) = tasks.register<Exec>(
         rootProject.fileTree("native/aether") {
             exclude("**/target/**", "**/.git/**")
         },
-        rootProject.fileTree("native/third-party/boring-sys") {
+        rootProject.fileTree("native/third-party/boring-sys-5.3") {
             exclude("**/target/**", "**/.git/**")
         },
     )

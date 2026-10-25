@@ -172,7 +172,8 @@ fn build_tls(cfg: &H2TunnelConfig) -> Result<boring::ssl::ConnectConfiguration> 
         SslConnector::builder(SslMethod::tls()).map_err(|e| AetherError::Tls(e.to_string()))?;
 
     // The core's TLS fingerprint, with --tls-ciphers, --tls-groups and --disable-grease.
-    tls::Fingerprint::configured().apply(&mut builder, H2_ALPN)?;
+    let fingerprint = tls::Fingerprint::configured();
+    fingerprint.apply(&mut builder, H2_ALPN)?;
     if crate::hello_shape::HelloShape::from_env().is_some() {
         builder.set_grease_enabled(false);
         builder.set_permute_extensions(false);
@@ -211,10 +212,10 @@ fn build_tls(cfg: &H2TunnelConfig) -> Result<boring::ssl::ConnectConfiguration> 
         .configure()
         .map_err(|e| AetherError::Tls(e.to_string()))?;
 
-    // TLS server-certificate verification is unconditionally disabled
-    // (see tls::install_verification), so the hostname check is skipped too.
+    // MASQUE authenticates the gateway by its SPKI pin rather than the visible SNI.
     config.set_verify_hostname(false);
     config.set_use_server_name_indication(true);
+    fingerprint.prepare(&mut config, H2_ALPN)?;
 
     Ok(config)
 }

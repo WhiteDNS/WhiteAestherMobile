@@ -174,6 +174,39 @@ struct BridgeConfig {
     ech_domain: String,
     #[serde(default)]
     enroll_address: String,
+    #[serde(default)]
+    masque_sni: String,
+    #[serde(default)]
+    api_host: String,
+    #[serde(default)]
+    api_sni: String,
+    #[serde(default)]
+    tls13_ciphers: String,
+    #[serde(default)]
+    tls_key_shares: String,
+    #[serde(default)]
+    tls_sigalgs: String,
+    #[serde(default)]
+    tls_cert_compression: String,
+    #[serde(default)]
+    tls_alps: String,
+    #[serde(default)]
+    tls_trust_anchors: String,
+    #[serde(default)]
+    tls_server_padding: String,
+    #[serde(default)]
+    enable_grease_sigalgs: bool,
+    #[serde(default)]
+    enable_ech_grease: bool,
+    #[serde(default)]
+    disable_ocsp_stapling: bool,
+    #[serde(default)]
+    disable_sct: bool,
+    #[serde(default)]
+    disable_session_ticket: bool,
+    #[serde(default)]
+    disable_extension_permutation: bool,
+
     peer: Option<String>,
     #[serde(default)]
     peer_fallback: bool,
@@ -358,6 +391,34 @@ impl BridgeConfig {
             && aether::dns::host_and_port(config.enroll_address.trim(), 443).is_none()
         {
             return Err("enrollAddress must be an IP address or host with an optional port".into());
+        }
+        for (name, value) in [
+            ("masqueSni", &config.masque_sni),
+            ("apiHost", &config.api_host),
+            ("apiSni", &config.api_sni),
+            ("tls13Ciphers", &config.tls13_ciphers),
+            ("tlsKeyShares", &config.tls_key_shares),
+            ("tlsSigalgs", &config.tls_sigalgs),
+            ("tlsCertCompression", &config.tls_cert_compression),
+            ("tlsAlps", &config.tls_alps),
+            ("tlsTrustAnchors", &config.tls_trust_anchors),
+            ("tlsServerPadding", &config.tls_server_padding),
+        ] {
+            if value.len() > 4096 || value.chars().any(char::is_control) {
+                return Err(format!("{name} contains an invalid value"));
+            }
+        }
+        for (name, value) in [
+            ("masqueSni", &config.masque_sni),
+            ("apiHost", &config.api_host),
+            ("apiSni", &config.api_sni),
+        ] {
+            let value = value.trim().trim_end_matches('.');
+            if !value.is_empty()
+                && (!aether::dns::valid_domain(value) || value.parse::<std::net::IpAddr>().is_ok())
+            {
+                return Err(format!("{name} must be a domain name"));
+            }
         }
         if let Some(peer) = config.peer.as_deref() {
             let address = peer
@@ -545,7 +606,48 @@ impl BridgeConfig {
                 ""
             },
         );
-        set_or_clear("AETHER_ENROLL_ADDRESS", &self.enroll_address);
+        // Saved enrollAddress values keep working with the renamed upstream setting.
+        set_or_clear("AETHER_API_ADDRESS", &self.enroll_address);
+        std::env::remove_var("AETHER_ENROLL_ADDRESS");
+        set_or_clear("AETHER_MASQUE_SNI", &self.masque_sni);
+        set_or_clear("AETHER_API_HOST", &self.api_host);
+        set_or_clear("AETHER_API_SNI", &self.api_sni);
+        set_or_clear("AETHER_TLS13_CIPHERS", &self.tls13_ciphers);
+        set_or_clear("AETHER_TLS_KEY_SHARES", &self.tls_key_shares);
+        set_or_clear("AETHER_TLS_SIGALGS", &self.tls_sigalgs);
+        set_or_clear("AETHER_TLS_CERT_COMPRESSION", &self.tls_cert_compression);
+        set_or_clear("AETHER_TLS_ALPS", &self.tls_alps);
+        set_or_clear("AETHER_TLS_TRUST_ANCHORS", &self.tls_trust_anchors);
+        set_or_clear("AETHER_TLS_SERVER_PADDING", &self.tls_server_padding);
+        set_or_clear(
+            "AETHER_ENABLE_GREASE_SIGALGS",
+            if self.enable_grease_sigalgs { "1" } else { "" },
+        );
+        set_or_clear(
+            "AETHER_ENABLE_ECH_GREASE",
+            if self.enable_ech_grease { "1" } else { "" },
+        );
+        set_or_clear(
+            "AETHER_DISABLE_OCSP_STAPLING",
+            if self.disable_ocsp_stapling { "1" } else { "" },
+        );
+        set_or_clear(
+            "AETHER_DISABLE_SCT",
+            if self.disable_sct { "1" } else { "" },
+        );
+        set_or_clear(
+            "AETHER_DISABLE_SESSION_TICKET",
+            if self.disable_session_ticket { "1" } else { "" },
+        );
+        set_or_clear(
+            "AETHER_DISABLE_EXTENSION_PERMUTATION",
+            if self.disable_extension_permutation {
+                "1"
+            } else {
+                ""
+            },
+        );
+        aether::account::forget_answered_api_host();
         aether::account::forget_api_ech();
         set_or_clear("AETHER_ROUTE_BLOCK", &self.route_block);
         set_or_clear("AETHER_ROUTE_DIRECT", &self.route_direct);
@@ -1508,7 +1610,7 @@ mod tests {
         // Pinned deliberately. The engine version crosses into the app's
         // diagnostics and its update notice, and an engine bump that nobody
         // noticed is one nobody tested on a phone either.
-        assert_eq!(aether::version(), "2.3.0");
+        assert_eq!(aether::version(), "2.4.0");
     }
 
     #[test]
@@ -1579,6 +1681,40 @@ mod tests {
         );
         assert!(valid_ech_list(&[0, 5, 0xfe, 13, 0, 1, 1]));
         assert!(!valid_ech_list(&[0, 6, 0xfe, 13, 0, 1, 1]));
+    }
+
+    #[test]
+    fn aether_24_options_map_to_the_new_environment_and_clear_on_the_next_session() {
+        let parsed = BridgeConfig::parse(&config(r#", "enrollAddress":"192.0.2.10:8443","apiHost":"api.example.test","apiSni":"api.example.test","masqueSni":"www.example.test","tls13Ciphers":"TLS_AES_128_GCM_SHA256","enableEchGrease":true"#)).unwrap();
+        parsed.apply_environment();
+        assert_eq!(
+            std::env::var("AETHER_API_ADDRESS").unwrap(),
+            "192.0.2.10:8443"
+        );
+        assert!(std::env::var("AETHER_ENROLL_ADDRESS").is_err());
+        assert_eq!(
+            std::env::var("AETHER_MASQUE_SNI").unwrap(),
+            "www.example.test"
+        );
+        assert_eq!(
+            std::env::var("AETHER_TLS13_CIPHERS").unwrap(),
+            "TLS_AES_128_GCM_SHA256"
+        );
+        assert_eq!(std::env::var("AETHER_ENABLE_ECH_GREASE").unwrap(), "1");
+        BridgeConfig::parse(&config(""))
+            .unwrap()
+            .apply_environment();
+        for variable in [
+            "AETHER_API_ADDRESS",
+            "AETHER_API_HOST",
+            "AETHER_API_SNI",
+            "AETHER_MASQUE_SNI",
+            "AETHER_TLS13_CIPHERS",
+            "AETHER_ENABLE_ECH_GREASE",
+        ] {
+            assert!(std::env::var(variable).is_err(), "{variable}");
+        }
+        assert!(BridgeConfig::parse(&config(r#", "masqueSni":"192.0.2.1""#)).is_err());
     }
 
     #[test]

@@ -598,6 +598,8 @@ pub struct EmbeddedScanResult {
 
 pub enum EmbeddedEndpoint {
     Socks,
+    /// Held from startup, including while identity/tunnel setup is pending.
+    HeldSocks(std::sync::Arc<tokio::net::TcpListener>),
     Tun {
         device_to_tunnel: tokio::sync::mpsc::Receiver<Vec<u8>>,
         tunnel_to_device: tokio::sync::mpsc::Sender<Vec<u8>>,
@@ -707,6 +709,8 @@ fn record(
         }
         device.refused_at = existing.refused_at;
         device.warp_enabled = existing.warp_enabled;
+        device.activation_pending = existing.activation_pending;
+        device.activation_retry_at = existing.activation_retry_at;
         // A certificate that has arrived is the answer to the enrolment that
         // was in flight. One that has not leaves the question standing.
         device.enrolment_pending_since = if device.has_certificate() {
@@ -774,6 +778,12 @@ pub fn export_identity(base_config: &str) -> Result<String> {
     for (slot, identity) in &held {
         out.push_str(&format!("\n[{}]\n", export_key(*slot)));
         out.push_str(&config::to_text(identity)?);
+        if let Some(device) = loaded.store.device(&identity.device_id) {
+            out.push_str(&format!(
+                "activation_pending = {}\nactivation_retry_at = {}\n",
+                device.activation_pending, device.activation_retry_at
+            ));
+        }
     }
     Ok(out)
 }
@@ -809,6 +819,7 @@ pub fn import_identity(base_config: &str, payload: &str) -> Result<()> {
         envelope.masque_secondary,
     ];
     let mut ready: Vec<(identity::Slot, String, account::Identity)> = Vec::new();
+    let mut activations = std::collections::BTreeMap::new();
     for ((slot, path), value) in identity_slots(base_config).into_iter().zip(carried) {
         let Some(value) = value else { continue };
         let text = toml::to_string(&value).map_err(|e| {
@@ -817,7 +828,22 @@ pub fn import_identity(base_config: &str, payload: &str) -> Result<()> {
                 export_key(slot)
             ))
         })?;
-        ready.push((slot, path, config::parse(&text)?));
+        let identity = config::parse(&text)?;
+        let pending = value
+            .get("activation_pending")
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(false);
+        let retry_at = value
+            .get("activation_retry_at")
+            .and_then(toml::Value::as_integer)
+            .unwrap_or(0);
+        if retry_at < 0 {
+            return Err(AetherError::Other(
+                "negative activation retry time in identity backup".into(),
+            ));
+        }
+        activations.insert(identity.device_id.clone(), (pending, retry_at as u64));
+        ready.push((slot, path, identity));
     }
 
     if ready.is_empty() {
@@ -829,7 +855,11 @@ pub fn import_identity(base_config: &str, payload: &str) -> Result<()> {
     let site = identity_site(base_config, identity::Slot::Wireguard);
     let mut loaded = identity::load(&site.store_path, &site.legacy)?;
     for (slot, _, identity) in &ready {
-        let incoming = identity::device_from(identity, account::now_unix());
+        let mut incoming = identity::device_from(identity, account::now_unix());
+        if let Some((pending, retry_at)) = activations.get(&identity.device_id) {
+            incoming.activation_pending = *pending;
+            incoming.activation_retry_at = *retry_at;
+        }
         // The same device can arrive twice, once per slot -- which is exactly
         // what a backup of an install 1.8.0 had broken looks like. Whichever
         // copy shows an enrolment is the one that knows what Cloudflare holds;
@@ -919,6 +949,8 @@ struct ExportEnvelope {
 /// the store without a round trip.
 pub async fn provision_embedded(config: &EmbeddedConfig) -> Result<Vec<String>> {
     tls::check_tls_options()?;
+    quic::masque_sni()?;
+    upstream::check_setting()?;
     account::check_enroll_address()?;
     let _ech_session = tls::EchSession::start(
         if matches!(
@@ -965,6 +997,8 @@ pub async fn provision_embedded(config: &EmbeddedConfig) -> Result<Vec<String>> 
 
 pub async fn prepare_embedded(config: &EmbeddedConfig) -> Result<EmbeddedPrepared> {
     tls::check_tls_options()?;
+    quic::masque_sni()?;
+    upstream::check_setting()?;
     account::check_enroll_address()?;
     let _ech_session = tls::EchSession::start(
         if matches!(
@@ -1173,6 +1207,8 @@ pub async fn scan_embedded_observed(
     observer: scan::ScanObserver<'_>,
 ) -> Result<Vec<EmbeddedScanResult>> {
     tls::check_tls_options()?;
+    quic::masque_sni()?;
+    upstream::check_setting()?;
     account::check_enroll_address()?;
     let _ech_session = tls::EchSession::start(
         if matches!(
@@ -1217,6 +1253,8 @@ pub async fn scan_embedded_observed(
 
 pub async fn test_embedded_peer(config: &EmbeddedConfig) -> Result<EmbeddedScanResult> {
     tls::check_tls_options()?;
+    quic::masque_sni()?;
+    upstream::check_setting()?;
     account::check_enroll_address()?;
     let _ech_session = tls::EchSession::start(
         if matches!(
@@ -1268,6 +1306,8 @@ pub async fn run_embedded(
     mut ready: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> Result<()> {
     tls::check_tls_options()?;
+    quic::masque_sni()?;
+    upstream::check_setting()?;
     account::check_enroll_address()?;
     let _ech_session = tls::EchSession::start(
         if matches!(
@@ -1283,6 +1323,8 @@ pub async fn run_embedded(
     // Before any listener is bound. Every tunnel below reaches socks::serve by
     // its own path, and none of them carries this.
     socks::configure_access(config.access.clone());
+
+    let endpoint = hold_embedded_listener(endpoint, config.listen).await?;
 
     let peer = config
         .peer
@@ -1392,6 +1434,31 @@ pub async fn run_embedded(
         &mut ready,
     )
     .await
+}
+
+/// Reserve the public proxy before any identity or tunnel startup awaits.
+async fn hold_embedded_listener(
+    endpoint: EmbeddedEndpoint,
+    listen: SocketAddr,
+) -> Result<EmbeddedEndpoint> {
+    match endpoint {
+        EmbeddedEndpoint::Socks => Ok(EmbeddedEndpoint::HeldSocks(std::sync::Arc::new(
+            socks::bind_listener("socks5", listen).await?,
+        ))),
+        other => Ok(other),
+    }
+}
+
+async fn embedded_listener(
+    endpoint: EmbeddedEndpoint,
+    listen: SocketAddr,
+) -> Result<std::sync::Arc<tokio::net::TcpListener>> {
+    match hold_embedded_listener(endpoint, listen).await? {
+        EmbeddedEndpoint::HeldSocks(listener) => Ok(listener),
+        _ => Err(AetherError::Other(
+            "TUN endpoint has no SOCKS listener".into(),
+        )),
+    }
 }
 
 /// Two nested MASQUE hops behind the embedded endpoint abstraction.
@@ -1547,7 +1614,7 @@ async fn run_warp_in_warp_embedded(
     }
 
     let mut endpoint_task = match endpoint {
-        EmbeddedEndpoint::Socks => {
+        socks_endpoint @ (EmbeddedEndpoint::Socks | EmbeddedEndpoint::HeldSocks(_)) => {
             let stack = netstack::spawn(
                 &secondary.ipv4,
                 &secondary.ipv6,
@@ -1558,7 +1625,7 @@ async fn run_warp_in_warp_embedded(
             // Bound out here rather than inside the task, so that a port
             // already in use is an error this call returns instead of one that
             // disappears into a spawned future. bind_listener also says why.
-            let listener = socks::bind_listener("socks5", listen).await?;
+            let listener = embedded_listener(socks_endpoint, listen).await?;
             tokio::spawn(async move { socks::serve(listener, stack).await })
         }
         EmbeddedEndpoint::Tun {
@@ -1727,7 +1794,7 @@ async fn run_wireguard_tunnel_embedded(
     );
 
     let mut endpoint_task = match endpoint {
-        EmbeddedEndpoint::Socks => {
+        socks_endpoint @ (EmbeddedEndpoint::Socks | EmbeddedEndpoint::HeldSocks(_)) => {
             let stack = netstack::spawn(
                 &identity.ipv4,
                 &identity.ipv6,
@@ -1738,7 +1805,7 @@ async fn run_wireguard_tunnel_embedded(
             // Bound out here rather than inside the task, so that a port
             // already in use is an error this call returns instead of one that
             // disappears into a spawned future. bind_listener also says why.
-            let listener = socks::bind_listener("socks5", listen).await?;
+            let listener = embedded_listener(socks_endpoint, listen).await?;
             tokio::spawn(async move { socks::serve(listener, stack).await })
         }
         EmbeddedEndpoint::Tun {
@@ -2064,7 +2131,7 @@ async fn run_masque_tunnel_embedded(
     let (chans, internals) = quic::channels();
     let cfg = quic::TunnelConfig {
         peer,
-        sni: consts::CONNECT_SNI.to_string(),
+        sni: quic::masque_sni()?,
         authority: quic::default_authority().to_string(),
         path: quic::default_path().to_string(),
         cert_pem: identity.cert_pem.clone(),
@@ -2098,7 +2165,7 @@ async fn run_masque_tunnel_embedded(
     let mut tunnel_task = if shape.h2 {
         let h2cfg = masque_h2::H2TunnelConfig {
             peer,
-            sni: consts::CONNECT_SNI.to_string(),
+            sni: quic::masque_sni()?,
             authority: quic::default_authority().to_string(),
             path: quic::default_path().to_string(),
             cert_pem: identity.cert_pem.clone(),
@@ -2171,7 +2238,7 @@ async fn run_masque_tunnel_embedded(
     }
 
     let mut endpoint_task = match endpoint {
-        EmbeddedEndpoint::Socks => {
+        socks_endpoint @ (EmbeddedEndpoint::Socks | EmbeddedEndpoint::HeldSocks(_)) => {
             // Sized by framing, as of 2.0.0: a MASQUE tunnel carried over
             // HTTP/2 is a TCP stream, where nothing has to fit inside one UDP
             // datagram, so the 1280 that keeps a QUIC datagram whole only buys
@@ -2204,7 +2271,7 @@ async fn run_masque_tunnel_embedded(
                     }
                 }
             });
-            let listener = socks::bind_listener("socks5", listen).await?;
+            let listener = embedded_listener(socks_endpoint, listen).await?;
             tokio::spawn(async move { socks::serve(listener, stack).await })
         }
         EmbeddedEndpoint::Tun {
@@ -2877,6 +2944,56 @@ fn registration_may_go(store: &mut identity::Store, through_proxy: bool, now: u6
     Ok(())
 }
 
+/// Save a new registration before enrollment/activation can be interrupted.
+fn record_registration(
+    store: &mut identity::Store,
+    site: &IdentitySite,
+    identity: &account::Identity,
+) -> Result<()> {
+    let mut device = identity::device_from(identity, account::now_unix());
+    device.activation_pending = true;
+    store.put(&identity.device_id, device);
+    record(store, site, identity)
+}
+
+async fn activate_and_record(
+    store: &mut identity::Store,
+    site: &IdentitySite,
+    identity: account::Identity,
+) -> Result<account::Identity> {
+    let Some(device) = store.device(&identity.device_id) else {
+        return Err(AetherError::Other(
+            "activation identity is absent from its store".into(),
+        ));
+    };
+    if !device.activation_pending {
+        return Ok(identity);
+    }
+    let now = account::now_unix();
+    if device.activation_retry_at > now {
+        return Err(AetherError::RegistrationOnHold {
+            reason: "WARP activation is waiting for the API rate limit".into(),
+            wait: device.activation_retry_at - now,
+        });
+    }
+    if let Err(error) = account::enable_warp(&identity.device_id, &identity.access_token).await {
+        if let AetherError::RateLimited { retry_after, .. } = &error {
+            if let Some(device) = store.device_mut(&identity.device_id) {
+                device.activation_retry_at = now.saturating_add(retry_after.unwrap_or(60).max(1));
+            }
+            identity::save(&site.store_path, store)?;
+        }
+        return Err(error);
+    }
+    if let Some(device) = store.device_mut(&identity.device_id) {
+        device.warp_enabled = true;
+        device.activation_pending = false;
+        device.activation_retry_at = 0;
+    }
+    record(store, site, &identity)?;
+    Ok(identity)
+}
+
 async fn load_or_provision_warp(site: &IdentitySite) -> Result<account::Identity> {
     let _provisioning = provisioning_lock().lock().await;
     let mut loaded = identity::load(&site.store_path, &site.legacy)?;
@@ -2896,6 +3013,7 @@ async fn load_or_provision_warp(site: &IdentitySite) -> Result<account::Identity
             None => {
                 log::info!("[+] loaded existing warp identity for device {id}");
                 let identity = identity::identity_from(&id, &device)?;
+                let identity = activate_and_record(&mut loaded.store, site, identity).await?;
                 let identity = adopt_team_profile(identity).await;
                 record(&mut loaded.store, site, &identity)?;
                 return Ok(identity);
@@ -2913,7 +3031,8 @@ async fn load_or_provision_warp(site: &IdentitySite) -> Result<account::Identity
     // already counted this registration against the address whether or not the
     // rest of the connect succeeds, so the one thing that must not happen is
     // reaching the next await without it on disk.
-    record(&mut loaded.store, site, &identity)?;
+    record_registration(&mut loaded.store, site, &identity)?;
+    let identity = activate_and_record(&mut loaded.store, site, identity).await?;
     let identity = adopt_team_profile(identity).await;
     record(&mut loaded.store, site, &identity)?;
     log::info!(
@@ -2984,7 +3103,7 @@ async fn enrol_and_record(
     // here shares a device across families any more, so this is almost always a
     // no-op -- almost being the reason it still runs.
     record_enrolment_beside(&site.path, &identity);
-    Ok(identity)
+    activate_and_record(store, site, identity).await
 }
 
 async fn load_or_provision_masque(site: &IdentitySite) -> Result<account::Identity> {
@@ -2996,6 +3115,7 @@ async fn load_or_provision_masque(site: &IdentitySite) -> Result<account::Identi
 
         if identity.has_masque_credentials() && device.enrolment_pending_since == 0 {
             log::info!("[+] loaded existing masque identity for device {id}");
+            let identity = activate_and_record(&mut loaded.store, site, identity).await?;
             let identity = adopt_team_profile(identity).await;
             if !identity.refused {
                 record(&mut loaded.store, site, &identity)?;
@@ -3046,7 +3166,7 @@ async fn load_or_provision_masque(site: &IdentitySite) -> Result<account::Identi
     // against this address the moment it answers -- and the branch above
     // resumes from here, so an enrolment that fails costs a round trip rather
     // than a registration.
-    record(&mut loaded.store, site, &identity)?;
+    record_registration(&mut loaded.store, site, &identity)?;
     let identity = enrol_and_record(&mut loaded.store, site, identity).await?;
     log::info!(
         "[+] provisioned and saved a new masque identity for device {}",
@@ -3083,7 +3203,7 @@ async fn select_peer(identity: &account::Identity, protocol: Protocol) -> Result
             log::info!("[*] hunting for a working MASQUE gateway (deep connect-ip verification)");
             let mode = prober::ScanMode::parse(&mode_str);
             let probe = prober::MasqueProbe {
-                sni: consts::CONNECT_SNI.to_string(),
+                sni: quic::masque_sni()?,
                 authority: quic::default_authority().to_string(),
                 path: quic::default_path().to_string(),
                 cert_pem: std::sync::Arc::from(identity.cert_pem.clone()),
@@ -3310,6 +3430,20 @@ fn attempt_proof(transport: &str) -> lastconn::Proof {
         ),
         fingerprint: {
             let names = [
+                "AETHER_MASQUE_SNI",
+                "AETHER_TLS13_CIPHERS",
+                "AETHER_TLS_KEY_SHARES",
+                "AETHER_ENABLE_GREASE_SIGALGS",
+                "AETHER_TLS_SIGALGS",
+                "AETHER_TLS_CERT_COMPRESSION",
+                "AETHER_TLS_ALPS",
+                "AETHER_TLS_TRUST_ANCHORS",
+                "AETHER_TLS_SERVER_PADDING",
+                "AETHER_ENABLE_ECH_GREASE",
+                "AETHER_DISABLE_OCSP_STAPLING",
+                "AETHER_DISABLE_SCT",
+                "AETHER_DISABLE_SESSION_TICKET",
+                "AETHER_DISABLE_EXTENSION_PERMUTATION",
                 "AETHER_TLS_CIPHERS",
                 "AETHER_TLS_GROUPS",
                 "AETHER_DISABLE_GREASE",
@@ -3488,7 +3622,7 @@ async fn masque_probe(
     ip: prober::IpScan,
 ) -> Result<prober::MasqueProbe> {
     Ok(prober::MasqueProbe {
-        sni: consts::CONNECT_SNI.to_string(),
+        sni: quic::masque_sni()?,
         authority: quic::default_authority().to_string(),
         path: quic::default_path().to_string(),
         cert_pem: std::sync::Arc::from(identity.cert_pem.clone()),
@@ -3536,7 +3670,7 @@ async fn verify_params_for_test(
 ) -> quic::VerifyParams {
     quic::VerifyParams {
         peer,
-        sni: consts::CONNECT_SNI.to_string(),
+        sni: quic::masque_sni().expect("valid test SNI"),
         authority: quic::default_authority().to_string(),
         path: quic::default_path().to_string(),
         cert_pem: identity.cert_pem.clone(),
@@ -3562,7 +3696,7 @@ async fn verify_masque_with_ech(
 ) -> Result<std::time::Duration> {
     let vp = quic::VerifyParams {
         peer,
-        sni: consts::CONNECT_SNI.to_string(),
+        sni: quic::masque_sni()?,
         authority: quic::default_authority().to_string(),
         path: quic::default_path().to_string(),
         cert_pem: identity.cert_pem.clone(),
@@ -3576,7 +3710,7 @@ async fn verify_masque_with_ech(
     if masque_h2::enabled() {
         let cfg = masque_h2::H2TunnelConfig {
             peer: masque_h2::h2_peer(peer),
-            sni: consts::CONNECT_SNI.to_string(),
+            sni: quic::masque_sni()?,
             authority: quic::default_authority().to_string(),
             path: quic::default_path().to_string(),
             cert_pem: identity.cert_pem.clone(),
@@ -3790,7 +3924,7 @@ async fn establish_masque(
     let tunnel_task = if h2 {
         let h2cfg = masque_h2::H2TunnelConfig {
             peer,
-            sni: consts::CONNECT_SNI.to_string(),
+            sni: quic::masque_sni()?,
             authority: quic::default_authority().to_string(),
             path: quic::default_path().to_string(),
             cert_pem: identity.cert_pem.clone(),
@@ -3811,7 +3945,7 @@ async fn establish_masque(
     } else {
         let cfg = quic::TunnelConfig {
             peer,
-            sni: consts::CONNECT_SNI.to_string(),
+            sni: quic::masque_sni()?,
             authority: quic::default_authority().to_string(),
             path: quic::default_path().to_string(),
             cert_pem: identity.cert_pem.clone(),
@@ -6080,6 +6214,144 @@ mod identity_tests {
         assert!(registration_may_go(&mut loaded.store, false, account::now_unix()).is_err());
         assert_eq!(loaded.store.ids().count(), 0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    async fn activation_fixture(status: &str, extra: &str) -> tokio::task::JoinHandle<String> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (address, listener, acceptor) = crate::https::test_server(b"\x08http/1.1").await;
+        std::env::set_var("AETHER_ENROLL_ADDRESS", address.to_string());
+        let reply = format!("HTTP/1.1 {status}\r\n{extra}Content-Length: 15\r\nConnection: close\r\n\r\n{{\"id\":\"device\"}}");
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut tls = tokio_boring::accept(&acceptor, tcp).await.unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0u8; 1];
+            while request.len() < 16384 {
+                tls.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+                if request.ends_with(b"{\"warp_enabled\":true}") {
+                    break;
+                }
+            }
+            tls.write_all(reply.as_bytes()).await.unwrap();
+            String::from_utf8(request).unwrap()
+        })
+    }
+
+    #[tokio::test]
+    async fn interrupted_activation_resumes_the_same_device_and_is_not_repeated_after_success() {
+        let _upstream = crate::upstream::hold_setting().await;
+        let _options = crate::tls::hold_options().await;
+        isolated();
+        let dir = scratch("resume-activation");
+        let base = dir.join("aether.toml");
+        let site = identity_site(base.to_str().unwrap(), identity::Slot::Masque);
+        let identity = account::handshake_identity();
+        let original_key = identity.key_pem.clone();
+        let mut store = identity::Store::default();
+        record_registration(&mut store, &site, &identity).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        std::env::set_var(
+            "AETHER_ENROLL_ADDRESS",
+            listener.local_addr().unwrap().to_string(),
+        );
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            activate_and_record(&mut store, &site, identity)
+        )
+        .await
+        .is_err());
+        let pending = identity::load(&site.store_path, &site.legacy).unwrap();
+        assert!(pending.store.device("device").unwrap().activation_pending);
+        assert_eq!(pending.store.ids().count(), 1);
+        let server = activation_fixture("200 OK", "").await;
+        let resumed = load_or_provision_masque(&site).await.unwrap();
+        let request = server.await.unwrap();
+        assert!(request.starts_with("PATCH "));
+        assert_eq!(resumed.key_pem, original_key);
+        let saved = identity::load(&site.store_path, &site.legacy).unwrap();
+        let device = saved.store.device("device").unwrap();
+        assert!(device.warp_enabled);
+        assert!(!device.activation_pending);
+        // The API listener is gone. A completed identity still loads without any API call.
+        assert_eq!(
+            load_or_provision_masque(&site).await.unwrap().key_pem,
+            original_key
+        );
+        std::env::remove_var("AETHER_ENROLL_ADDRESS");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn activation_rate_limit_survives_restart_without_another_registration() {
+        let _upstream = crate::upstream::hold_setting().await;
+        let _options = crate::tls::hold_options().await;
+        isolated();
+        let dir = scratch("activation-rate-limit");
+        let base = dir.join("aether.toml");
+        let site = identity_site(base.to_str().unwrap(), identity::Slot::Masque);
+        let identity = account::handshake_identity();
+        let mut store = identity::Store::default();
+        record_registration(&mut store, &site, &identity).unwrap();
+        let server = activation_fixture("429 Too Many Requests", "Retry-After: 3600\r\n").await;
+        let before = account::now_unix();
+        assert_eq!(
+            activate_and_record(&mut store, &site, identity)
+                .await
+                .unwrap_err()
+                .retry_after(),
+            Some(3600)
+        );
+        assert!(server.await.unwrap().starts_with("PATCH "));
+        let saved = identity::load(&site.store_path, &site.legacy).unwrap();
+        assert!(saved.store.device("device").unwrap().activation_retry_at >= before + 3600);
+        assert!(matches!(
+            load_or_provision_masque(&site).await,
+            Err(AetherError::RegistrationOnHold { .. })
+        ));
+        assert_eq!(saved.store.ids().count(), 1);
+        std::env::remove_var("AETHER_ENROLL_ADDRESS");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pending_activation_and_its_hold_survive_an_identity_backup() {
+        isolated();
+        let dir = scratch("activation-backup");
+        let base = dir.join("aether.toml");
+        let site = identity_site(base.to_str().unwrap(), identity::Slot::Masque);
+        let mut store = identity::Store::default();
+        let identity = account::handshake_identity();
+        record_registration(&mut store, &site, &identity).unwrap();
+        let retry_at = account::now_unix() + 3600;
+        store.device_mut("device").unwrap().activation_retry_at = retry_at;
+        identity::save(&site.store_path, &store).unwrap();
+        let backup = export_identity(base.to_str().unwrap()).unwrap();
+        assert!(backup.starts_with("version = 2"));
+        let restored = dir.join("restored.toml");
+        import_identity(restored.to_str().unwrap(), &backup).unwrap();
+        let imported_site = identity_site(restored.to_str().unwrap(), identity::Slot::Masque);
+        let imported = identity::load(&imported_site.store_path, &imported_site.legacy).unwrap();
+        let device = imported.store.device("device").unwrap();
+        assert!(device.activation_pending);
+        assert_eq!(device.activation_retry_at, retry_at);
+        assert_eq!(device.key_pem.as_bytes(), identity.key_pem);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn embedded_socks_owns_its_port_before_the_tunnel_is_ready() {
+        let held = hold_embedded_listener(EmbeddedEndpoint::Socks, "127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
+        let listener = embedded_listener(held, "127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        assert_ne!(address.port(), 0);
+        assert!(tokio::net::TcpListener::bind(address).await.is_err());
+        drop(listener);
+        assert!(tokio::net::TcpListener::bind(address).await.is_ok());
     }
 
     #[tokio::test]

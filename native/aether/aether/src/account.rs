@@ -284,15 +284,6 @@ fn worth_retrying(status: reqwest::StatusCode) -> bool {
         || status.is_server_error()
 }
 
-fn api_host() -> &'static str {
-    consts::API_URL
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .split('/')
-        .next()
-        .unwrap_or("api.cloudflareclient.com")
-}
-
 fn front_headers(bearer: Option<&str>, jwt: Option<&str>) -> Vec<(String, String)> {
     let mut headers = vec![
         (
@@ -420,37 +411,294 @@ fn extract_api_error(body: &str) -> Option<String> {
     }
 }
 
-/// --enroll-address (AETHER_ENROLL_ADDRESS): where the calls to the WARP API go, an IP address
-/// or a domain name and its port: 443 unless `:port` follows the address, an IPv6 one then in
-/// brackets; the API's name on 443 when it is not given. Only the connection goes there: the
-/// API's name stays the server name of the ClientHello and the HTTP host.
-fn enroll_address() -> Result<(String, u16)> {
-    let value = std::env::var("AETHER_ENROLL_ADDRESS").unwrap_or_default();
+fn api_address() -> Result<Option<(String, u16)>> {
+    let value = std::env::var("AETHER_API_ADDRESS")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| std::env::var("AETHER_ENROLL_ADDRESS").ok())
+        .unwrap_or_default();
     let value = value.trim();
     if value.is_empty() {
-        return Ok((api_host().to_string(), 443));
+        return Ok(None);
     }
-    crate::dns::host_and_port(value, 443).ok_or_else(|| {
-        AetherError::Api(format!(
-            "--enroll-address: {value} is no IP address or domain name, with or without a port"
-        ))
+    crate::dns::host_and_port(value, 443)
+        .map(Some)
+        .ok_or_else(|| {
+            AetherError::Api(format!(
+                "--api-address: {value} is no IP address or domain name, with or without a port"
+            ))
+        })
+}
+
+/// The name `value`, given to `flag`, --api-host or --api-sni, gives the calls to the WARP
+/// API: none when it is blank; else that domain name, without a trailing dot, as SNI has it
+/// (RFC 6066). An address or anything else that is no domain name is refused, rather than
+/// have the calls go by another name in its place.
+fn api_name_of(flag: &str, value: &str) -> Result<Option<String>> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let name = value.strip_suffix('.').unwrap_or(value);
+    if name.ends_with('.')
+        || name.parse::<std::net::IpAddr>().is_ok()
+        || !crate::dns::valid_domain(name)
+    {
+        return Err(AetherError::Api(format!(
+            "{flag}: {value} is no domain name"
+        )));
+    }
+    Ok(Some(name.to_string()))
+}
+
+/// --api-host (AETHER_API_HOST): the HTTP host of the calls to the WARP API, of their Host or
+/// :authority, see `api_name_of`.
+fn api_host() -> Result<Option<String>> {
+    api_name_of(
+        "--api-host",
+        &std::env::var("AETHER_API_HOST").unwrap_or_default(),
+    )
+}
+
+/// --api-sni (AETHER_API_SNI): the server name of the ClientHello of the calls to the WARP API,
+/// see `api_name_of`.
+fn api_sni() -> Result<Option<String>> {
+    api_name_of(
+        "--api-sni",
+        &std::env::var("AETHER_API_SNI").unwrap_or_default(),
+    )
+}
+
+/// Checks --api-address, --api-sni and --api-host as the core starts: a value the calls to the
+/// WARP API cannot use stops it, with its option named.
+pub fn check_api_settings() -> Result<()> {
+    api_address()?;
+    api_sni()?;
+    api_host()?;
+    Ok(())
+}
+
+/// One way a call to the WARP API goes: the HTTP host it names, the server name of its
+/// ClientHello, and where its connection goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ApiRoute {
+    host: String,
+    sni: String,
+    address: String,
+    port: u16,
+    front: bool,
+}
+
+/// The ways a call to the WARP API goes, in the order its attempts take them: by the HTTP host
+/// `host`, of --api-host, by default `consts::API_HOST`; with the server name `sni`, of
+/// --api-sni, by default that host; to `address`, of --api-address, by default that server name
+/// on 443. Cloudflare refuses a call whose server name is not its host, so each follows the one
+/// it defaults to. Without --api-host and --api-sni there is a second way, by
+/// `consts::API_FALLBACK_HOST` alike, which an attempt the first way did not serve takes next;
+/// once the API itself has answered one of the two in this run, `answered`, the calls go that
+/// way first, with the other still behind it.
+fn api_routes_of(
+    host: Option<String>,
+    sni: Option<String>,
+    address: Option<(String, u16)>,
+    answered: Option<&str>,
+) -> Vec<ApiRoute> {
+    let route = |host: String, sni: String| {
+        let (address, port) = address.clone().unwrap_or_else(|| (sni.clone(), 443));
+        ApiRoute {
+            host,
+            sni,
+            address,
+            port,
+            front: false,
+        }
+    };
+    if host.is_some() || sni.is_some() {
+        let host = host.unwrap_or_else(|| consts::API_HOST.to_string());
+        let sni = sni.unwrap_or_else(|| host.clone());
+        return vec![route(host, sni)];
+    }
+    let mut names = [consts::API_HOST, consts::API_FALLBACK_HOST];
+    if answered == Some(consts::API_FALLBACK_HOST) {
+        names.reverse();
+    }
+    let mut routes: Vec<ApiRoute> = names
+        .into_iter()
+        .map(|name| route(name.to_string(), name.to_string()))
+        .collect();
+    if address.is_none() {
+        let name = names[0];
+        routes.extend(consts::API_FRONT_ADDRESSES.map(|edge| ApiRoute {
+            host: name.to_string(),
+            sni: name.to_string(),
+            address: edge.to_string(),
+            port: 443,
+            front: true,
+        }));
+    }
+    routes
+}
+
+/// The ways of the calls to the WARP API, as the options and this run have them, see
+/// `api_routes_of`.
+fn api_routes() -> Result<Vec<ApiRoute>> {
+    // Preserve the legacy manually pinned route for saved Android configurations.
+    if std::env::var("AETHER_API_ADDRESS")
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+        && !std::env::var("AETHER_ENROLL_ADDRESS")
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+        && api_host()?.is_none()
+        && api_sni()?.is_none()
+    {
+        return Ok(api_routes_of(
+            Some(consts::API_FALLBACK_HOST.to_string()),
+            None,
+            api_address()?,
+            None,
+        ));
+    }
+    let mut routes = api_routes_of(
+        api_host()?,
+        api_sni()?,
+        api_address()?,
+        answered_api_host().as_deref(),
+    );
+    if let Some(edge) = answered_api_edge() {
+        if let Some(at) = routes
+            .iter()
+            .position(|route| route.front && route.address == edge)
+        {
+            routes.rotate_left(at);
+        }
+    }
+    Ok(routes)
+}
+
+/// The name the WARP API itself answered last in this run when the calls go by the default
+/// names: the later calls of the run go by it first, see `api_routes_of`.
+static API_ANSWERED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn answered_api_host() -> Option<String> {
+    API_ANSWERED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+fn remember_answered_api_host(host: &str) {
+    *API_ANSWERED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(host.to_string());
+}
+
+/// Forgets which name of the WARP API answered, as a run of the core starts: a run of the
+/// library after another tries both names again.
+pub fn forget_answered_api_host() {
+    *API_ANSWERED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    remember_answered_api_edge(None);
+}
+
+static API_EDGE_ANSWERED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn answered_api_edge() -> Option<String> {
+    API_EDGE_ANSWERED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+fn remember_answered_api_edge(edge: Option<&str>) {
+    *API_EDGE_ANSWERED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = edge.map(str::to_string);
+}
+
+/// Compatibility entry point used by older embedded callers.
+pub fn check_enroll_address() -> Result<()> {
+    check_api_settings()
+}
+
+#[cfg(test)]
+fn enroll_address() -> Result<(String, u16)> {
+    Ok(api_address()?.unwrap_or_else(|| (consts::API_HOST.to_string(), 443)))
+}
+
+fn is_api_envelope(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body).is_ok_and(|value| {
+        value
+            .get("success")
+            .is_some_and(serde_json::Value::is_boolean)
+            && value.get("errors").is_some_and(serde_json::Value::is_array)
     })
 }
 
-/// Checks --enroll-address as the core starts: an address it cannot use stops it, with the
-/// option named.
-pub fn check_enroll_address() -> Result<()> {
-    enroll_address().map(drop)
+type ApiTls = tokio_boring::SslStream<crate::fragment::FragmentingStream<tokio::net::TcpStream>>;
+
+/// Race authenticated handshakes across API names and edge routes. HTTP is sent only to
+/// the winner. A connect failure can safely try another route; an ambiguous POST cannot.
+async fn prepare_api<'a>(
+    routes: &'a [ApiRoute],
+    skipped: &[bool],
+    method: &'a str,
+    path: &'a str,
+    headers: &'a [(String, String)],
+    body: Option<&'a [u8]>,
+    fingerprint: &crate::tls::Fingerprint,
+    ech: Option<Vec<u8>>,
+    adaptive: bool,
+) -> Result<(usize, ApiTls, Option<Vec<u8>>)> {
+    use futures::{FutureExt, StreamExt};
+    let mut pending = futures::stream::FuturesUnordered::new();
+    for (index, route) in routes
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !skipped[*index])
+    {
+        let ech = ech.clone();
+        pending.push(async move {
+            // Let the last answering route lead; a blackholed route cannot hold up the others.
+            if index > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(150 * index as u64)).await;
+            }
+            let request = crate::https::Request {
+                method, host: &route.host, port: 443,
+                address: Some((&route.address, route.port)), sni: Some(&route.sni),
+                path, headers, body,
+            };
+            if adaptive && !route.front {
+                let session = apifront::prepare(&request, fingerprint, API_TIMEOUT).boxed().await?;
+                return Ok((index, session.tls, session.ech));
+            }
+            if crate::egress::mark() != 0 && crate::upstream::configured().is_none()
+                && route.address.parse::<std::net::IpAddr>().is_err()
+            {
+                return Err(AetherError::Api(
+                    "--api-address must be an IP address when a socket mark is used without a proxy".into()));
+            }
+            let mut ech = ech;
+            let tls = tokio::time::timeout(API_TIMEOUT, Box::pin(crate::https::open(
+                &request, fingerprint, ech.as_mut(),
+                crate::fragment::FragmentConfig::from_env(), None)))
+                .await.map_err(|_| AetherError::Api("API TLS handshake timed out".into()))??;
+            Ok((index, tls, ech))
+        });
+    }
+    let mut failure = AetherError::Api("no authenticated route to the WARP API".into());
+    while let Some(result) = pending.next().await {
+        match result {
+            Ok(session) => return Ok(session),
+            Err(error) => failure = error,
+        }
+    }
+    Err(failure)
 }
 
-/// A call to the WARP API: to --enroll-address, the API's name on port 443 unless it names
-/// another address or port, with the API's name for the server name and the HTTP host, over
-/// BoringSSL with the
-/// core's TLS fingerprint (see `https`), offering the ECH key of --ech when it is given, through
-/// the upstream proxy when there is one. Retried on a transient answer, after as long as the API
-/// asks to wait when it does.
-/// Without explicit ECH or an enrollment address, authenticated raw, split and
-/// ECH handshakes race over TCP-reachable edges before one HTTP request is sent.
 async fn api_call(
     label: &str,
     method: &str,
@@ -459,106 +707,100 @@ async fn api_call(
     bearer: Option<&str>,
     jwt: Option<&str>,
 ) -> Result<AccountData> {
-    let (address, port) = enroll_address()?;
-    // Explicit ECH and enrollment addresses remain strict manual policies.
-    // Otherwise bootstrap all three methods without waiting for a failed direct call.
-    let adaptive = std::env::var("AETHER_ENROLL_ADDRESS")
-        .unwrap_or_default()
-        .trim()
-        .is_empty()
+    let routes = api_routes()?;
+    api_call_by(&routes, label, method, path, body, bearer, jwt).await
+}
+
+async fn api_call_by(
+    routes: &[ApiRoute],
+    label: &str,
+    method: &str,
+    path: &str,
+    body: Option<&[u8]>,
+    bearer: Option<&str>,
+    jwt: Option<&str>,
+) -> Result<AccountData> {
+    let adaptive = api_address()?.is_none()
+        && api_host()?.is_none()
+        && api_sni()?.is_none()
         && std::env::var("AETHER_ECH")
             .unwrap_or_default()
             .trim()
             .is_empty();
-    // The system resolver looks a name up outside the socket mark; through the upstream proxy,
-    // the proxy looks it up and only the marked connection to the proxy leaves.
-    if crate::egress::mark() != 0
-        && !adaptive
-        && crate::upstream::configured().is_none()
-        && address.parse::<std::net::IpAddr>().is_err()
-    {
-        return Err(AetherError::Api(format!(
-            "{label}: {address} would be looked up outside the socket mark, so the call would loop back into the tunnel; give --enroll-address an IP address"
-        )));
-    }
-
     let mut ech = api_ech().await?;
     let fingerprint = crate::tls::Fingerprint::configured();
     let headers = front_headers(bearer, jwt);
-    let request = crate::https::Request {
-        method,
-        // The API's name on 443, which Host and :authority leave out, whatever port the
-        // connection goes to.
-        host: api_host(),
-        port: 443,
-        address: Some((address.as_str(), port)),
-        sni: None,
-        path,
-        headers: &headers,
-        body,
-    };
+    let mut skipped = vec![false; routes.len()];
     let mut last_error = AetherError::Api(format!("{label}: no attempt was made"));
-    // Kept so it can leave with the error. Cloudflare is the only party that
-    // knows when it will accept another registration, and a number that is
-    // slept on here and then forgotten is no use to the attempt after next.
-    let mut asked_to_wait: Option<u64> = None;
-
+    let mut asked_to_wait = None;
+    // A valid response pins the API route for retries within this call.
+    let mut serving = None;
     for attempt in 0..API_ATTEMPTS {
         if attempt > 0 {
-            let wait = backoff_delay(attempt - 1);
-            log::warn!(
-                "[!] {label} retry {}/{} in {:.1}s: {last_error}",
-                attempt,
-                API_ATTEMPTS - 1,
-                wait.as_secs_f32()
-            );
-            tokio::time::sleep(wait).await;
+            tokio::time::sleep(backoff_delay(attempt - 1)).await;
         }
-
-        let sent = if adaptive {
-            match apifront::send(&request, &fingerprint, API_TIMEOUT).await {
-                Ok((response, key)) => {
-                    ech = key;
-                    Ok(response)
-                }
-                Err(error) => Err(error),
-            }
-        } else {
-            crate::https::send(&request, &fingerprint, ech.as_mut(), API_TIMEOUT).await
-        };
+        let excluded: Vec<_> = skipped
+            .iter()
+            .enumerate()
+            .map(|(i, skip)| *skip || serving.is_some_and(|chosen| chosen != i))
+            .collect();
+        let (index, tls, key) = prepare_api(
+            routes,
+            &excluded,
+            method,
+            path,
+            &headers,
+            body,
+            &fingerprint,
+            ech.clone(),
+            adaptive,
+        )
+        .await?;
+        ech = key;
         if let Some(key) = &ech {
-            // A key a server handed back is the one the later calls offer.
             remember_api_ech(key.clone());
             crate::tls::adopt_ech_retry(key);
         }
-        let response = match sent {
-            Ok(response) => response,
-            Err(error) => {
-                // Only explicit HTTP refusals asking for a retry enter the
-                // backoff below. An ambiguous failed POST is never sent again
-                // over another route: the server may already have accepted it.
-                log::warn!("[!] {label}: API route failed ({error})");
-                return Err(error);
-            }
+        let route = &routes[index];
+        let request = crate::https::Request {
+            method,
+            host: &route.host,
+            port: 443,
+            address: Some((&route.address, route.port)),
+            sni: Some(&route.sni),
+            path,
+            headers: &headers,
+            body,
         };
-
+        // No retry after this await fails: Cloudflare may already have accepted the POST.
+        let response = tokio::time::timeout(
+            API_TIMEOUT,
+            Box::pin(crate::https::send_on_session(tls, &request)),
+        )
+        .await
+        .map_err(|_| {
+            AetherError::Api(format!("{label}: API exchange timed out; outcome unknown"))
+        })??;
         let status = reqwest::StatusCode::from_u16(response.status)
             .map_err(|_| AetherError::Api(format!("{label}: status {}", response.status)))?;
         let cooldown = retry_after(&response.headers);
-        let body = String::from_utf8_lossy(&response.body);
-
+        let text = String::from_utf8_lossy(&response.body);
+        let from_api = is_api_envelope(&text);
         if status.is_success() {
-            if ech.is_some() {
-                log::info!("[+] {label} went over ECH");
-            }
-            return serde_json::from_str::<AccountData>(&body).map_err(|e| {
-                AetherError::Api(format!("{label} decode: {e} ({} byte answer)", body.len()))
-            });
+            let account = serde_json::from_str::<AccountData>(&text).map_err(|error| {
+                AetherError::Api(format!(
+                    "{label} decode: {error} ({} byte answer)",
+                    text.len()
+                ))
+            })?;
+            remember_answered_api_host(&route.host);
+            remember_answered_api_edge(route.front.then_some(route.address.as_str()));
+            return Ok(account);
         }
-
-        let described = format!("{label}: {}", describe_rejection(status, &body));
-        // Preserve the server's full hold. Sleeping for a truncated hold and
-        // submitting four more registrations only prolongs rate limiting.
+        let mut described = format!("{label}: {}", describe_rejection(status, &text));
+        if status == reqwest::StatusCode::FORBIDDEN && route.sni != route.host {
+            described.push_str(" (the API HTTP host and TLS server name differ; Cloudflare requires them to match)");
+        }
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS
             || cooldown.is_some_and(|wait| wait.as_secs() > API_RETRY_AFTER_CAP_SECS)
         {
@@ -567,37 +809,40 @@ async fn api_call(
                 retry_after: cooldown.map(|wait| wait.as_secs()),
             });
         }
+        if !from_api && routes.len() > 1 {
+            skipped[index] = true;
+            serving = None;
+            last_error = AetherError::Api(described);
+            if skipped.iter().all(|skip| *skip) {
+                return Err(last_error);
+            }
+            continue;
+        }
+        remember_answered_api_host(&route.host);
+        remember_answered_api_edge(route.front.then_some(route.address.as_str()));
+        serving = Some(index);
         last_error = if refuses_identity(status) {
             AetherError::IdentityRefused(described)
         } else {
             AetherError::Api(described)
         };
-
         if !worth_retrying(status) {
             return Err(last_error);
         }
-
         if let Some(wait) = cooldown {
-            log::warn!(
-                "[!] {label} asked us to wait {}s before retrying",
-                wait.as_secs()
-            );
             asked_to_wait = Some(wait.as_secs());
-            tokio::time::sleep(wait).await;
+            if attempt + 1 < API_ATTEMPTS {
+                tokio::time::sleep(wait).await;
+            }
         }
     }
-
-    // Out of attempts against an answer that asked for more of them. That is a
-    // rate limit rather than a plain failure, and the difference decides
-    // whether the next attempt is worth making at all.
-    if let AetherError::Api(reason) = last_error {
-        return Err(AetherError::RateLimited {
+    match last_error {
+        AetherError::Api(reason) => Err(AetherError::RateLimited {
             reason,
             retry_after: asked_to_wait,
-        });
+        }),
+        error => Err(error),
     }
-
-    Err(last_error)
 }
 
 fn generate_x25519_keypair() -> ([u8; 32], String) {
@@ -1303,6 +1548,133 @@ mod tests {
     }
 
     #[test]
+    fn default_api_routes_include_both_names_and_edges_but_manual_names_stay_strict() {
+        let routes = api_routes_of(None, None, None, None);
+        assert_eq!(routes[0].host, "api.devices.cloudflare.com");
+        assert_eq!(routes[1].host, "api.cloudflareclient.com");
+        assert_eq!(routes.iter().filter(|route| route.front).count(), 2);
+        assert!(routes.iter().all(|route| route.host == route.sni));
+        let manual = api_routes_of(
+            Some("api.example.test".into()),
+            None,
+            Some(("192.0.2.10".into(), 8443)),
+            None,
+        );
+        assert_eq!(manual.len(), 1);
+        assert_eq!(manual[0].address, "192.0.2.10");
+        assert_eq!(manual[0].sni, "api.example.test");
+    }
+
+    async fn route_fixture(
+        reply: Option<&'static str>,
+    ) -> (
+        ApiRoute,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (address, listener, acceptor) = crate::https::test_server(b"\x08http/1.1").await;
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let requests = count.clone();
+        let task = tokio::spawn(async move {
+            let mut jobs = tokio::task::JoinSet::new();
+            loop {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let acceptor = acceptor.clone();
+                let count = count.clone();
+                jobs.spawn(async move {
+                    let Ok(mut tls) = tokio_boring::accept(&acceptor, tcp).await else {
+                        return;
+                    };
+                    let read = async {
+                        let mut header = Vec::new();
+                        let mut byte = [0u8; 1];
+                        while header.len() < 16384 {
+                            if tls.read_exact(&mut byte).await.is_err() {
+                                return false;
+                            }
+                            header.push(byte[0]);
+                            if header.ends_with(b"\r\n\r\n") {
+                                return true;
+                            }
+                        }
+                        false
+                    };
+                    if !tokio::time::timeout(std::time::Duration::from_secs(2), read)
+                        .await
+                        .unwrap_or(false)
+                    {
+                        return;
+                    }
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if let Some(reply) = reply {
+                        let _ = tls.write_all(reply.as_bytes()).await;
+                    }
+                });
+            }
+        });
+        (
+            ApiRoute {
+                host: "api.example.test".into(),
+                sni: "api.example.test".into(),
+                address: address.ip().to_string(),
+                port: address.port(),
+                front: true,
+            },
+            requests,
+            task,
+        )
+    }
+
+    #[tokio::test]
+    async fn an_edge_404_does_not_refuse_the_identity_when_another_api_route_works() {
+        let _setting = crate::upstream::hold_setting().await;
+        let _options = crate::tls::hold_options().await;
+        let (bad, bad_count, bad_task) = route_fixture(Some(
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 4\r\nConnection: close\r\n\r\noops",
+        ))
+        .await;
+        let (good, good_count, good_task) = route_fixture(Some(
+            "HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"id\":\"device\"}",
+        ))
+        .await;
+        let result =
+            api_call_by(&[bad, good], "test", "GET", "/reg/device", None, None, None).await;
+        bad_task.abort();
+        good_task.abort();
+        assert_eq!(result.unwrap().id, "device");
+        assert_eq!(bad_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(good_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        forget_answered_api_host();
+    }
+
+    #[tokio::test]
+    async fn losing_an_api_reply_does_not_send_a_registration_down_the_other_route() {
+        let _setting = crate::upstream::hold_setting().await;
+        let _options = crate::tls::hold_options().await;
+        let (first, sent, first_task) = route_fixture(None).await;
+        let (other, other_sent, other_task) = route_fixture(Some(
+            "HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"id\":\"device\"}",
+        ))
+        .await;
+        let result = api_call_by(
+            &[first, other],
+            "registration",
+            "POST",
+            "/reg",
+            Some(b"{}"),
+            None,
+            None,
+        )
+        .await;
+        first_task.abort();
+        other_task.abort();
+        assert!(result.is_err());
+        assert_eq!(sent.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(other_sent.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
     fn an_enroll_address_is_an_ip_address_or_a_domain_name_with_or_without_a_port() {
         let address = |value: Option<&str>| {
             match value {
@@ -1314,8 +1686,8 @@ mod tests {
         let at = |host: &str, port: u16| -> std::result::Result<(String, u16), String> {
             Ok((host.to_string(), port))
         };
-        assert_eq!(address(None), at("api.cloudflareclient.com", 443));
-        assert_eq!(address(Some("  ")), at("api.cloudflareclient.com", 443));
+        assert_eq!(address(None), at("api.devices.cloudflare.com", 443));
+        assert_eq!(address(Some("  ")), at("api.devices.cloudflare.com", 443));
         assert_eq!(address(Some(" 188.114.97.6 ")), at("188.114.97.6", 443));
         assert_eq!(address(Some("188.114.97.6:443")), at("188.114.97.6", 443));
         assert_eq!(address(Some("188.114.97.6:2053")), at("188.114.97.6", 2053));
@@ -1350,7 +1722,7 @@ mod tests {
             assert_eq!(
                 said,
                 format!(
-                    "api: --enroll-address: {refused} is no IP address or domain name, with or without a port"
+                    "api: --api-address: {refused} is no IP address or domain name, with or without a port"
                 )
             );
             assert!(check_enroll_address().is_err());

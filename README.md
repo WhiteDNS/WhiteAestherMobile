@@ -40,6 +40,8 @@ sideloaded APK.
 
 > **تنظیمات هستهٔ ۲.۳:** [آموزش TLS، ECH و Verified edges](docs/GUIDE.fa.md#aether-23) — defaults, input examples, manual testing and restoring previous settings.
 
+> **ادغام هستهٔ ۲.۴:** [تغییرات API، identity و TLS](docs/AETHER_2_4_MERGE.md) — resumable activation, compatible saved settings and API-26 Android builds.
+
 ## First run
 
 **1. Leave the mode on VPN on the Connect screen.** This protects the whole
