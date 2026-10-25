@@ -1,4 +1,8 @@
 pub const API_URL: &str = "https://api.cloudflareclient.com";
+pub const API_HOST: &str = "api.devices.cloudflare.com";
+pub const API_FALLBACK_HOST: &str = "api.cloudflareclient.com";
+pub const API_FRONT_ADDRESSES: [&str; 2] = ["104.24.4.6", "104.18.0.6"];
+pub const DEFAULT_MASQUE_SNI: &str = "www.cloudflare.com";
 pub const API_VERSION: &str = "v0a4471";
 
 // Keep the visible TLS name separate from the CONNECT authority. The MASQUE
@@ -83,6 +87,11 @@ pub struct MasquePin {
 /// SNI and some are self-signed, which is why the TLS library is told to verify
 /// nothing and this list does the work instead.
 pub const MASQUE_PIN_SET: &[MasquePin] = &[
+    MasquePin {
+        label: "Cloudflare MASQUE (Aether 2.4 pin)",
+        spki: b"\x2a\x38\xb6\x9b\x25\x66\x96\xc0\x9a\x11\xfb\xf1\x47\x4f\xe3\x90\x23\x63\x63\x3a\xb0\x0d\xd9\xc2\x97\xb2\xde\x64\x9b\x72\xd7\x2e",
+        expires: 0,
+    },
     MasquePin {
         // CN=masque.cloudflareclient.com, issued by Cloudflare's own
         // "2024-02-27 Self-Signed Root". This is what a real gateway presents,

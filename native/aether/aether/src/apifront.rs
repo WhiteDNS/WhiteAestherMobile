@@ -15,6 +15,8 @@ use crate::fragment::{FragmentConfig, FragmentingStream};
 use crate::{https, tls};
 
 const SEEDS: &[[u8; 4]] = &[
+    [104, 24, 4, 6],
+    [104, 18, 0, 6],
     [188, 114, 97, 6],
     [188, 114, 97, 1],
     [162, 159, 198, 1],
@@ -26,10 +28,10 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(1200);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_REACHABLE: usize = 4;
 
-struct Session {
-    tls: tokio_boring::SslStream<FragmentingStream<TcpStream>>,
+pub(crate) struct Session {
+    pub(crate) tls: tokio_boring::SslStream<FragmentingStream<TcpStream>>,
     route: String,
-    ech: Option<Vec<u8>>,
+    pub(crate) ech: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Copy)]
@@ -162,6 +164,7 @@ async fn open_route(
         ciphers: Some("ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA:ECDHE-RSA-AES256-SHA:AES256-SHA".into()),
         groups: "X25519:P-256".into(),
         grease: false,
+        ..tls::Fingerprint::default()
     };
     let maximum = if matches!(method, Method::SplitLegacy) {
         Some(boring::ssl::SslVersion::TLS1_2)
@@ -228,6 +231,19 @@ pub(crate) async fn send(
     fingerprint: &tls::Fingerprint,
     timeout: Duration,
 ) -> Result<(https::Response, Option<Vec<u8>>)> {
+    let winner = prepare(request, fingerprint, timeout).await?;
+    let response = tokio::time::timeout(timeout, https::send_on_session(winner.tls, request))
+        .await
+        .map_err(|_| AetherError::Api("API exchange timed out".into()))??;
+    Ok((response, winner.ech))
+}
+
+/// Only handshakes race. No HTTP request has been sent if this fails.
+pub(crate) async fn prepare(
+    request: &https::Request<'_>,
+    fingerprint: &tls::Fingerprint,
+    timeout: Duration,
+) -> Result<Session> {
     tokio::time::timeout(timeout, async {
         let edges = probe_edges(request.host).boxed().shared();
         let pending: FuturesUnordered<BoxFuture<'_, Result<Session>>> = FuturesUnordered::new();
@@ -241,7 +257,7 @@ pub(crate) async fn send(
                             request,
                             fingerprint,
                             None,
-                            FragmentConfig::disabled(),
+                            FragmentConfig::from_env(),
                             None,
                             Method::RawDirect,
                         )
@@ -254,7 +270,7 @@ pub(crate) async fn send(
                             request,
                             fingerprint,
                             raw_edges.await,
-                            FragmentConfig::disabled(),
+                            FragmentConfig::from_env(),
                             None,
                             Method::RawEdge,
                         )
@@ -322,11 +338,10 @@ pub(crate) async fn send(
         );
         let winner = first_ready(pending).await?;
         log::info!("[+] API TLS route won: {}", winner.route);
-        let response = https::send_on_session(winner.tls, request).await?;
-        Ok((response, winner.ech))
+        Ok(winner)
     })
     .await
-    .map_err(|_| AetherError::Api("API bootstrap/exchange timed out".into()))?
+    .map_err(|_| AetherError::Api("API TLS bootstrap timed out".into()))?
 }
 
 #[cfg(test)]

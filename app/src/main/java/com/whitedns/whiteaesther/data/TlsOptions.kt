@@ -24,6 +24,23 @@ data class TlsOptions(
     val tlsCiphers: String = "",
     val disableGrease: Boolean = false,
     val enrollAddress: String = "",
+    val masqueSni: String = "",
+    val apiHost: String = "",
+    val apiSni: String = "",
+    val tls13Ciphers: String = "",
+    val tlsKeyShares: String = "",
+    val tlsSigalgs: String = "",
+    val tlsCertCompression: String = "",
+    val tlsAlps: String = "",
+    val tlsTrustAnchors: String = "",
+    val tlsServerPadding: String = "",
+    val enableGreaseSigalgs: Boolean = false,
+    val enableEchGrease: Boolean = false,
+    val disableOcspStapling: Boolean = false,
+    val disableSct: Boolean = false,
+    val disableSessionTicket: Boolean = false,
+    val disableExtensionPermutation: Boolean = false,
+
 ) {
     fun validationError(fragmentEnabled: Boolean, echEnabled: Boolean): Int? = when {
         fragmentEnabled && fragmentMode == TlsFragmentMode.CUSTOM &&
@@ -33,7 +50,9 @@ data class TlsOptions(
         echEnabled && customEch && !validEchConfigList(echConfigList) -> R.string.tls_ech_config_error
         echEnabled && echDomain.isNotBlank() && !validDomain(echDomain.trim()) -> R.string.tls_ech_domain_error
         echEnabled && echDns.isNotBlank() && !validResolver(echDns.trim()) -> R.string.tls_ech_dns_error
-        listOf(tlsCiphers, enrollAddress).any { it.length > 4096 || it.any(Char::isISOControl) } -> R.string.tls_options_error
+        listOf(masqueSni, apiHost, apiSni).any { it.isNotBlank() &&
+            (!validDomain(it.trim()) || it.trim().trimEnd('.').matches(Regex("[0-9.]+"))) } -> R.string.tls_options_error
+        listOf(tlsCiphers, enrollAddress, masqueSni, apiHost, apiSni, tls13Ciphers, tlsKeyShares, tlsSigalgs, tlsCertCompression, tlsAlps, tlsTrustAnchors, tlsServerPadding).any { it.length > 4096 || it.any(Char::isISOControl) } -> R.string.tls_options_error
         else -> null
     }
 
@@ -53,6 +72,23 @@ data class TlsOptions(
         json.put("tlsCiphers", tlsCiphers.trim())
         json.put("disableGrease", disableGrease)
         json.put("enrollAddress", enrollAddress.trim())
+        json.put("masqueSni", masqueSni.trim())
+        json.put("apiHost", apiHost.trim())
+        json.put("apiSni", apiSni.trim())
+        json.put("tls13Ciphers", tls13Ciphers.trim())
+        json.put("tlsKeyShares", tlsKeyShares.trim())
+        json.put("tlsSigalgs", tlsSigalgs.trim())
+        json.put("tlsCertCompression", tlsCertCompression.trim())
+        json.put("tlsAlps", tlsAlps.trim())
+        json.put("tlsTrustAnchors", tlsTrustAnchors.trim())
+        json.put("tlsServerPadding", tlsServerPadding.trim())
+        json.put("enableGreaseSigalgs", enableGreaseSigalgs)
+        json.put("enableEchGrease", enableEchGrease)
+        json.put("disableOcspStapling", disableOcspStapling)
+        json.put("disableSct", disableSct)
+        json.put("disableSessionTicket", disableSessionTicket)
+        json.put("disableExtensionPermutation", disableExtensionPermutation)
+
     }
 
     fun encode(): String = JSONObject()
@@ -61,7 +97,24 @@ data class TlsOptions(
         .put("customEch", customEch).put("echConfigList", echConfigList)
         .put("echDns", echDns).put("echDomain", echDomain)
         .put("tlsCiphers", tlsCiphers).put("disableGrease", disableGrease)
-        .put("enrollAddress", enrollAddress).toString()
+        .put("enrollAddress", enrollAddress)
+        .put("masqueSni", masqueSni)
+        .put("apiHost", apiHost)
+        .put("apiSni", apiSni)
+        .put("tls13Ciphers", tls13Ciphers)
+        .put("tlsKeyShares", tlsKeyShares)
+        .put("tlsSigalgs", tlsSigalgs)
+        .put("tlsCertCompression", tlsCertCompression)
+        .put("tlsAlps", tlsAlps)
+        .put("tlsTrustAnchors", tlsTrustAnchors)
+        .put("tlsServerPadding", tlsServerPadding)
+        .put("enableGreaseSigalgs", enableGreaseSigalgs)
+        .put("enableEchGrease", enableEchGrease)
+        .put("disableOcspStapling", disableOcspStapling)
+        .put("disableSct", disableSct)
+        .put("disableSessionTicket", disableSessionTicket)
+        .put("disableExtensionPermutation", disableExtensionPermutation)
+        .toString()
 
     companion object {
         fun decode(raw: String?): TlsOptions = runCatching {
@@ -78,6 +131,23 @@ data class TlsOptions(
                 tlsCiphers = json.optString("tlsCiphers"),
                 disableGrease = json.optBoolean("disableGrease", false),
                 enrollAddress = json.optString("enrollAddress"),
+                masqueSni = json.optString("masqueSni"),
+                apiHost = json.optString("apiHost"),
+                apiSni = json.optString("apiSni"),
+                tls13Ciphers = json.optString("tls13Ciphers"),
+                tlsKeyShares = json.optString("tlsKeyShares"),
+                tlsSigalgs = json.optString("tlsSigalgs"),
+                tlsCertCompression = json.optString("tlsCertCompression"),
+                tlsAlps = json.optString("tlsAlps"),
+                tlsTrustAnchors = json.optString("tlsTrustAnchors"),
+                tlsServerPadding = json.optString("tlsServerPadding"),
+                enableGreaseSigalgs = json.optBoolean("enableGreaseSigalgs", false),
+                enableEchGrease = json.optBoolean("enableEchGrease", false),
+                disableOcspStapling = json.optBoolean("disableOcspStapling", false),
+                disableSct = json.optBoolean("disableSct", false),
+                disableSessionTicket = json.optBoolean("disableSessionTicket", false),
+                disableExtensionPermutation = json.optBoolean("disableExtensionPermutation", false),
+
             )
         }.getOrDefault(TlsOptions())
 

@@ -1,0 +1,185 @@
+From a9b508d7fe453b616d7219eab276439f2a6323cb Mon Sep 17 00:00:00 2001
+From: Christopher Patton <cpatton@cloudflare.com>
+Date: Wed, 27 May 2026 12:03:19 -0700
+Subject: [PATCH] Add additional methods for RPK (RFC 7250)
+
+The new methods match the Rust bindings present in boring <= 5:
+
+1. Add a method for creating an initially empty an RPK credential. The
+   user sets the private key and the SPKI separately.
+
+2. Add methods for fetching the accepted certificate types list
+   configured on an SSL or SSL_CTX.
+
+3. Add a method for fetching the peer's public key that for all
+   certificate types (X.509 and RPK).
+---
+ include/openssl/ssl.h | 55 +++++++++++++++++++++++++++++++++++++++++++
+ ssl/ssl_credential.cc | 48 +++++++++++++++++++++++++++++++++++++
+ ssl/ssl_lib.cc        | 31 ++++++++++++++++++++++++
+ 3 files changed, 134 insertions(+)
+
+diff --git a/include/openssl/ssl.h b/include/openssl/ssl.h
+index 0dab3b037..4747aae96 100644
+--- a/include/openssl/ssl.h
++++ b/include/openssl/ssl.h
+@@ -4090,6 +4090,61 @@ OPENSSL_EXPORT int SSL_get_peer_cert_type(const SSL *ssl);
+ OPENSSL_EXPORT EVP_PKEY *SSL_get0_peer_rpk(const SSL *ssl);
+ 
+ 
++// Cloudflare-internal APIs for Raw Public Keys (RFC 7250).
++
++// SSL_CREDENTIAL_new_raw_public_key_empty returns a new, empty raw public key
++// credential, or NULL on error. Callers should release the result with
++// |SSL_CREDENTIAL_free| when done.
++//
++// Callers should configure the credential with |SSL_CREDENTIAL_set1_spki| and
++// either |SSL_CREDENTIAL_set1_private_key| or
++// |SSL_CREDENTIAL_set_private_key_method|, then add it with
++// |SSL_CTX_add1_credential|.
++//
++// Unlike |SSL_CREDENTIAL_new_raw_public_key|, this two-step constructor allows
++// the caller to set the public key later (e.g., to use with a private key
++// method or to configure the public key from an SPKI).
++OPENSSL_EXPORT SSL_CREDENTIAL *SSL_CREDENTIAL_new_raw_public_key_empty(void);
++
++// SSL_CREDENTIAL_set1_spki sets |cred|'s raw public key from |spki|. If |spki|
++// is NULL, the public key is extracted from |cred|'s private key. |cred| must
++// have been returned by |SSL_CREDENTIAL_new_raw_public_key_empty|. It returns
++// one on success and zero on error, including if |cred| is not a raw public
++// key credential, if |spki| is malformed, if |spki| is NULL and |cred| has no
++// private key, or if |cred| has a private key that does not match the public
++// key parsed from |spki|. |spki| should be a SubjectPublicKeyInfo structure,
++// as described in RFC 5280.
++OPENSSL_EXPORT int SSL_CREDENTIAL_set1_spki(SSL_CREDENTIAL *cred,
++                                            CRYPTO_BUFFER *spki);
++
++// SSL_get0_peer_pubkey returns the peer's public key during the current
++// handshake, or NULL if unavailable. This returns the public key extracted
++// from the peer's leaf certificate for X.509 credentials, or the peer's raw
++// public key for RPK credentials. The returned pointer is only valid for the
++// duration of the handshake (e.g., from within a custom verify callback); it
++// returns NULL once the handshake has completed. The caller does not take
++// ownership of the result.
++OPENSSL_EXPORT const EVP_PKEY *SSL_get0_peer_pubkey(const SSL *ssl);
++
++// SSL_CTX_get0_accepted_peer_cert_types returns the list of certificate types
++// that |ctx| is willing to accept from the peer, in preference order. By
++// default, this contains only |TLSEXT_cert_type_x509|. The list can be
++// configured via |SSL_CTX_set1_accepted_peer_cert_types|. The returned pointer
++// is owned by |ctx|.
++OPENSSL_EXPORT void SSL_CTX_get0_accepted_peer_cert_types(
++    const SSL_CTX *ctx, const uint8_t **types, size_t *types_len);
++
++// SSL_get0_accepted_peer_cert_types returns the list of certificate types
++// that |ssl| is willing to accept from the peer, in preference order. The
++// initial value is inherited from the |SSL_CTX| at the time |ssl| was
++// created; it can be overridden via |SSL_set1_accepted_peer_cert_types|. If
++// |ssl|'s configuration has been released (e.g., after the handshake has
++// completed), |*types| is set to NULL and |*types_len| to zero. The returned
++// pointer is owned by |ssl|.
++OPENSSL_EXPORT void SSL_get0_accepted_peer_cert_types(const SSL *ssl,
++                                                      const uint8_t **types,
++                                                      size_t *types_len);
++
+ // Password Authenticated Key Exchange (PAKE).
+ //
+ // Password Authenticated Key Exchange protocols allow client and server to
+diff --git a/ssl/ssl_credential.cc b/ssl/ssl_credential.cc
+index d7317da80..448f78a90 100644
+--- a/ssl/ssl_credential.cc
++++ b/ssl/ssl_credential.cc
+@@ -440,6 +440,54 @@ SSL_CREDENTIAL *SSL_CREDENTIAL_new_raw_public_key_custom(
+   return cred.release();
+ }
+ 
++SSL_CREDENTIAL *SSL_CREDENTIAL_new_raw_public_key_empty(void) {
++  UniquePtr<SSLCredential> cred =
++      MakeUnique<SSLCredential>(SSLCredentialType::kRawPublicKey);
++  if (cred == nullptr) {
++    return nullptr;
++  }
++  return cred.release();
++}
++
++int SSL_CREDENTIAL_set1_spki(SSL_CREDENTIAL *cred, CRYPTO_BUFFER *spki) {
++  auto *cred_impl = FromOpaque(cred);
++  if (cred_impl->type != SSLCredentialType::kRawPublicKey) {
++    OPENSSL_PUT_ERROR(SSL, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
++    return 0;
++  }
++
++  ScopedCBB cbb;
++  CBS cbs;
++  if (spki == nullptr) {
++    if (cred_impl->privkey == nullptr) {
++      OPENSSL_PUT_ERROR(SSL, SSL_R_NO_PRIVATE_KEY_ASSIGNED);
++      return 0;
++    }
++
++    if (!CBB_init(cbb.get(), /*initial_capacity=*/512) ||
++        !EVP_marshal_public_key(cbb.get(), cred_impl->privkey.get())) {
++      return 0;
++    }
++    CBS_init(&cbs, CBB_data(cbb.get()), CBB_len(cbb.get()));
++  } else {
++    CRYPTO_BUFFER_init_CBS(spki, &cbs);
++  }
++
++  UniquePtr<EVP_PKEY> pubkey = ssl_parse_peer_subject_public_key_info(cbs);
++  if (pubkey == nullptr) {
++    return 0;
++  }
++
++  if (cred_impl->privkey != nullptr &&
++      !ssl_compare_public_and_private_key(pubkey.get(),
++                                          cred_impl->privkey.get())) {
++    return 0;
++  }
++
++  cred_impl->pubkey = std::move(pubkey);
++  return 1;
++}
++
+ void SSL_CREDENTIAL_up_ref(SSL_CREDENTIAL *cred) {
+   FromOpaque(cred)->UpRefInternal();
+ }
+diff --git a/ssl/ssl_lib.cc b/ssl/ssl_lib.cc
+index 8c8b2bad4..ade682944 100644
+--- a/ssl/ssl_lib.cc
++++ b/ssl/ssl_lib.cc
+@@ -3961,3 +3961,34 @@ void SSL_set_server_padding_enabled(SSL *ssl, int enabled) {
+ int SSL_server_sent_requested_padding(const SSL *ssl) {
+   return FromOpaque(ssl)->s3->server_sent_requested_padding;
+ }
++
++// The following functions are compatibility shims for the Rust bindings in
++// boring-sys. They are not part of upstream BoringSSL.
++
++const EVP_PKEY *SSL_get0_peer_pubkey(const SSL *ssl) {
++  const auto *ssl_impl = FromOpaque(ssl);
++  if (ssl_impl->s3->hs == nullptr) {
++    return nullptr;
++  }
++  return ssl_impl->s3->hs->peer_pubkey.get();
++}
++
++void SSL_CTX_get0_accepted_peer_cert_types(const SSL_CTX *ctx,
++                                           const uint8_t **types,
++                                           size_t *types_len) {
++  const auto *ctx_impl = FromOpaque(ctx);
++  *types = ctx_impl->accepted_peer_cert_types.data();
++  *types_len = ctx_impl->accepted_peer_cert_types.size();
++}
++
++void SSL_get0_accepted_peer_cert_types(const SSL *ssl, const uint8_t **types,
++                                       size_t *types_len) {
++  const auto *ssl_impl = FromOpaque(ssl);
++  if (ssl_impl->config == nullptr) {
++    *types = nullptr;
++    *types_len = 0;
++    return;
++  }
++  *types = ssl_impl->config->accepted_peer_cert_types.data();
++  *types_len = ssl_impl->config->accepted_peer_cert_types.size();
++}

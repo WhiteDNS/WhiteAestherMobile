@@ -1,9 +1,14 @@
 # Aether upstream provenance
 
 - Repository: https://github.com/CluvexStudio/Aether
-- Revision: `6175b67df370ab856bcee07fe85b524031903956` (`v2.3.0`).
-- Version: Aether 2.3.0, adapted for the Android embedded entry points.
-- Imported: 2026-08-09; network core updated to 2.3.0 on 2026-10-12.
+- Revision: `d58f9d568083129ce2c767c85054021eb3ee6a38` (`v2.4.0`).
+- Version: Aether 2.4.0 network changes, adapted for the Android embedded entry points.
+- Imported: 2026-08-09; network core updated to 2.4.0 on 2026-10-25.
+- The 2.4 integration adds authenticated API-name/edge fallback, resumable WARP
+  activation, updated gateway inputs, extended TLS fingerprint controls, a third
+  MASQUE pin and early ownership of embedded SOCKS ports. Boring/tokio-boring
+  use 5.3. Android remains API 26; its reconnect coordinator and independent
+  carrier processes are retained. See `docs/AETHER_2_4_MERGE.md` for the boundaries.
 - The embedded dispatcher, identity store, task-local WOM registration proxy,
   socket protection, cancellation and authenticated LAN sharing remain this
   fork's. ECH now covers H2/H3 and WARP registration, with configurable DNS,
@@ -35,7 +40,8 @@ revision shipped up to v1.2.1 and stops at its own v1.3.0. The two hold
 identical objects for the tags they share; 1.7.0 onwards come from CluvexStudio.
 `THIRD_PARTY_NOTICES.md` in the repository root is the fuller record, and
 `docs/AETHER_2_0_MERGE.md` records the earlier merge;
-`docs/AETHER_2_3_MERGE.md` records this update and its validation.
+`docs/AETHER_2_3_MERGE.md` records the previous update;
+`docs/AETHER_2_4_MERGE.md` records this update and its validation.
 
 Upstream's `tor` feature is deliberately not carried; see that document.
 

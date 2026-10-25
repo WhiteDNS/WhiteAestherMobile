@@ -33,4 +33,4 @@ panic = "abort"
 strip = "symbols"
 
 [patch.crates-io]
-boring-sys = { path = "../third-party/boring-sys" }
+boring-sys = { path = "../third-party/boring-sys-5.3" }

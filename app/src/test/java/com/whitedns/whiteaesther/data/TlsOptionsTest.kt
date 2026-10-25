@@ -7,6 +7,23 @@ import org.junit.Test
 import java.util.Base64
 
 class TlsOptionsTest {
+    @Test fun newApiAndTlsOptionsSurviveStorageAndAutomaticRecipeSelection() {
+        val options = TlsOptions(
+            enrollAddress = "192.0.2.10:8443", apiHost = "api.example.test",
+            apiSni = "api.example.test", masqueSni = "www.example.test",
+            tls13Ciphers = "TLS_AES_128_GCM_SHA256", tlsKeyShares = "X25519",
+            tlsCertCompression = "brotli", enableEchGrease = true,
+        )
+        assertEquals(options, TlsOptions.decode(options.encode()))
+        val json = JSONObject().put("fragmentTls", true)
+        options.applyTo(json)
+        val recovered = JSONObject(AutoPlanner.engineConfig(json.toString(), AutoRoute.AETHER_H2_RECORDS, false))
+        assertEquals(options.apiHost, recovered.getString("apiHost"))
+        assertEquals(options.masqueSni, recovered.getString("masqueSni"))
+        assertEquals(options.tls13Ciphers, recovered.getString("tls13Ciphers"))
+        assertTrue(recovered.getBoolean("enableEchGrease"))
+        assertEquals(R.string.tls_options_error, options.copy(apiHost = "192.0.2.1").validationError(false, false))
+    }
     @Test fun newTlsOptionsSurviveStorageAndAutomaticH2Recovery() {
         val options = TlsOptions(echDns = "https://1.1.1.1/dns-query", echDomain = "cloudflare-ech.com",
             tlsCiphers = "ECDHE-RSA-AES128-GCM-SHA256", disableGrease = true, enrollAddress = "188.114.97.6:8443")

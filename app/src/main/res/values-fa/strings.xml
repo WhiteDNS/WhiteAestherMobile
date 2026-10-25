@@ -64,7 +64,9 @@
     <string name="finish_setting_it">تکمیلش کنید</string>
     <string name="only_some_apps_are_going_through">فقط بعضی برنامه‌ها از تونل عبور می‌کنند</string>
     <string name="change_which_apps">تغییر برنامه‌ها</string>
-    <string name="proxy_only_apps_are_not_routed_for">فقط پروکسی: برنامه‌ها خودکار مسیردهی نمی‌شوند</string>
+    <string name="proxy_only_apps_are_not_routed_for">حالت پروکسی</string>
+    <string name="copy_proxy_address">کپی آدرس پروکسی</string>
+    <string name="proxy_address_copied">آدرس پروکسی کپی شد</string>
     <string name="change_coverage">تغییر پوشش</string>
     <string name="fallback_is_off">جایگزین خاموش است</string>
     <string name="only_the_address_you_pinned_will_be">فقط از آدرسی که تثبیت کرده‌اید استفاده می‌شود. اگر از کار بیفتد، به‌جای جست‌وجوی آدرس دیگر، اتصال شکست می‌خورد.</string>
@@ -428,7 +430,7 @@
     <string name="endpoint_example">مثل 162.159.197.3:443</string>
     <string name="fallback_substituted">‏%1$s کار نکرد، پس جایگزینی از %2$s استفاده کرد. اگر ترجیح می‌دهید به‌جای جایگزین شدن شکست بخورد، «جایگزینی خودکار» را خاموش کنید.</string>
     <string name="everything_else_real_address">بقیهٔ موارد، وصل باشید یا نباشید، از آدرس واقعی شما استفاده می‌کنند.</string>
-    <string name="proxy_needs_pointing">تا برنامه‌ای را به %1$s وصل نکنید، هیچ چیز از تونل عبور نمی‌کند. برای پوشش همه‌چیز، در بخش ترافیک «کل دستگاه» را انتخاب کنید.</string>
+    <string name="proxy_needs_pointing">فقط برنامه‌هایی از تونل عبور می‌کنند که این آدرس SOCKS5 را در تنظیمات پروکسی آن‌ها وارد کنید.</string>
     <string name="point_devices_at">دستگاه‌های دیگر را به %1$s:%2$d به‌عنوان پروکسی SOCKS5 وصل کنید.</string>
     <string name="status_validating_engine">در حال بررسی هستهٔ بومی</string>
     <string name="status_connecting_to">در حال اتصال به %1$s</string>
@@ -644,4 +646,9 @@
     <string name="home_scan_endpoints">جست‌وجوی آدرس اتصال</string>
     <string name="home_scan_endpoints_summary">اسکن و آزمایش آدرس‌ها برای اتصال Aether.</string>
     <string name="home_logs_title">گزارش اتصال</string>
+    <string name="tls13_ciphers">مجموعه رمزهای TLS 1.3 (اختیاری)</string>
+    <string name="tls_key_shares">کلیدهای ارسالی TLS (اختیاری)</string>
+    <string name="masque_sni">نام سرور MASQUE (اختیاری)</string>
+    <string name="warp_api_host">نام میزبان API وارپ (اختیاری)</string>
+    <string name="warp_api_sni">نام سرور TLS برای API وارپ (اختیاری)</string>
 </resources>

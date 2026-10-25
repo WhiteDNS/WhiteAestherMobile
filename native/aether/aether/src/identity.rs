@@ -138,6 +138,12 @@ pub struct Device {
     /// Set only after Cloudflare acknowledges WARP activation.
     #[serde(default)]
     pub warp_enabled: bool,
+    /// Only registrations made by this build need activation. Legacy/imported
+    /// identities remain usable without another API call on every start.
+    #[serde(default)]
+    pub activation_pending: bool,
+    #[serde(default)]
+    pub activation_retry_at: u64,
 }
 
 /// What this address has spent, and when it may spend again.
@@ -488,6 +494,8 @@ pub fn device_from(identity: &Identity, registered_at: u64) -> Device {
         cert_issued_at: persisted.cert_issued_at,
         refused_at: 0,
         warp_enabled: false,
+        activation_pending: false,
+        activation_retry_at: 0,
     }
 }
 

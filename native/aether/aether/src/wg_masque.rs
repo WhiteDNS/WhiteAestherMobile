@@ -137,7 +137,7 @@ pub(super) async fn run(
     let mut inner_exit = inner.exit;
     let mut tasks = TaskGuard(vec![inner_exit.abort_handle()]);
     let mut endpoint_task = match endpoint {
-        EmbeddedEndpoint::Socks => {
+        socks_endpoint @ (EmbeddedEndpoint::Socks | EmbeddedEndpoint::HeldSocks(_)) => {
             let stack = netstack::spawn(
                 &secondary.ipv4,
                 &secondary.ipv6,
@@ -145,7 +145,7 @@ pub(super) async fn run(
                 inner.inbound_rx,
                 inner.outbound_tx,
             )?;
-            let listener = socks::bind_listener("socks5", config.listen).await?;
+            let listener = crate::embedded_listener(socks_endpoint, config.listen).await?;
             tokio::spawn(async move { socks::serve(listener, stack).await })
         }
         EmbeddedEndpoint::Tun {

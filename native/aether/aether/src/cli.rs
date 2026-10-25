@@ -198,6 +198,25 @@ Advanced:
   -v, --version            show version and exit
   -h, --help, help         show this help and exit
 
+Aether 2.4 options:
+  --api-address <value>    AETHER_API_ADDRESS
+  --api-host <value>    AETHER_API_HOST
+  --api-sni <value>    AETHER_API_SNI
+  --masque-sni <value>    AETHER_MASQUE_SNI
+  --tls13-ciphers <value>    AETHER_TLS13_CIPHERS
+  --tls-key-shares <value>    AETHER_TLS_KEY_SHARES
+  --tls-sigalgs <value>    AETHER_TLS_SIGALGS
+  --tls-cert-compression <value>    AETHER_TLS_CERT_COMPRESSION
+  --tls-alps <value>    AETHER_TLS_ALPS
+  --tls-trust-anchors <value>    AETHER_TLS_TRUST_ANCHORS
+  --tls-server-padding <value>    AETHER_TLS_SERVER_PADDING
+  --enable-grease-sigalgs    AETHER_ENABLE_GREASE_SIGALGS
+  --enable-ech-grease    AETHER_ENABLE_ECH_GREASE
+  --disable-ocsp-stapling    AETHER_DISABLE_OCSP_STAPLING
+  --disable-sct    AETHER_DISABLE_SCT
+  --disable-session-ticket    AETHER_DISABLE_SESSION_TICKET
+  --disable-extension-permutation    AETHER_DISABLE_EXTENSION_PERMUTATION
+
 Environment variables:
   Every flag above has one, for scripts and services. The last few have no flag
   of their own.
@@ -403,6 +422,23 @@ pub fn parse_args(args: Vec<String>) -> crate::error::Result<Parsed> {
             "--ech" => set("AETHER_ECH", next_value!()),
             "--ech-dns" => set("AETHER_ECH_DNS", next_value!()),
             "--ech-domain" => set("AETHER_ECH_DOMAIN", next_value!()),
+            "--api-address" => set("AETHER_API_ADDRESS", next_value!()),
+            "--api-host" => set("AETHER_API_HOST", next_value!()),
+            "--api-sni" => set("AETHER_API_SNI", next_value!()),
+            "--masque-sni" => set("AETHER_MASQUE_SNI", next_value!()),
+            "--tls13-ciphers" => set("AETHER_TLS13_CIPHERS", next_value!()),
+            "--tls-key-shares" => set("AETHER_TLS_KEY_SHARES", next_value!()),
+            "--tls-sigalgs" => set("AETHER_TLS_SIGALGS", next_value!()),
+            "--tls-cert-compression" => set("AETHER_TLS_CERT_COMPRESSION", next_value!()),
+            "--tls-alps" => set("AETHER_TLS_ALPS", next_value!()),
+            "--tls-trust-anchors" => set("AETHER_TLS_TRUST_ANCHORS", next_value!()),
+            "--tls-server-padding" => set("AETHER_TLS_SERVER_PADDING", next_value!()),
+            "--enable-grease-sigalgs" => set("AETHER_ENABLE_GREASE_SIGALGS", "1"),
+            "--enable-ech-grease" => set("AETHER_ENABLE_ECH_GREASE", "1"),
+            "--disable-ocsp-stapling" => set("AETHER_DISABLE_OCSP_STAPLING", "1"),
+            "--disable-sct" => set("AETHER_DISABLE_SCT", "1"),
+            "--disable-session-ticket" => set("AETHER_DISABLE_SESSION_TICKET", "1"),
+            "--disable-extension-permutation" => set("AETHER_DISABLE_EXTENSION_PERMUTATION", "1"),
             "--tls-ciphers" => set("AETHER_TLS_CIPHERS", next_value!()),
             "--disable-grease" => set("AETHER_DISABLE_GREASE", "1"),
             "--enroll-address" => set("AETHER_ENROLL_ADDRESS", next_value!()),

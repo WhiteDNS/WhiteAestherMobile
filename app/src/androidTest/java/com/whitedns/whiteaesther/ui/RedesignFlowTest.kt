@@ -149,4 +149,17 @@ class RedesignFlowTest {
         pressBack()
         compose.onNodeWithTag("home-method").assertExists()
     }
+
+    @Test
+    fun proxyCardCopiesTheUsableLocalAddressEvenWhenLanSharingIsEnabled() {
+        setApp(AppSettings(mode = EngineMode.PROXY, lanSharing = true, proxyPort = 2819))
+        compose.onNodeWithTag("home-proxy-notice").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("proxy-listener-address").assertTextContains("127.0.0.1:2819")
+        compose.onNodeWithTag("proxy-copy-address").performClick()
+        compose.runOnIdle {
+            val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+            val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+            assertEquals("127.0.0.1:2819", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+        }
+    }
 }

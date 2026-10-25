@@ -86,6 +86,26 @@ pub async fn through<T>(proxy: Upstream, operation: impl std::future::Future<Out
     SCOPED_UPSTREAM.scope(proxy, operation).await
 }
 
+/// Stops aether when AETHER_UPSTREAM, which --upstream sets, names a proxy it cannot dial through:
+/// [`configured`] sets such a setting aside, and every connection would then go straight out,
+/// around the proxy the user named. A blank setting names none.
+pub fn check_setting() -> Result<()> {
+    usable(&std::env::var("AETHER_UPSTREAM").unwrap_or_default())
+}
+
+/// Whether `raw`, a setting of AETHER_UPSTREAM, is blank or names a proxy aether can dial through.
+fn usable(raw: &str) -> Result<()> {
+    if raw.trim().is_empty() {
+        return Ok(());
+    }
+    Upstream::parse(raw).map(|_| ()).map_err(|e| {
+        AetherError::Other(format!(
+            "--upstream cannot be used: {}; aether ends rather than connect around it",
+            e.detail()
+        ))
+    })
+}
+
 /// The hold on AETHER_UPSTREAM of a test: the variable is the whole process's, and the tests run
 /// side by side, so each test that sets it, or that dials through the setting, holds it first.
 /// Let go, the hold clears the variable, which a test that failed half way may have left set.
@@ -956,6 +976,116 @@ mod tests {
         assert_eq!(a, Some(first));
         assert_eq!(b, Some(second));
         assert!(SCOPED_UPSTREAM.try_with(|_| ()).is_err());
+    }
+
+    #[test]
+    fn a_setting_aether_can_dial_through_or_none_lets_it_start() {
+        for raw in [
+            "",
+            "   ",
+            "socks5://127.0.0.1:1080",
+            "socks5h://user:secret@[::1]:1080",
+            "http://proxy.example:8080",
+        ] {
+            assert!(usable(raw).is_ok(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_setting_aether_would_set_aside_stops_it_instead_of_going_around_it() {
+        for raw in [
+            "socks5://127.0.0.1:0",
+            "socks5://127.0.0.1",
+            "ftp://127.0.0.1:21",
+            "https://user:secret@proxy.example:443",
+        ] {
+            let error = usable(raw).unwrap_err().to_string();
+            assert!(
+                error.starts_with("other: --upstream cannot be used: ")
+                    && error.ends_with("aether ends rather than connect around it")
+                    && !error.contains("used: other: "),
+                "{raw}: {error}"
+            );
+            // The password a setting carries stays out of what aether prints.
+            assert!(!error.contains("secret"), "{error}");
+        }
+        assert_eq!(
+            usable("socks5://127.0.0.1:0").unwrap_err().to_string(),
+            "other: --upstream cannot be used: 127.0.0.1:0 is not a host and port an upstream \
+             proxy can live at; aether ends rather than connect around it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_task_through_a_proxy_of_its_own_leaves_the_rest_on_the_setting() {
+        let _setting = hold_setting().await;
+        std::env::set_var("AETHER_UPSTREAM", "socks5://127.0.0.1:1080");
+        let tunnel = Upstream::parse("socks5h://127.0.0.1:2080").expect("proxy");
+
+        // Another task looks while the one inside is still there.
+        let (look, looking) = tokio::sync::oneshot::channel::<()>();
+        let (seen, saw) = tokio::sync::oneshot::channel::<Option<Upstream>>();
+        tokio::spawn(async move {
+            looking.await.ok();
+            seen.send(configured()).ok();
+        });
+        let (inside, beside, spawned) = through(tunnel, async move {
+            look.send(()).ok();
+            let beside = saw.await.expect("the other task");
+            let spawned = tokio::spawn(async { configured() })
+                .await
+                .expect("a task of its own");
+            (configured(), beside, spawned)
+        })
+        .await;
+
+        assert_eq!(inside.map(|proxy| proxy.port), Some(2080));
+        assert_eq!(beside.map(|proxy| proxy.port), Some(1080));
+        assert_eq!(spawned.map(|proxy| proxy.port), Some(1080));
+        // The setting itself was never touched, and the task is back on it once out.
+        assert_eq!(
+            std::env::var("AETHER_UPSTREAM").as_deref(),
+            Ok("socks5://127.0.0.1:1080")
+        );
+        assert_eq!(configured().map(|proxy| proxy.port), Some(1080));
+    }
+
+    #[tokio::test]
+    async fn a_call_to_the_api_through_a_proxy_of_its_own_goes_to_that_proxy_alone() {
+        let _setting = hold_setting().await;
+        // The setting names a proxy that only counts the connections it gets.
+        let setting = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        std::env::set_var(
+            "AETHER_UPSTREAM",
+            format!("socks5://{}", setting.local_addr().unwrap()),
+        );
+        let (tunnel, server) = fake_socks_http_server().await;
+        let tunnel = Upstream::parse(&format!("socks5h://{tunnel}")).unwrap();
+
+        let headers = Vec::new();
+        let request = crate::https::Request {
+            method: "POST",
+            host: "api.cloudflareclient.com",
+            port: 443,
+            address: None,
+            sni: None,
+            path: "/v0a4005/reg",
+            headers: &headers,
+            body: None,
+        };
+        let fingerprint = crate::tls::Fingerprint::default();
+        let call = crate::https::send(&request, &fingerprint, None, Duration::from_secs(5));
+        // The fake answers in plain HTTP, so the handshake fails: where the call went is what
+        // counts.
+        let _ = through(tunnel, call).await;
+
+        let target = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("the call went to the proxy of its own")
+            .unwrap();
+        assert_eq!(target.as_deref(), Some("api.cloudflareclient.com"));
+        let dialled = tokio::time::timeout(Duration::from_millis(100), setting.accept()).await;
+        assert!(dialled.is_err(), "the call went to the setting's proxy too");
     }
 
     #[test]
