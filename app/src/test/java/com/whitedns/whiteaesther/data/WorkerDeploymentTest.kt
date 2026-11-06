@@ -65,6 +65,20 @@ class WorkerDeploymentTest {
     }
 
     @Test
+    fun newNamesDoNotNameTheAppAndStayValid() {
+        repeat(200) {
+            val name = WorkerDeployment.randomName()
+            assertFalse(name.contains("aether", ignoreCase = true))
+            assertTrue(name, name.matches(Regex("[a-z]+-[a-z]+-[0-9a-f]{4}")))
+            deployment.copy(name = name)
+        }
+        deployment.copy(name = "whiteaesther-" + "0".repeat(32))
+        for (bad in listOf("", "-a", "a-", "A", "a/b", "a".repeat(64))) {
+            assertThrows(IllegalArgumentException::class.java) { deployment.copy(name = bad) }
+        }
+    }
+
+    @Test
     fun storedDeploymentRoundTripsWithoutAnyApiToken() {
         val json = deployment.toJson()
         assertEquals(deployment, WorkerDeployment.fromJson(json))

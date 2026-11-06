@@ -72,7 +72,7 @@ internal class WorkerApi(
                 if (error.status != 404 && !error.message.orEmpty().contains("10007")) throw error
                 ""
             }.ifBlank {
-                val registered = send("PUT", "$base/workers/subdomain", JSONObject().put("subdomain", "whiteaesther-${UUID.randomUUID().toString().take(12)}")) as? JSONObject
+                val registered = send("PUT", "$base/workers/subdomain", JSONObject().put("subdomain", WorkerDeployment.randomName())) as? JSONObject
                 registered?.getString("subdomain") ?: throw IOException("Could not register workers.dev hostname")
             }
             val metadata = JSONObject().put("main_module", "worker.js").put("compatibility_date", date)

@@ -8,6 +8,8 @@ import java.net.URI
 
 /** BPB's Worker variants, rendered for its pinned Xray core rather than mihomo. */
 internal object WorkerConfig {
+    private val DNS_SERVERS = listOf("https+local://1.1.1.1/dns-query", "https+local://8.8.8.8/dns-query", "localhost")
+
     fun render(deployment: WorkerDeployment, socksPort: Int): String {
         val options = deployment.options
         options.validate()
@@ -23,6 +25,9 @@ internal object WorkerConfig {
             if (!fragment && options.upstreamProxy.isNotBlank()) URI("https://${options.upstreamProxy}").let { candidates += it.host.removeSurrounding("[", "]") to it.port }
         }
         val endpoints = candidates.distinct()
+        // Before the first latency probe, start on a clean address: networks that block the
+        // Worker's own hostname in DNS would otherwise leave every request on a dead node.
+        val fallback = "worker-node-${endpoints.indexOfFirst { it.first != domain }.coerceAtLeast(0) + 1}"
         val outbounds = JSONArray()
         endpoints.forEachIndexed { index, (address, port) ->
             val custom = !browser && !fragment && options.customCdn && address in options.cdnAddresses
@@ -48,9 +53,11 @@ internal object WorkerConfig {
             .put(JSONObject().put("type", "field").put("network", "udp").put("outboundTag", "worker-block"))
             .put(route))
         if (!browser) routing.put("balancers", JSONArray().put(JSONObject().put("tag", "worker-best")
-            .put("selector", JSONArray(listOf("worker-node-"))).put("fallbackTag", "worker-node-1")
+            .put("selector", JSONArray(listOf("worker-node-"))).put("fallbackTag", fallback)
             .put("strategy", JSONObject().put("type", "leastPing"))))
         val config = JSONObject().put("log", JSONObject().put("loglevel", "warning"))
+            // Resolve the Worker hostname over DoH first; operator DNS may answer it with NXDOMAIN.
+            .put("dns", JSONObject().put("servers", JSONArray(DNS_SERVERS)))
             .put("inbounds", JSONArray().put(JSONObject().put("tag", "worker-in").put("listen", "127.0.0.1").put("port", socksPort)
                 .put("protocol", "socks").put("settings", JSONObject().put("auth", "noauth").put("udp", false))))
             .put("outbounds", outbounds).put("routing", routing)

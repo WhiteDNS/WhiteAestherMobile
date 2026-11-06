@@ -31,6 +31,19 @@ class WorkerConfigTest {
             File("build/worker-config-test").apply { mkdirs() }.resolve("${mode.name.lowercase()}.json").writeText(text)
         }
     }
+    @Test fun startsOnACleanAddressAndResolvesTheWorkerOverDoh() {
+        fun fallbackAddress(options: WorkerOptions): String {
+            val config = JSONObject(WorkerConfig.render(deployment.copy(options = options), 19876))
+            assertTrue(config.getJSONObject("dns").getJSONArray("servers").getString(0).startsWith("https+local://"))
+            val tag = config.getJSONObject("routing").getJSONArray("balancers").getJSONObject(0).getString("fallbackTag")
+            val outbounds = config.getJSONArray("outbounds")
+            return (0 until outbounds.length()).map(outbounds::getJSONObject).single { it.getString("tag") == tag }
+                .getJSONObject("settings").getString("address")
+        }
+        assertEquals("104.17.148.22", fallbackAddress(WorkerOptions()))
+        assertEquals("104.17.148.22", fallbackAddress(WorkerOptions(mode = WorkerMode.FRAGMENT)))
+        assertEquals("test.example.workers.dev", fallbackAddress(WorkerOptions(cleanAddresses = emptyList())))
+    }
     @Test fun cdnChangesOnlyItsOwnCandidatesAndUsesTheAttachedDomain() {
         val options = WorkerOptions(customCdn = true, cdnAddresses = listOf("cdn.example.net"), cdnHost = "front.example.net", cdnSni = "tls.example.net")
         val config = JSONObject(WorkerConfig.render(deployment.copy(customDomain = "vpn.example.org", options = options), 19876))

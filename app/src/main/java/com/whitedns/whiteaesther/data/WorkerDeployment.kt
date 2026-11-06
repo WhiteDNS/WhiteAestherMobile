@@ -24,7 +24,7 @@ data class WorkerDeployment(
 ) {
     init {
         require(accountId.matches(Regex("[a-fA-F0-9]{32}"))) { "Invalid Cloudflare account" }
-        require(name.matches(Regex("whiteaesther-[a-z0-9-]{1,40}"))) { "Invalid deployment name" }
+        require(name.matches(NAME)) { "Invalid deployment name" }
         require(UUID.fromString(uuid).toString() == uuid) { "Invalid connection identifier" }
         require(validRelay(relay)) { "Invalid relay address" }
         require(customDomain.isBlank() || WorkerOptions.host(customDomain) && ':' !in customDomain) { "Invalid custom domain" }
@@ -76,6 +76,36 @@ data class WorkerDeployment(
         .put("domainPending", domainPending).put("dnsZone", dnsZone).put("dnsRecord", dnsRecord)
 
     companion object {
+        // Old "whiteaesther-<hex>" names still match, so saved deployments keep loading.
+        private val NAME = Regex("[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?")
+        private val WORDS = listOf(
+            "amber", "autumn", "billowing", "bold", "bright", "calm", "cold", "crimson", "damp", "dawn",
+            "delicate", "divine", "dry", "empty", "falling", "fancy", "flat", "floral", "fragrant", "frosty",
+            "gentle", "green", "hidden", "holy", "icy", "jolly", "late", "lingering", "little", "lively",
+            "long", "lucky", "misty", "morning", "muddy", "nameless", "noisy", "odd", "old", "orange",
+            "patient", "plain", "polished", "proud", "purple", "quiet", "rapid", "raspy", "red", "restless",
+            "rough", "round", "royal", "shiny", "shy", "silent", "small", "snowy", "soft", "solitary",
+            "sparkling", "spring", "square", "steep", "still", "summer", "super", "sweet", "tight", "tiny",
+            "twilight", "wandering", "weathered", "white", "wild", "winter", "wispy", "young",
+        )
+        private val NOUNS = listOf(
+            "art", "band", "bar", "base", "bird", "block", "boat", "bonus", "bread", "breeze",
+            "brook", "bush", "butterfly", "cake", "cell", "cherry", "cloud", "credit", "darkness", "dew",
+            "disk", "dream", "dust", "feather", "field", "fire", "firefly", "flower", "fog", "forest",
+            "frog", "frost", "glade", "glitter", "grass", "hall", "hat", "haze", "heart", "hill",
+            "king", "lab", "lake", "leaf", "limit", "math", "meadow", "mode", "moon", "morning",
+            "mountain", "mouse", "mud", "night", "paper", "pine", "poetry", "pond", "queen", "rain",
+            "recipe", "resonance", "rice", "river", "salad", "scene", "sea", "shadow", "shape", "silence",
+            "sky", "smoke", "snow", "snowflake", "sound", "star", "sun", "sunset", "surf", "term",
+            "thunder", "tooth", "tree", "truth", "union", "unit", "violet", "voice", "water", "waterfall",
+            "wave", "wildflower", "wind", "wood",
+        )
+
+        /** Looks like a dashboard default name, so the hostname does not name the app. */
+        fun randomName(random: java.util.Random = java.security.SecureRandom()): String =
+            "${WORDS[random.nextInt(WORDS.size)]}-${NOUNS[random.nextInt(NOUNS.size)]}-" +
+                Integer.toHexString(random.nextInt(0xFFFF) + 1).padStart(4, '0')
+
         internal fun saved(context: android.content.Context): List<WorkerDeployment> {
             val preferences = context.getSharedPreferences("worker_deployments", android.content.Context.MODE_PRIVATE)
             val rows = JSONArray(preferences.getString("deployments", "[]"))
