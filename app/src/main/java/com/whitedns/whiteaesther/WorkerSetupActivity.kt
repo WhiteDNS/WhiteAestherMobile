@@ -15,6 +15,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.TextFieldDefaults
+import com.whitedns.whiteaesther.ui.SectionLabel
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -229,11 +233,22 @@ internal fun WorkerSetupContent(
 @Composable
 internal fun WorkerField(value: String, changed: (String) -> Unit, label: Int, tag: String, busy: Boolean, secret: Boolean = false, multiline: Boolean = false) {
     val interaction = remember { MutableInteractionSource() }
-    OutlinedTextField(
-        value = value, onValueChange = { changed(it.take(4096)) }, enabled = !busy, singleLine = !multiline, minLines = if (multiline) 2 else 1, maxLines = if (multiline) 5 else 1,
-        label = { Text(stringResource(label)) },
-        visualTransformation = if (secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-        keyboardOptions = KeyboardOptions(keyboardType = if (secret) KeyboardType.Password else KeyboardType.Uri),
-        modifier = Modifier.fillMaxWidth().tvTextFieldSupport(interaction).testTag(tag), interactionSource = interaction,
-    )
+    val colors = AetherTheme.colors
+    // Same shape as the focus ring tvTextFieldSupport draws, so focus shows one box, not two.
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        SectionLabel(stringResource(label))
+        OutlinedTextField(
+            value = value, onValueChange = { changed(it.take(4096)) }, enabled = !busy, singleLine = !multiline, minLines = if (multiline) 2 else 1, maxLines = if (multiline) 5 else 1,
+            textStyle = AetherTheme.type.Data.copy(color = colors.text),
+            shape = RoundedCornerShape(14.dp),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = colors.ink1,
+                unfocusedContainerColor = colors.ink1,
+                disabledContainerColor = colors.ink1,
+            ),
+            visualTransformation = if (secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+            keyboardOptions = KeyboardOptions(keyboardType = if (secret) KeyboardType.Password else KeyboardType.Uri),
+            modifier = Modifier.fillMaxWidth().tvTextFieldSupport(interaction).testTag(tag), interactionSource = interaction,
+        )
+    }
 }
