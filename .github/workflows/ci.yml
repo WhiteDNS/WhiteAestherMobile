@@ -97,6 +97,8 @@ jobs:
 
       - name: Verify Worker engine modes and browser bridge
         shell: pwsh
+        env:
+          GOTOOLCHAIN: auto
         run: |
           go -C native/xray build -mod=readonly -trimpath -ldflags '-s -w -checklinkname=0' -o ../../build/worker-engine-test github.com/xtls/xray-core/main
           if ($LASTEXITCODE -ne 0) { throw 'Worker host build failed' }
