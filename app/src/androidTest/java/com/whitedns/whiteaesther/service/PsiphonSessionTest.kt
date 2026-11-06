@@ -19,6 +19,11 @@ import org.junit.Test
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.URL
+import java.net.Socket
+import java.net.DatagramSocket
+import java.net.DatagramPacket
+import java.net.InetAddress
+import java.io.DataInputStream
 
 /**
  * Brings the Psiphon carrier up on a device and holds it.
@@ -185,6 +190,48 @@ class PsiphonSessionTest {
 
         assertTrue("psiphon returned nothing for a plain request", body.isNotBlank())
         EngineLog.record(LogLevel.INFO, "carrier", "psiphon exits at $body")
+    }
+
+    @Test
+    fun psiphonForwardsARealUdpDnsRequest() {
+        assumeTrue("no psiphon argument, skipping the live UDP test", requested)
+        val settings = AppSettings(mode = EngineMode.TUN, carrier = Carrier.PSIPHON)
+        AetherVpnService.start(
+            context, settings.toNativeJson(context), settings.chainForService().encode(),
+            carrier = Carrier.PSIPHON,
+        )
+        assertEquals(EngineStage.CONNECTED, awaitStage(EngineStage.CONNECTED, 180_000))
+        val port = carrierPort()
+        assertTrue("the carrier never reported a port", port > 0)
+        Socket("127.0.0.1", port).use { control ->
+            control.soTimeout = 30_000
+            val input = DataInputStream(control.inputStream)
+            control.outputStream.write(byteArrayOf(5, 1, 0))
+            assertEquals(5, input.readUnsignedByte())
+            assertEquals(0, input.readUnsignedByte())
+            control.outputStream.write(byteArrayOf(5, 3, 0, 1, 0, 0, 0, 0, 0, 0))
+            assertEquals(5, input.readUnsignedByte())
+            assertEquals("UDP ASSOCIATE was refused", 0, input.readUnsignedByte())
+            assertEquals(0, input.readUnsignedByte())
+            assertEquals(1, input.readUnsignedByte())
+            val bind = InetAddress.getByAddress(ByteArray(4).also(input::readFully))
+            val destination = InetSocketAddress(bind, input.readUnsignedShort())
+            DatagramSocket(0, InetAddress.getByName("127.0.0.1")).use { udp ->
+                udp.soTimeout = 30_000
+                val query = byteArrayOf(0x57, 0x41, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+                    7, 101, 120, 97, 109, 112, 108, 101, 3, 99, 111, 109, 0, 0, 1, 0, 1)
+                val request = byteArrayOf(0, 0, 0, 1, 1, 1, 1, 1, 0, 53) + query
+                udp.send(DatagramPacket(request, request.size, destination))
+                val reply = DatagramPacket(ByteArray(4096), 4096)
+                udp.receive(reply)
+                assertTrue("the UDP reply was truncated", reply.length >= 22)
+                assertEquals("unexpected SOCKS UDP address", 1, reply.data[3].toInt())
+                assertEquals(0x57, reply.data[10].toInt() and 255)
+                assertEquals(0x41, reply.data[11].toInt() and 255)
+                assertTrue("not a DNS answer", reply.data[12].toInt() and 128 != 0)
+                assertEquals("DNS server returned an error", 0, reply.data[13].toInt() and 15)
+            }
+        }
     }
 
     @Test

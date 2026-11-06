@@ -55,6 +55,8 @@ data class ChainSettings(
     val sources: List<ChainSource> = emptyList(),
     /** Config URIs pasted by hand, one per line. mihomo converts these itself. */
     val manual: String = "",
+    /** Managed Worker proxy as a YAML document, separate from user-pasted nodes. */
+    val worker: String = "",
     /** The node last selected, so a reconnect returns to it. */
     val node: String? = null,
     /**
@@ -77,6 +79,7 @@ data class ChainSettings(
      * of somebody else's list should be.
      */
     val hiddenNodes: List<String> = emptyList(),
+    val remoteDns: String = "",
 ) {
     /** Rule lines, with blanks and notes dropped as the engine drops them. */
     fun blockRules(): List<String> = ruleLines(routeBlock)
@@ -90,7 +93,7 @@ data class ChainSettings(
 
     /** True when there is anything for mihomo to route through. */
     val hasNodes: Boolean
-        get() = sources.any { it.enabled && it.url.isNotBlank() } || manual.isNotBlank()
+        get() = sources.any { it.enabled && it.url.isNotBlank() } || manual.isNotBlank() || worker.isNotBlank()
 
     /**
      * Why the chain cannot start, or null when it can.
@@ -123,6 +126,9 @@ data class ChainSettings(
         append(throughTunnel).append('|')
         sources.filter { it.enabled }.forEach { append(it.url).append(',') }
         append('|').append(manual.trim())
+        append('|').append(worker.trim())
+        append('|').append(hiddenNodes.sorted().joinToString("\n"))
+        append('|').append(remoteDns)
     }
 
     fun fingerprint(): String = buildString {
@@ -139,9 +145,11 @@ data class ChainSettings(
         .put("throughTunnel", throughTunnel)
         .put("sources", JSONArray().apply { sources.forEach { put(it.toJson()) } })
         .put("manual", manual)
+        .put("worker", worker)
         .put("routeBlock", routeBlock)
         .put("routeDirect", routeDirect)
         .put("hiddenNodes", JSONArray().apply { hiddenNodes.forEach { put(it) } })
+        .put("remoteDns", remoteDns)
         .apply { node?.let { put("node", it) } }
         .toString()
 
@@ -160,6 +168,8 @@ data class ChainSettings(
                         }
                     },
                     manual = json.optString("manual"),
+                    worker = json.optString("worker"),
+                    remoteDns = json.optString("remoteDns"),
                     routeBlock = json.optString("routeBlock"),
                     routeDirect = json.optString("routeDirect"),
                     hiddenNodes = json.optJSONArray("hiddenNodes")?.let { array ->

@@ -3,6 +3,22 @@
 Psiphon as an alternative to the Aether engine: it finds its own way out of a
 network, and mihomo routes the interface into the SOCKS5 listener it produces.
 
+`PsiphonSocksProxy` wraps the library's TCP-only listener with SOCKS5 CONNECT and
+UDP ASSOCIATE. TCP still uses the stock listener. UDP frames travel through its
+CONNECT connection to `127.0.0.1:7300`, which the Psiphon server intercepts as an
+udpgw channel; no datagram is sent directly from this process to the destination.
+All associations share one gateway because Psiphon permits one such channel per
+tunnel. Association IDs and destination addresses keep replies separate, and
+closing the SOCKS control socket removes its routes. The wrapper bounds local
+sessions to 128 and active UDP destinations to 4096. SOCKS UDP fragmentation is
+not supported; the underlying gateway limits a payload to 32768 bytes.
+
+Names in UDP requests are resolved using verified DoH through the original
+Psiphon listener, rather than the phone's resolver. The wrapper needs no Go fork,
+new native binary or additional dependency. Its local tests use a fake native
+SOCKS/udpgw server. The opt-in `PsiphonSessionTest.psiphonForwardsARealUdpDnsRequest`
+is the live test of the actual library and Psiphon network.
+
 ```powershell
 pwsh -File native/psiphon/setup.ps1     # fetch the embedded server list
 ```

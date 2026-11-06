@@ -19,7 +19,10 @@ object ChainConfig {
     /** The group everything is routed through. */
     const val EXIT_GROUP = "exit"
 
+    const val AUTOMATIC_GROUP = "__whiteaesther_auto"
+
     const val MANUAL_PROVIDER = "manual"
+    const val WORKER_PROVIDER = "worker"
 
     /**
      * The interface addresses mihomo is told it owns.
@@ -44,7 +47,7 @@ object ChainConfig {
      */
     const val TUN_STACK = "gvisor"
 
-    private const val HEALTH_CHECK_URL = "http://www.gstatic.com/generate_204"
+    private const val HEALTH_CHECK_URL = "https://www.gstatic.com/generate_204"
 
     /**
      * @param socksPort the port the carrying tunnel's SOCKS5 listener is on, or
@@ -71,7 +74,7 @@ object ChainConfig {
         // for every connection costs a /proc walk per socket on a phone.
         append("find-process-mode: off\n")
 
-        appendDns(socksPort, proxyName)
+        appendDns(socksPort, proxyName, settings.remoteDns)
 
         val through = if (socksPort != null) {
             append("proxies:\n")
@@ -94,7 +97,22 @@ object ChainConfig {
         require(names.isNotEmpty()) { "The chain has no node sources" }
 
         append("proxy-groups:\n")
+        append("  - name: $AUTOMATIC_GROUP\n    type: url-test\n    use: [${names.joinToString(", ")}]\n")
+        append("    url: $HEALTH_CHECK_URL\n    expected-status: 204\n    interval: 300\n    tolerance: 100\n    empty-fallback: REJECT\n")
+        if (settings.hiddenNodes.isNotEmpty()) {
+            val excluded = settings.hiddenNodes.joinToString("|", "^(?:", ")$") { name ->
+                name.map { character ->
+                    when {
+                        character == '`' -> "\\x60"
+                        character in "\\.^$|?*+()[]{}" -> "\\$character"
+                        else -> character.toString()
+                    }
+                }.joinToString("")
+            }
+            append("    exclude-filter: ${quote(excluded)}\n")
+        }
         append("  - name: $EXIT_GROUP\n    type: select\n    use: [${names.joinToString(", ")}]\n")
+        append("    proxies: [$AUTOMATIC_GROUP]\n    empty-fallback: REJECT\n")
 
         appendRules(settings)
     }
@@ -119,8 +137,8 @@ object ChainConfig {
      *   routed into a proxy whose tunnel has not come up is dropped rather than
      *   refused, which the phone experiences as everything hanging.
      * \nparam udp whether the carrier's listener forwards UDP -- see
-     *   Carrier.carriesUdp, which is where that answer is kept. Only the
-     *   engine's own does. A proxy declared `udp: true` that cannot carry it
+     *   Carrier.carriesUdp, which is where that answer is kept. A proxy
+     *   declared `udp: true` that cannot carry it
      *   swallows every datagram -- DNS and QUIC failing silently while TCP
      *   works, which is the hardest shape of broken to recognise.
      */
@@ -131,7 +149,7 @@ object ChainConfig {
             append("ipv6: true\n")
             append("find-process-mode: off\n")
 
-            appendDns(socksPort, CARRIER_PROXY)
+            appendDns(socksPort, CARRIER_PROXY, settings.remoteDns)
 
             append("proxies:\n")
             append(
@@ -249,13 +267,23 @@ object ChainConfig {
      * Not GEOIP,PRIVATE: that wants a database this build does not ship, and a
      * rule mihomo cannot resolve is one it drops without saying so.
      */
-    private fun privateRules(action: String): List<String> = listOf(
+    private fun privateRules(action: String): List<String> = listOf("DOMAIN,localhost,$action") + listOf(
         "10.0.0.0/8",
         "172.16.0.0/12",
         "192.168.0.0/16",
         "169.254.0.0/16",
         "127.0.0.0/8",
-    ).map { "IP-CIDR,$it,$action,no-resolve" }
+        "100.64.0.0/10",
+        "192.0.2.0/24",
+        "198.51.100.0/24",
+        "203.0.113.0/24",
+        "0.0.0.0/32",
+        "255.255.255.255/32",
+        "::1/128",
+        "::/128",
+        "fc00::/7",
+        "fe80::/10",
+    ).map { "${if (':' in it) "IP-CIDR6" else "IP-CIDR"},$it,$action,no-resolve" }
 
     /**
      * Resolvers live inside the chain.
@@ -265,7 +293,7 @@ object ChainConfig {
      * question. The `#$TUNNEL_PROXY` fragment is mihomo's syntax for dialling a
      * resolver through a named proxy, which is what keeps that from happening.
      */
-    private fun StringBuilder.appendDns(socksPort: Int?, proxyName: String = TUNNEL_PROXY) {
+    private fun StringBuilder.appendDns(socksPort: Int?, proxyName: String = TUNNEL_PROXY, remoteDns: String = "") {
         val via = if (socksPort != null) "#$proxyName" else ""
         append("dns:\n")
         append("  enable: true\n")
@@ -276,8 +304,13 @@ object ChainConfig {
         append("  enhanced-mode: fake-ip\n")
         append("  fake-ip-range: 198.19.0.1/16\n")
         append("  nameserver:\n")
-        append("    - https://1.1.1.1/dns-query$via\n")
-        append("    - https://dns.google/dns-query$via\n")
+        if (remoteDns.isNotBlank()) {
+            require(remoteDns.startsWith("https://") || remoteDns.startsWith("tcp://")) { "Invalid remote DNS" }
+            append("    - ${quote(remoteDns + via)}\n")
+        } else {
+            append("    - https://1.1.1.1/dns-query$via\n")
+            append("    - https://dns.google/dns-query$via\n")
+        }
     }
 
     private fun StringBuilder.appendProviders(
@@ -287,7 +320,7 @@ object ChainConfig {
         val names = mutableListOf<String>()
         val sources = settings.sources.filter { it.enabled && it.url.isNotBlank() }
         val manual = settings.manual.trim()
-        if (sources.isEmpty() && manual.isEmpty()) return names
+        if (sources.isEmpty() && manual.isEmpty() && settings.worker.isBlank()) return names
 
         append("proxy-providers:\n")
         sources.forEach { source ->
@@ -305,6 +338,11 @@ object ChainConfig {
             append("  $MANUAL_PROVIDER:\n")
             append("    type: file\n")
             append("    path: ./providers/manual.txt$through\n")
+            append(healthCheck())
+        }
+        if (settings.worker.isNotBlank()) {
+            names += WORKER_PROVIDER
+            append("  $WORKER_PROVIDER:\n    type: file\n    path: ./providers/worker.yaml$through\n")
             append(healthCheck())
         }
         return names
@@ -334,7 +372,7 @@ object ChainConfig {
      * complaint.
      */
     private fun healthCheck(): String =
-        "    health-check: {enable: true, url: \"$HEALTH_CHECK_URL\", interval: 300, lazy: true}\n"
+        "    health-check: {enable: true, url: \"$HEALTH_CHECK_URL\", expected-status: 204, interval: 300, lazy: true}\n"
 
     /**
      * A YAML double-quoted scalar.

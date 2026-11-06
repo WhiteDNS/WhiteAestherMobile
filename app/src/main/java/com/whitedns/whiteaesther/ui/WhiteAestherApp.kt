@@ -259,6 +259,7 @@ fun WhiteAestherApp(
                             }
                         },
                         onGoToRoutes = { openDetail(Destination.ROUTES) },
+                        onGoToChain = { openDetail(Destination.CHAIN) },
                         onGoToEndpoint = {
                             openDetail(Destination.ENDPOINT)
                         },

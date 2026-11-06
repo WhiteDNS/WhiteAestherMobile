@@ -167,6 +167,29 @@ class ChainController(private val context: Context) {
      * fetched and parsed there is nothing to list. That is why the screen asks
      * the user to connect first rather than showing an empty list.
      */
+    fun previewNodes(settings: ChainSettings): ChainNodes {
+        val documents = buildList {
+            if (settings.manual.isNotBlank()) add(settings.manual)
+            for (source in settings.sources.filter { it.enabled && it.url.isNotBlank() }) {
+                val file = File(home, "providers/${ChainConfig.providerKey(source.url)}.yaml")
+                if (file.isFile && file.length() in 1..2_000_000) add(file.readText())
+            }
+        }
+        val nodes = linkedMapOf<String, ChainNode>()
+        var parsed = false
+        for (document in documents) {
+            val rows = NativeChainBridge.invoke("previewProxies", document).data as? org.json.JSONArray ?: continue
+            parsed = true
+            for (index in 0 until rows.length()) {
+                val row = rows.getJSONObject(index)
+                val name = row.getString("name")
+                nodes.putIfAbsent(name, ChainNode(name, row.getString("kind"), null))
+            }
+        }
+        check(parsed || documents.isEmpty()) { "No valid proxy profiles were found" }
+        return ChainNodes(nodes.values.toList(), settings.node)
+    }
+
     fun nodes(): ChainNodes {
         val reply = NativeChainBridge.invoke("getProxies")
         val data = reply.data as? JSONObject ?: return ChainNodes()
@@ -182,6 +205,7 @@ class ChainController(private val context: Context) {
         val nodes = buildList {
             for (index in 0 until members.length()) {
                 val name = members.optString(index).takeIf { it.isNotBlank() } ?: continue
+                if (name == ChainConfig.AUTOMATIC_GROUP) continue
                 val entry = proxies.optJSONObject(name)
                 add(
                     ChainNode(
@@ -292,7 +316,7 @@ class ChainController(private val context: Context) {
         val wanted = settings.sources
             .filter { it.enabled && it.url.isNotBlank() }
             .map { "${ChainConfig.providerKey(it.url)}.yaml" }
-            .toSet() + "manual.txt"
+            .toSet() + setOf("manual.txt", "worker.yaml")
         providers.listFiles()?.forEach { file ->
             if (file.name !in wanted) {
                 file.delete()
@@ -305,6 +329,9 @@ class ChainController(private val context: Context) {
         if (settings.manual.isNotBlank()) {
             File(home, "providers/manual.txt").writeText(settings.manual.trim() + "\n")
         }
+        val workerFile = File(home, "providers/worker.yaml")
+        if (settings.worker.isNotBlank()) workerFile.writeText(settings.worker.trim() + "\n")
+        else if (workerFile.exists()) check(workerFile.delete()) { "Could not remove the previous Worker proxy" }
     }
 
     private fun initialise(): String? {
@@ -338,9 +365,9 @@ class ChainController(private val context: Context) {
      * whichever node the group defaults to, not refuse to start.
      */
     private fun selectNode(node: String?) {
-        if (node.isNullOrBlank()) return
-        select(node)?.let {
-            EngineLog.record(LogLevel.WARN, "chain", "could not select $node: $it")
+        val restored = nodes().restoredSelection(node) ?: return
+        select(restored)?.let {
+            EngineLog.record(LogLevel.WARN, "chain", "could not select $restored: $it")
         }
     }
 
@@ -364,7 +391,11 @@ data class ChainNodes(
     val nodes: List<ChainNode> = emptyList(),
     /** The one carrying traffic, which is not always the one the user picked. */
     val selected: String? = null,
-)
+) {
+    internal fun restoredSelection(saved: String?): String? =
+        if (saved == ChainConfig.AUTOMATIC_GROUP || nodes.any { it.name == saved }) saved
+        else nodes.firstOrNull()?.name
+}
 
 data class ChainNode(
     val name: String,

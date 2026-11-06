@@ -12,6 +12,7 @@ import android.os.RemoteException
 import android.util.Log
 import ca.psiphon.PsiphonTunnel
 import com.whitedns.whiteaesther.core.PsiphonConfig
+import com.whitedns.whiteaesther.core.PsiphonSocksProxy
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -40,6 +41,8 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class PsiphonService : Service() {
     private var tunnel: PsiphonTunnel? = null
+    private var socksProxy: PsiphonSocksProxy? = null
+    private var generation = 0L
     private val clients = mutableListOf<Messenger>()
     private val socksPort = AtomicInteger(0)
     private var state = State.STOPPED
@@ -99,6 +102,7 @@ class PsiphonService : Service() {
 
     private fun start(egressRegion: String, upstreamPort: Int, establishSeconds: Int) {
         if (tunnel != null) return
+        val session = ++generation
         state = State.CONNECTING
         failure = null
         socksPort.set(0)
@@ -129,17 +133,29 @@ class PsiphonService : Service() {
             }
 
             override fun onListeningSocksProxyPort(port: Int) {
-                socksPort.set(port)
-                // Not connected yet: the listener is up before a tunnel is, and
-                // routing into it now would send packets into a proxy with
-                // nowhere to forward them. The port is carried so the chain can
-                // be rendered while the tunnel finishes establishing.
-                broadcast()
+                handler.post {
+                    if (session != generation || tunnel == null) return@post
+                    runCatching {
+                        socksProxy?.close()
+                        PsiphonSocksProxy(port).also {
+                            socksProxy = it
+                            socksPort.set(it.port)
+                        }
+                    }.onFailure { error ->
+                        fail("The Psiphon SOCKS bridge did not start (${error.message})")
+                        stopTunnel()
+                    }
+                    // The listener precedes the tunnel; CONNECTED is still required before routing.
+                    broadcast()
+                }
             }
 
             override fun onConnected() {
-                state = State.CONNECTED
-                broadcast()
+                handler.post {
+                    if (session != generation) return@post
+                    state = State.CONNECTED
+                    broadcast()
+                }
             }
 
             override fun onConnecting() {
@@ -147,15 +163,22 @@ class PsiphonService : Service() {
                 // above stays up either way -- mihomo holds the tun and the
                 // SOCKS listener does not go away -- so this is reported rather
                 // than acted on.
-                if (state == State.CONNECTED) {
-                    state = State.CONNECTING
-                    broadcast()
+                handler.post {
+                    if (session != generation) return@post
+                    if (state == State.CONNECTED) {
+                        state = State.CONNECTING
+                        broadcast()
+                    }
                 }
             }
 
             override fun onExiting() {
-                if (state != State.FAILED) {
-                    state = State.STOPPED
+                handler.post {
+                    if (session != generation) return@post
+                    socksProxy?.close()
+                    socksProxy = null
+                    socksPort.set(0)
+                    if (state != State.FAILED) state = State.STOPPED
                     broadcast()
                 }
             }
@@ -173,7 +196,7 @@ class PsiphonService : Service() {
                 // notice types crosses, capped per session, and the hundreds of
                 // per-server attempts are folded into one line of counts.
                 Log.d("psiphon", message)
-                handler.post { consider(message) }
+                handler.post { if (session == generation) consider(message) }
             }
         }
 
@@ -192,10 +215,13 @@ class PsiphonService : Service() {
     }
 
     private fun stopTunnel() {
-        val running = tunnel ?: return
-        tunnel = null
-        runCatching { running.stop() }
+        generation += 1
+        socksProxy?.close()
+        socksProxy = null
         socksPort.set(0)
+        val running = tunnel
+        tunnel = null
+        runCatching { running?.stop() }
         if (state != State.FAILED) state = State.STOPPED
         broadcast()
     }

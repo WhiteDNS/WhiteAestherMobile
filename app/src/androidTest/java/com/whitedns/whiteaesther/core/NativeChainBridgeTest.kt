@@ -1,5 +1,15 @@
 package com.whitedns.whiteaesther.core
 
+import androidx.test.platform.app.InstrumentationRegistry
+import com.whitedns.whiteaesther.data.WorkerDeployment
+import com.whitedns.whiteaesther.data.WorkerOptions
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import java.net.InetAddress
+import java.net.ServerSocket
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -15,6 +25,58 @@ import org.junit.Test
  * engine is up first, then the chain, then that the chain actually replies.
  */
 class NativeChainBridgeTest {
+    @Test
+    fun stoppingWorkerDuringHandshakeKeepsTheAppAlive() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        ServerSocket(8443, 4, InetAddress.getByName("127.0.0.1")).use { server ->
+            server.soTimeout = 10_000
+            val deployment = WorkerDeployment("a".repeat(32), "whiteaesther-stop-test", false,
+                host = "127.0.0.1", ready = true, options = WorkerOptions(cleanAddresses = emptyList(), ports = listOf(8443)))
+            val client = WorkerCarrierClient(context, this, deployment)
+            val starting = launch { client.start(20_000) }
+            try {
+                withContext(Dispatchers.IO) { server.accept() }.use {
+                    starting.cancelAndJoin()
+                    client.stop()
+                    assertEquals(CarrierStage.STOPPED, client.state.value.stage)
+                }
+            } finally {
+                starting.cancelAndJoin()
+                client.stop()
+            }
+        }
+    }
+
+    @Test
+    fun packagedWorkerEngineRunsOnAndroid() {
+        val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+        val executable = java.io.File(context.applicationInfo.nativeLibraryDir, "libwhiteaesther_xray.so")
+        assertTrue(executable.canExecute())
+        val process = ProcessBuilder(executable.absolutePath, "version").redirectErrorStream(true).start()
+        try {
+            assertTrue(process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS))
+            assertEquals(0, process.exitValue())
+            assertTrue(process.inputStream.bufferedReader().use { it.readText() }.contains("Xray 26.10.31"))
+        } finally {
+            process.destroyForcibly()
+        }
+    }
+
+    @Test
+    fun importedProtocolsCanBeListedWithoutStartingATunnel() {
+        val uuid = "132c9dbb-9749-4059-b773-bae5ef515336"
+        val vmess = java.util.Base64.getEncoder().encodeToString(
+            """{"v":"2","ps":"vmess-test","add":"example.com","port":"443","id":"$uuid","aid":"0","net":"ws","tls":"tls"}""".toByteArray(),
+        )
+        val profiles = "vless://$uuid@example.com:443?security=tls&type=ws#vless-test\n" +
+            "vmess://$vmess\ntrojan://fixture@example.com:443#trojan-test"
+        val reply = NativeChainBridge.invoke("previewProxies", profiles)
+        assertTrue(reply.error, reply.ok)
+        val nodes = reply.data as org.json.JSONArray
+        val kinds = (0 until nodes.length()).map { nodes.getJSONObject(it).getString("kind").lowercase() }.toSet()
+        assertEquals(setOf("vless", "vmess", "trojan"), kinds)
+    }
+
     @Test
     fun engineAndChainLoadIntoTheSameProcess() {
         assertTrue("the Rust engine did not load", NativeAetherBridge.isLoaded)

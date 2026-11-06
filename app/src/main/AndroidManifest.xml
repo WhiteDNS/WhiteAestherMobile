@@ -94,6 +94,8 @@
             </intent-filter>
         </activity>
 
+        <activity android:name=".WorkerSetupActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+
         <service
             android:name=".service.AetherVpnService"
             android:exported="false"

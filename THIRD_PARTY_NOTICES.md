@@ -20,7 +20,19 @@ version 2.3.0, under AGPL-3.0-only. It is integrated with this project's
 Android bridge and identity store, rather than replacing the engine baseline.
 The original Rust TLS record splitting follows the behaviour documented and
 implemented by [`patterniha/Xray-core`](https://github.com/patterniha/Xray-core/tree/aa7886b51c14)
-(MPL-2.0); no Xray binary or Go TLS implementation is added to the app.
+(MPL-2.0). That Rust implementation remains part of Aether's own path.
+
+## Xray-core — MPL-2.0
+
+The independent Worker connection runs the upstream Xray CLI from
+[`XTLS/Xray-core` revision a4a3dff5b20c](https://github.com/XTLS/Xray-core/tree/a4a3dff5b20c),
+the revision pinned by BPB-VPN 381df1270e3b81feaa7a878603ae049cf79a560f.
+`native/xray/go.mod` and `go.sum` pin its build; `native/xray/build.ps1` produces
+separate Android executables, not another in-process Go/JNI library.
+The build adapts the staged source to limit Browser Dialer's CORS and WebSocket
+Origin checks to its own loopback page; the adaptation is in the build script.
+The license is included in `licenses/MPL-2.0-Xray.txt`. Worker configuration
+and Browser Dialer behavior follow the BPB source credited below.
 
 The project moved: earlier releases name `MatinSenPai/Aether`, which still
 carries the revision shipped up to v1.2.1 but stops at its own `v1.3.0`. Both
@@ -169,6 +181,16 @@ name, which is a reason not to modify it rather than a reason to rename.
 
 The licence text is in
 [licenses/OFL-1.1-Vazirmatn.txt](licenses/OFL-1.1-Vazirmatn.txt).
+
+## BPB Worker proxy — GPL-3.0
+
+`app/src/main/assets/worker.js` is adapted from
+[bia-pain-bache/BPB-VPN](https://github.com/bia-pain-bache/BPB-VPN/blob/381df1270e3b81feaa7a878603ae049cf79a560f/worker/worker.js),
+revision `381df1270e3b81feaa7a878603ae049cf79a560f`, under GPL-3.0.
+Changes add bounded initial-header buffering and destination validation, await
+TCP setup, close completed connections, and remove the implicit third-party
+fallback relay. Relays are used only when the user explicitly configures one.
+The upstream license is included in `licenses/GPL-3.0-BPB.txt`.
 
 ## Everything else
 

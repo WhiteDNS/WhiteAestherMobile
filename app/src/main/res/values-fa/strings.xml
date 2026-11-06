@@ -651,4 +651,14 @@
     <string name="masque_sni">نام سرور MASQUE (اختیاری)</string>
     <string name="warp_api_host">نام میزبان API وارپ (اختیاری)</string>
     <string name="warp_api_sni">نام سرور TLS برای API وارپ (اختیاری)</string>
+    <string name="chain_automatic">گره خودکار</string>
+    <string name="chain_automatic_summary">استفاده از گره با کمترین تأخیر؛ بررسی دوباره هر پنج دقیقه.</string>
+    <string name="routing_presets">قانون‌های آمادهٔ مسیریابی</string>
+    <string name="routing_presets_summary">قانون‌های اختیاری در کنار قانون‌های شخصی شما. تغییرات بلافاصله روی اتصال اعمال می‌شوند.</string>
+    <string name="preset_iran">عبور مستقیم سایت‌های ‎.ir</string>
+    <string name="preset_iran_summary">اتصال مستقیم به دامنه‌های ‎.ir با نشانی واقعی شما.</string>
+    <string name="preset_local">دسترسی به شبکهٔ محلی</string>
+    <string name="preset_local_summary">اتصال مستقیم به نشانی‌های محلی، بیرون از تونل.</string>
+    <string name="preset_ads">مسدود کردن تبلیغات و ردیاب‌های رایج</string>
+    <string name="preset_ads_summary">فهرست داخلی کوچکی که همراه برنامه به‌روز می‌شود. ممکن است بعضی سرویس‌ها به خاموش کردن آن نیاز داشته باشند.</string>
 </resources>

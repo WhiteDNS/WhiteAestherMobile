@@ -63,8 +63,12 @@ class ChainRuleTranslationTest {
         // GEOIP,PRIVATE needs a database this build does not ship, and mihomo
         // drops a rule it cannot resolve without saying so.
         assertTrue(rules.size > 1)
-        assertTrue(rules.all { it.startsWith("IP-CIDR,") && it.endsWith(",no-resolve") })
+        assertTrue(rules.filterNot { it.startsWith("DOMAIN,") }.all {
+            it.startsWith("IP-CIDR") && it.endsWith(",no-resolve")
+        })
         assertTrue(rules.any { it.contains("192.168.0.0/16") })
+        assertTrue(rules.contains("IP-CIDR6,fc00::/7,DIRECT,no-resolve"))
+        assertTrue(rules.contains("IP-CIDR,100.64.0.0/10,DIRECT,no-resolve"))
     }
 
     @Test
@@ -114,13 +118,10 @@ class ChainRuleTranslationTest {
     }
 
     @Test
-    fun removingANodeDoesNotDisturbTheRunningConfig() {
+    fun hidingANodeChangesTheAutomaticGroupsCandidates() {
         val running = ChainSettings(manual = "vless://x#A")
         val hidden = running.copy(hiddenNodes = listOf("A"))
 
-        // Hiding is the app's own bookkeeping: mihomo is still configured with
-        // every node, so a reconnect is not needed and the fingerprint must not
-        // claim otherwise.
-        assertEquals(running.fingerprint(), hidden.fingerprint())
+        assertTrue(running.fingerprint() != hidden.fingerprint())
     }
 }

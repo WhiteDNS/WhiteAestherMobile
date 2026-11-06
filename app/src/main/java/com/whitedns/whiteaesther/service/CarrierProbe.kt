@@ -53,11 +53,11 @@ object CarrierProbe {
      * socket read does not hear a cancellation, and a scope that waited for the
      * slow target to time out would turn the first answer into the last.
      */
-    suspend fun works(socksPort: Int): Boolean {
+    suspend fun works(socksPort: Int, targets: List<String> = TARGETS): Boolean {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
             val pending: MutableList<Deferred<Boolean>> =
-                TARGETS.map { host -> scope.async { answers(host, socksPort) } }.toMutableList()
+                targets.map { host -> scope.async { answers(host, socksPort) } }.toMutableList()
             while (pending.isNotEmpty()) {
                 val (done, reached) = select<Pair<Deferred<Boolean>, Boolean>> {
                     pending.forEach { attempt -> attempt.onAwait { attempt to it } }

@@ -4,6 +4,8 @@ import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -44,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import com.whitedns.whiteaesther.ChainState
 import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.data.AppSettings
+import com.whitedns.whiteaesther.core.ChainConfig
 import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.ChainSource
 import com.whitedns.whiteaesther.data.EngineMode
@@ -60,6 +64,9 @@ import com.whitedns.whiteaesther.ui.theme.AetherType
  */
 @Composable
 fun AppSettings.chainSummary(): String = when {
+    carrier == Carrier.PROXY && !automaticCarrier -> stringResource(
+        if (chainForService().hasNodes) R.string.on_nodes_dialled_directly else R.string.on_but_no_nodes_yet,
+    )
     // Named rather than assumed. "Traffic leaves from Cloudflare" was written
     // when Aether was the only thing that could carry a session, and it is
     // simply false under a carrier that exits somewhere else entirely.
@@ -90,8 +97,11 @@ fun ChainScreen(
     onBack: () -> Unit,
 ) {
     val colors = AetherTheme.colors
-    val chain = settings.chain
+    val directProfiles = settings.carrier == Carrier.PROXY && !settings.automaticCarrier
+    val chain = if (directProfiles) settings.chainForService() else settings.chain
     val connected = status.stage == EngineStage.CONNECTED
+    val preview = settings.carrier == Carrier.PROXY && !settings.automaticCarrier &&
+        status.stage in setOf(EngineStage.IDLE, EngineStage.ERROR)
 
     // Keyed on the sources too, so editing one re-asks rather than leaving the
     // previous subscription's nodes on screen.
@@ -99,15 +109,19 @@ fun ChainScreen(
     // the whole config fingerprint, which now covers the routing rules -- so
     // every keystroke in a rule box restarted a full node load, and each of
     // those is a JNI call plus a read of every cached subscription.
-    LaunchedEffect(connected, chain.enabled, chain.nodeSourceFingerprint()) {
-        if (connected && chain.enabled) onRefreshNodes()
+    LaunchedEffect(connected, preview, chain.enabled, chain.nodeSourceFingerprint()) {
+        if ((connected || preview) && chain.enabled) onRefreshNodes()
     }
 
     ScreenColumn {
-        CrumbBar(stringResource(R.string.routes_exit_chain), onBack = onBack)
+        CrumbBar(stringResource(if (directProfiles) R.string.carrier_proxy else R.string.routes_exit_chain), onBack = onBack)
+        if (!settings.automaticCarrier && settings.carrier == Carrier.WORKER) {
+            Note(stringResource(R.string.worker_exit_managed))
+            return@ScreenColumn
+        }
         PageTitle(
-            stringResource(R.string.where_your_traffic_comes_out),
-            stringResource(R.string.adds_a_second_hop_after_the_tunnel),
+            stringResource(if (settings.carrier == Carrier.PROXY) R.string.carrier_proxy else R.string.where_your_traffic_comes_out),
+            stringResource(if (settings.carrier == Carrier.PROXY) R.string.proxy_profiles_summary else R.string.adds_a_second_hop_after_the_tunnel),
         )
 
         if (!chainState.available) {
@@ -132,7 +146,7 @@ fun ChainScreen(
             Spacer(Modifier.height(12.dp))
         }
 
-        AetherCard {
+        if (!directProfiles) AetherCard {
             ToggleSettingRow(
                 title = stringResource(R.string.exit_chain),
                 subtitle = if (chain.enabled) {
@@ -163,7 +177,7 @@ fun ChainScreen(
         // nodes take it, so under Psiphon or Tor this control would save
         // happily and change nothing -- which is the kind of screen this app
         // has been careful not to have.
-        if (!settings.carrier.usesEngine) {
+        if (!settings.carrier.usesEngine && settings.carrier != Carrier.PROXY) {
             AetherCard {
                 Column(Modifier.padding(15.dp)) {
                     Text(
@@ -176,7 +190,7 @@ fun ChainScreen(
                     )
                 }
             }
-        } else {
+        } else if (!directProfiles) {
         AetherCard {
             ToggleSettingRow(
                 title = stringResource(R.string.dial_nodes_through_the_tunnel),
@@ -204,6 +218,7 @@ fun ChainScreen(
             settings = settings,
             chainState = chainState,
             connected = connected,
+            preview = preview,
             onRefreshNodes = onRefreshNodes,
             onSelectNode = onSelectNode,
             onTestNodes = onTestNodes,
@@ -374,6 +389,7 @@ private fun NodesCard(
     settings: AppSettings,
     chainState: ChainState,
     connected: Boolean,
+    preview: Boolean,
     onRefreshNodes: () -> Unit,
     onSelectNode: (String) -> Unit,
     onTestNodes: () -> Unit,
@@ -389,6 +405,7 @@ private fun NodesCard(
     // A thousand nodes is not a list anybody scrolls. Held here rather than
     // saved: it is a way of finding one node now, not a preference.
     var query by remember { mutableStateOf("") }
+    var protocol by remember { mutableStateOf<String?>(null) }
     // Remembered, so every row is not handed a freshly built lambda on each
     // recomposition. A new one per row makes every row's inputs look changed,
     // and ticking one box redrew all fifty.
@@ -402,7 +419,7 @@ private fun NodesCard(
         CardHead(stringResource(R.string.nodes), stringResource(R.string.whichever_one_is_ticked_is_carrying_your))
 
         when {
-            !connected -> {
+            !connected && !preview -> {
                 Divider()
                 Note(
                     stringResource(R.string.connect_to_load_your_nodes_the_list),
@@ -427,7 +444,7 @@ private fun NodesCard(
                     if (chainState.busy) {
                         stringResource(R.string.reading_the_node_list)
                     } else {
-                        stringResource(R.string.the_chain_is_up_but_reported_no)
+                        stringResource(if (preview) R.string.proxy_preview_empty else R.string.the_chain_is_up_but_reported_no)
                     },
                     modifier = Modifier.padding(horizontal = 15.dp),
                 )
@@ -438,13 +455,29 @@ private fun NodesCard(
                 // was dropped from the subscription leaves the two disagreeing,
                 // and what is actually carrying traffic is the true one.
                 val live = chainState.selected ?: settings.chain.node
+                OptionRow(
+                    code = null,
+                    title = stringResource(R.string.chain_automatic),
+                    subtitle = stringResource(R.string.chain_automatic_summary),
+                    selected = live == ChainConfig.AUTOMATIC_GROUP,
+                    tag = "chain-node-automatic",
+                    onClick = { onSelectNode(ChainConfig.AUTOMATIC_GROUP) },
+                )
                 // Fastest first, then the untested, then the ones this build
                 // cannot dial. A subscription arrives in whatever order it was
                 // written, which on a list of fifty is no order at all -- and
                 // the number the user is choosing by is already on every row.
                 val hidden = settings.chain.hiddenNodes.toSet()
                 NodeSearch(query = query, onQueryChange = { query = it })
-                NodeActions(
+                Text(stringResource(R.string.proxy_protocol), modifier = Modifier.padding(horizontal = 15.dp), style = AetherTheme.type.Data)
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 15.dp)) {
+                    (listOf<String?>(null) + chainState.nodes.map { it.kind }.distinct().sorted()).forEach { kind ->
+                        FilterChip(selected = kind == protocol, onClick = { protocol = kind },
+                            label = { Text(kind ?: stringResource(R.string.proxy_all_protocols)) },
+                            modifier = Modifier.padding(end = 6.dp).testTag("proxy-protocol-${kind ?: "all"}"))
+                    }
+                }
+                if (connected) NodeActions(
                     picked = picked,
                     busy = chainState.busy,
                     progress = chainState.testProgress,
@@ -470,10 +503,11 @@ private fun NodesCard(
                     },
                 )
 
-                val ordered = remember(chainState.nodes, hidden, query) {
+                val ordered = remember(chainState.nodes, hidden, query, protocol) {
                     chainState.nodes
                         .filterNot { it.name in hidden }
-                        .filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
+                        .filter { protocol == null || it.kind == protocol }
+                        .filter { query.isBlank() || it.name.contains(query, ignoreCase = true) || it.kind.contains(query, ignoreCase = true) }
                         .sortedWith(
                             compareBy(
                                 { !it.supported },
@@ -532,7 +566,6 @@ private fun NodesCard(
                 )
             }
         }
-        Unit
     }
 }
 

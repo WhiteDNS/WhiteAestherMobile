@@ -150,6 +150,10 @@ jobs:
           ./native/tor/setup.ps1
           ./native/tor/build.ps1
 
+      - name: Build the Worker engine
+        shell: pwsh
+        run: ./native/xray/build.ps1
+
       - name: Build signed APKs and bundle
         shell: bash
         run: |
@@ -186,6 +190,7 @@ jobs:
             # chain simply reporting itself unavailable. That is the one failure
             # nobody would notice before users did.
             jar tf "$apk" | grep -F "lib/${abi}/libwhiteaestherchain.so"
+            jar tf "$apk" | grep -F "lib/${abi}/libwhiteaesther_xray.so"
             jar tf "$apk" | grep -F "lib/${abi}/libgojni.so"
             jar tf "$apk" | grep -qF "assets/psiphon_server_entries.txt"
             # Tor and both of its transports. A transport that did not make it
@@ -208,7 +213,7 @@ jobs:
           # sure which phone they have, and it is assembled separately -- a
           # library that reached the splits and not this one is a carrier that
           # fails only for the users least able to say why.
-          for lib in libwhiteaesther_core libwhiteaestherchain libgojni libtor liblyrebird libsnowflake; do
+          for lib in libwhiteaesther_core libwhiteaestherchain libwhiteaesther_xray libgojni libtor liblyrebird libsnowflake; do
             test "$(jar tf "$universal" | grep -c "^lib/.*/${lib}\.so$")" -eq 3
           done
           jar tf "$universal" | grep -qF "assets/psiphon_server_entries.txt"
@@ -236,7 +241,7 @@ jobs:
           jarsigner -verify "$aab"
           python3 tools/verify_native_dependencies.py \
             --ndk "${ANDROID_HOME}/ndk/29.0.14206865" "$aab"
-          for lib in libwhiteaesther_core libwhiteaestherchain libgojni libtor liblyrebird libsnowflake; do
+          for lib in libwhiteaesther_core libwhiteaestherchain libwhiteaesther_xray libgojni libtor liblyrebird libsnowflake; do
             test "$(unzip -l "$aab" | grep -c "base/lib/.*/${lib}\.so$")" -eq 3
           done
           unzip -l "$aab" | grep -qF "psiphon_server_entries.txt"

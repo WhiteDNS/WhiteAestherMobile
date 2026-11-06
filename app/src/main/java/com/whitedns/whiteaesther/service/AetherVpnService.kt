@@ -64,6 +64,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import com.whitedns.whiteaesther.core.WorkerCarrierClient
+import com.whitedns.whiteaesther.data.WorkerDeployment
 import java.io.File
 import java.net.InetAddress
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -143,6 +145,7 @@ class AetherVpnService : VpnService() {
     private var psiphonClient: PsiphonClient? = null
     private var torClient: TorClient? = null
     private var aetherCarrier: AetherCarrierClient? = null
+    private var workerClient: WorkerCarrierClient? = null
 
     /**
      * The hops this session started, in the order it started them.
@@ -311,6 +314,8 @@ class AetherVpnService : VpnService() {
             // Rebuilt when the bridge changes rather than held: the choice is
             // part of how tor is started, not something it can be told later.
             Carrier.TOR -> torClient
+            Carrier.WORKER -> workerClient
+            Carrier.PROXY -> null
         }
 
     /**
@@ -658,7 +663,14 @@ class AetherVpnService : VpnService() {
         val chainSettings = ChainSettings.decode(chainJson)
         val splitTunnel = SplitTunnel.decode(splitJson)
         val requested = JSONObject(requestedConfig)
-        com.whitedns.whiteaesther.data.TlsOptions.decode(requestedConfig)
+        if (!automatic && carrier.isStandalone &&
+            (mode != EngineMode.TUN || secondCarrier != null ||
+                carrier == Carrier.PROXY && (!chainSettings.enabled || chainSettings.throughTunnel || !chainSettings.hasNodes))) {
+            reportError(mode, "Choose a configured Worker or imported proxy profile in whole-device VPN mode")
+            finishIfCurrent(sessionGeneration)
+            return
+        }
+        if (automatic || hops.any { it.usesEngine }) com.whitedns.whiteaesther.data.TlsOptions.decode(requestedConfig)
             .validationError(requested.optBoolean("fragmentTls"), requested.optBoolean("encryptedHello"))?.let {
                 reportError(mode, sayNow(it))
                 finishIfCurrent(sessionGeneration)
@@ -695,7 +707,7 @@ class AetherVpnService : VpnService() {
         // links. Aether on its own does not: the engine takes the interface
         // itself, which is faster and fewer moving parts than routing it through
         // mihomo into a loopback listener, and that path is unchanged.
-        if (carrier != Carrier.AETHER || secondCarrier != null) {
+        if (carrier != Carrier.AETHER && carrier != Carrier.PROXY || secondCarrier != null) {
             runCarrierSession(configJson, mode, chainSettings, splitTunnel, sessionGeneration)
             return
         }
@@ -933,6 +945,8 @@ class AetherVpnService : VpnService() {
         Carrier.TOR -> TorConfig.bootstrapTimeoutMs(torBridge)
         Carrier.AETHER -> TUNNEL_WAIT_MS
         Carrier.PSIPHON -> PSIPHON_WAIT_MS
+        Carrier.WORKER -> 45_000L
+        Carrier.PROXY -> TUNNEL_WAIT_MS
     }
 
     private fun stopCarrier() {
@@ -944,6 +958,7 @@ class AetherVpnService : VpnService() {
         runCatching { psiphonClient?.stop() }
         runCatching { torClient?.stop() }
         runCatching { aetherCarrier?.stop() }
+        runCatching { workerClient?.stop() }
     }
 
     /**
@@ -1003,6 +1018,14 @@ class AetherVpnService : VpnService() {
      */
     private fun buildCarrier(hop: Carrier, configJson: String, upstream: Int): CarrierClient =
         when (hop) {
+            Carrier.WORKER -> {
+                require(upstream == 0) { "Worker is an independent connection; choose its exit in the proxy settings" }
+                workerClient?.stop()
+                val deployment = JSONObject(configJson).optJSONObject("worker")
+                    ?: throw IllegalArgumentException("Deploy or select a Cloudflare Worker first")
+                WorkerCarrierClient(this, serviceScope, WorkerDeployment.fromJson(deployment)).also { workerClient = it }
+            }
+            Carrier.PROXY -> error("Direct proxy profiles do not use an outer carrier")
             Carrier.PSIPHON -> {
                 psiphonClient?.let { runCatching { it.stop() } }
                 PsiphonClient(this, psiphonRegion, upstream).also { psiphonClient = it }
@@ -1985,6 +2008,7 @@ class AetherVpnService : VpnService() {
     }
 
     private fun autoClient(route: AutoRoute): CarrierClient = when (route.carrier) {
+        Carrier.WORKER, Carrier.PROXY -> error("User-managed connections are not automatic carrier candidates")
         // Any exit country. One the user picked by hand is a restriction on
         // where Psiphon may go, and Automatic is for not having to choose.
         Carrier.PSIPHON -> PsiphonClient(this, "", 0).also { psiphonClient = it }
@@ -2041,7 +2065,7 @@ class AetherVpnService : VpnService() {
      * the log honest about what was spent.
      */
     private fun buyIdentityBehind(carrier: Carrier, port: Int, sessionGeneration: Long) {
-        if (carrier == Carrier.AETHER || port <= 0) return
+        if (carrier == Carrier.AETHER || carrier.isStandalone || port <= 0) return
         if (boughtIdentityBehindCarrier) return
         val base = baseConfigJson ?: return
         boughtIdentityBehindCarrier = true
