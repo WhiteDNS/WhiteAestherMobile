@@ -2328,6 +2328,21 @@ class AetherVpnService : VpnService() {
         // the freeze people saw on connect.
         val nodeCount = withContext(Dispatchers.IO) { chain.nodes().nodes.size }
         EngineLog.record(LogLevel.INFO, "chain", "exit chain up on $nodeCount nodes")
+        // Dialling directly nothing else has tested the route: without this a node
+        // the network blocks shows as connected while every page hangs.
+        if (engine == null) {
+            val answered = withContext(Dispatchers.IO) {
+                (1..EXIT_CHECK_ATTEMPTS).any { sessionGeneration == generation && chain.exitAnswers(EXIT_CHECK_TIMEOUT_MS) }
+            }
+            if (sessionGeneration != generation) return
+            if (!answered) {
+                val reason = sayNow(R.string.err_chain_no_answer)
+                EngineLog.record(LogLevel.ERROR, "chain", reason)
+                cleanUp()
+                scheduleReconnect(configJson, sessionGeneration, mode, reason)
+                return
+            }
+        }
         reportConnected(
             mode,
             peer,
@@ -3357,6 +3372,8 @@ class AetherVpnService : VpnService() {
         private const val TUNNEL_WAIT_MS = 120_000L
         private const val DEFAULT_SOCKS_PORT = 1819
         private const val EVENT_DRAIN_MS = 5_000L
+        private const val EXIT_CHECK_ATTEMPTS = 3
+        private const val EXIT_CHECK_TIMEOUT_MS = 10_000L
         private const val ENGINE_LOG_DRAIN_MS = 2_000L
         // Long enough for a healthy session to unwind, short enough that a
         // wedged one never leaves the user with only force-stop.

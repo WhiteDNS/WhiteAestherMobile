@@ -346,6 +346,7 @@
     <string name="status_starting_chain">Starting the exit chain</string>
     <string name="status_chain_carries">Traffic leaves through the exit chain</string>
     <string name="status_chain_direct">Traffic leaves through the exit chain, dialled directly</string>
+    <string name="err_chain_no_answer">The selected proxy profile did not answer a test request. Try another profile or network.</string>
     <string name="status_searching_wg">Searching for a WireGuard endpoint. This can take a few minutes.</string>
     <string name="status_preparing_identity">Preparing identity and gateway</string>
     <string name="protocol_automatic">Automatic</string>

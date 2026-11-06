@@ -262,6 +262,24 @@ class ChainController(private val context: Context) {
     }
 
     /**
+     * Whether one real request gets through the exit group's current node.
+     *
+     * Blocks for up to [timeoutMs]. mihomo starting proves only that the config
+     * parsed; a node it cannot reach still leaves the phone connected to nothing.
+     */
+    fun exitAnswers(timeoutMs: Long): Boolean {
+        if (!isAvailable) return false
+        val reply = NativeChainBridge.invoke(
+            "asyncTestDelay",
+            JSONObject()
+                .put("proxy-name", ChainConfig.EXIT_GROUP)
+                .put("test-url", "https://www.gstatic.com/generate_204")
+                .put("timeout", timeoutMs),
+        )
+        return ((reply.data as? JSONObject)?.optInt("value", -1) ?: -1) > 0
+    }
+
+    /**
      * Moves mihomo's log into the app's, where the diagnostics report can reach
      * it. Best effort: losing the log is not a reason to refuse to connect.
      */

@@ -340,6 +340,7 @@
     <string name="status_starting_chain">در حال راه‌اندازی زنجیرهٔ خروج</string>
     <string name="status_chain_carries">ترافیک از زنجیرهٔ خروج بیرون می‌رود</string>
     <string name="status_chain_direct">ترافیک از زنجیرهٔ خروج بیرون می‌رود، با شماره‌گیری مستقیم</string>
+    <string name="err_chain_no_answer">پروفایل پروکسی انتخاب‌شده به درخواست آزمایشی پاسخ نداد. پروفایل یا شبکهٔ دیگری را امتحان کنید.</string>
     <string name="status_searching_wg">در حال جست‌وجوی نقطهٔ پایانی WireGuard. ممکن است چند دقیقه طول بکشد.</string>
     <string name="status_preparing_identity">در حال آماده‌سازی هویت و دروازه</string>
     <string name="protocol_automatic">خودکار</string>
