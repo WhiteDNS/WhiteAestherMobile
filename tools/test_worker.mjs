@@ -65,3 +65,31 @@ for (const failure of ['connect', 'write', 'read', 'empty']) {
     assert.equal(sent.length, 1, `${failure}: response returned through relay`);
 }
 console.log('Worker relay: connect, write, read and empty-response failures recover through the configured relay.');
+
+// Without a user relay, and after a failing one, Cloudflare-hosted targets go through NAT64.
+for (const pips of [[], ['relay.example.com:443']]) {
+    const dialed = [];
+    const sent = [];
+    context.fetch = async () => ({ json: async () => ({ Answer: [{ type: 5, data: 'x.example.' }, { type: 1, data: '104.16.124.96' }] }) });
+    context.connect = ({ hostname }) => {
+        dialed.push(hostname);
+        if (!hostname.startsWith('[2')) throw new Error('blocked');
+        return {
+            closed: new Promise(() => {}),
+            close() {},
+            writable: { getWriter: () => ({ async write() {}, releaseLock() {} }) },
+            readable: { async pipeTo(sink) { await sink.getWriter().write(new Uint8Array([42])); } },
+        };
+    };
+    context.remote = { value: null };
+    context.socket = { readyState: 1, send(value) { sent.push(value); }, close() { this.readyState = 3; } };
+    context.pips = pips;
+    await vm.runInContext('handleTCPOutBound(remote, "www.cloudflare.com", 443, new Uint8Array([1]), socket, new Uint8Array([0,0]), {pips})', context);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(dialed.length, pips.length + 2, `NAT64 attempted after ${pips.length} relay(s)`);
+    assert.match(dialed.at(-1), /^\[(2a02:898:146:64|2602:fc59:b0:64|2602:fc59:11:64)::6810:7c60\]$/);
+    assert.equal(sent.length, 1, 'response returned through NAT64');
+}
+context.fetch = async () => ({ json: async () => ({ Answer: [{ type: 1, data: '10.0.0.1' }] }) });
+await assert.rejects(vm.runInContext('nat64Address("internal.example.com", "2a02:898:146:64::")', context), /no public IPv4/);
+console.log('Worker NAT64: used without a relay and after a failing relay; private answers refused.');

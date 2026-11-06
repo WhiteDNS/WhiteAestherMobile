@@ -70,7 +70,7 @@
     <string name="worker_workers_summary">پروکسی خصوصی با نشانی workers.dev.</string>
     <string name="worker_pages_summary">پروکسی خصوصی با نشانی pages.dev.</string>
     <string name="worker_relay">میزبان و پورت رلهٔ عمومی (اختیاری)</string>
-    <string name="worker_relay_summary">فقط زمانی استفاده می‌شود که مقصد اتصال ورکر را نپذیرد. برای استفاده‌نکردن از رله خالی بگذارید. فقط رله‌ای را وارد کنید که به آن اعتماد دارید.</string>
+    <string name="worker_relay_summary">فقط زمانی استفاده می‌شود که مقصد اتصال ورکر را نپذیرد، مثل سایت‌های پشت کلادفلر. اگر خالی باشد یا رله کار نکند، ورکر از درگاه‌های عمومی NAT64 استفاده می‌کند؛ این درگاه‌ها نشانی مقصد را می‌بینند ولی محتوای رمزشده را نه. فقط رله‌ای را وارد کنید که به آن اعتماد دارید.</string>
     <string name="worker_deploy">استقرار</string>
     <string name="worker_incomplete">راه‌اندازی کامل نشده است. دوباره تلاش کنید یا این استقرار را حذف کنید.</string>
     <string name="worker_connect">اتصال از طریق این استقرار</string>

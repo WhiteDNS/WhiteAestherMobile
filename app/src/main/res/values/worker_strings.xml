@@ -70,7 +70,7 @@
     <string name="worker_workers_summary">A private proxy on a workers.dev hostname.</string>
     <string name="worker_pages_summary">A private proxy on a pages.dev hostname.</string>
     <string name="worker_relay">Optional public relay host:port</string>
-    <string name="worker_relay_summary">Used only when a destination refuses Worker connections. Leave blank to use no relay. Only enter a relay you trust.</string>
+    <string name="worker_relay_summary">Used only when a destination refuses Worker connections, such as sites behind Cloudflare. When blank, or when the relay fails, the Worker uses public NAT64 gateways; they see destination addresses but not encrypted content. Only enter a relay you trust.</string>
     <string name="worker_deploy">Deploy</string>
     <string name="worker_incomplete">Setup incomplete. Retry or delete this deployment.</string>
     <string name="worker_connect">Connect through this deployment</string>

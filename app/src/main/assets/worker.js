@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Adapted from bia-pain-bache/BPB-VPN worker/worker.js, commit 381df1270e3b81feaa7a878603ae049cf79a560f.
-// Changes: destination validation, bounded header buffering, awaited TCP setup, explicit relay only.
+// Changes: destination validation, bounded header buffering, awaited TCP setup, user relay first, then public NAT64 fallback.
 import { connect } from 'cloudflare:sockets';
 
 const WS_READY_STATE_OPEN = 1;
@@ -193,30 +193,57 @@ async function handleTCPOutBound(remoteSocket, addressRemote, portRemote, rawCli
         return tcpSocket;
     }
 
-    // Cloudflare-hosted targets refuse direct connections from Workers; retry via a proxy IP.
-    async function retry() {
-        const randomItem = (arr) => arr[Math.floor(Math.random() * arr.length)];
-        try {
-            if (!settings.pips.length) throw new Error('no relay configured');
-            const endpoint = randomItem(settings.pips);
-            const { host, port } = parseHostPort(endpoint);
-            if (!publicDestination(host)) throw new Error('relay is not public');
+    // Cloudflare-hosted targets refuse direct connections from Workers. Retry through
+    // the user's proxy IP when one is set, then through a public NAT64 gateway.
+    async function viaProxyIp() {
+        const { host, port } = parseHostPort(randomItem(settings.pips));
+        if (!publicDestination(host)) throw new Error('relay is not public');
+        return connectAndWrite(host, port);
+    }
 
-            const tcpSocket = await connectAndWrite(host, port);
-            remoteSocketToWS(tcpSocket, webSocket, responseHeader, null);
+    async function viaNat64() {
+        return connectAndWrite(await nat64Address(addressRemote, randomItem(NAT64_PREFIXES)), portRemote);
+    }
+
+    const fallbacks = (settings.pips.length ? [viaProxyIp] : []).concat(viaNat64);
+
+    async function retry(index = 0) {
+        safeCloseTcpSocket(remoteSocket.value);
+        if (index >= fallbacks.length) return safeCloseWebSocket(webSocket);
+        const next = index + 1 < fallbacks.length ? () => retry(index + 1) : null;
+        try {
+            remoteSocketToWS(await fallbacks[index](), webSocket, responseHeader, next);
         } catch (error) {
-            webSocket.close(1011, `Retry failed: ${error && error.message || error}`);
+            if (next) await next();
+            else webSocket.close(1011, `Retry failed: ${error && error.message || error}`);
         }
     }
 
     try {
         const tcpSocket = await connectAndWrite(addressRemote, portRemote);
-        remoteSocketToWS(tcpSocket, webSocket, responseHeader, settings.pips.length ? retry : null);
+        remoteSocketToWS(tcpSocket, webSocket, responseHeader, retry);
     } catch (error) {
-        safeCloseTcpSocket(remoteSocket.value);
-        if (settings.pips.length) await retry();
-        else safeCloseWebSocket(webSocket);
+        await retry();
     }
+}
+
+const randomItem = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+// Public NAT64 gateways (the same defaults BPB ships). They see the destination, never the TLS content.
+const NAT64_PREFIXES = ['2a02:898:146:64::', '2602:fc59:b0:64::', '2602:fc59:11:64::'];
+
+async function nat64Address(address, prefix) {
+    let ipv4 = /^[0-9.]+$/.test(address) ? address : '';
+    if (!ipv4 && !address.includes(':')) {
+        // fetch(), unlike connect(), may reach Cloudflare-hosted resolvers.
+        const response = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(address)}&type=A`,
+            { headers: { accept: 'application/dns-json' } });
+        const answer = ((await response.json()).Answer || []).find((record) => record.type === 1);
+        ipv4 = answer ? String(answer.data) : '';
+    }
+    if (!ipv4 || !publicDestination(ipv4)) throw new Error('no public IPv4 for NAT64');
+    const hex = ipv4.split('.').map((part) => Number(part).toString(16).padStart(2, '0'));
+    return `[${prefix}${hex[0]}${hex[1]}:${hex[2]}${hex[3]}]`;
 }
 
 async function remoteSocketToWS(remoteSocket, webSocket, responseHeader, retry) {
