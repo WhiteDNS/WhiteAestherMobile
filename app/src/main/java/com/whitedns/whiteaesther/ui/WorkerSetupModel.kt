@@ -97,7 +97,7 @@ class WorkerSetupModel(application: Application) : AndroidViewModel(application)
     }
 
     fun create() = run {
-        val deployment = WorkerDeployment(accountId, "whiteaesther-${UUID.randomUUID().toString().replace("-", "")}", pages, relay = relay.trim())
+        val deployment = WorkerDeployment(accountId, WorkerDeployment.randomName(), pages, relay = relay.trim())
         withContext(Dispatchers.IO) {
             val client = api()
             // Keep the name and identity before the first remote write so a failed setup can be retried or deleted.
