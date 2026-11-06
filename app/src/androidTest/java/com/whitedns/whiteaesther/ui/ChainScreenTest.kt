@@ -23,6 +23,7 @@ import com.whitedns.whiteaesther.ChainState
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.core.ChainNode
 import com.whitedns.whiteaesther.data.AppSettings
+import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.ChainSettings
 import com.whitedns.whiteaesther.data.ChainSource
 import com.whitedns.whiteaesther.data.EngineMode
@@ -35,6 +36,23 @@ import org.junit.Rule
 import org.junit.Test
 
 class ChainScreenTest {
+    @Test
+    fun protocolFilterAllowsSelectingAnImportedNodeWhileDisconnected() {
+        setApp(
+            AppSettings(automaticCarrier = false, carrier = Carrier.PROXY,
+                chain = ChainSettings(enabled = true, throughTunnel = false, manual = "fixture")),
+            chainState = ChainState(available = true, nodes = listOf(
+                ChainNode("vless-fixture", "Vless", null), ChainNode("trojan-fixture", "Trojan", null),
+            )),
+        )
+        compose.onNodeWithTag("tab-routes").performClick()
+        compose.onNodeWithTag("routes-chain").performScrollTo().performClick()
+        compose.onNodeWithTag("proxy-protocol-Trojan").performSemanticsAction(SemanticsActions.OnClick)
+        compose.onNodeWithTag("chain-node-vless-fixture").assertDoesNotExist()
+        compose.onNodeWithTag("chain-node-trojan-fixture").performSemanticsAction(SemanticsActions.OnClick)
+        assertEquals("trojan-fixture", selected)
+    }
+
     @get:Rule
     val compose = createComposeRule()
 
@@ -72,6 +90,19 @@ class ChainScreenTest {
     private fun openChain() {
         compose.onNodeWithTag("tab-routes").performClick()
         compose.onNodeWithText("Exit chain").performScrollTo().performClick()
+    }
+
+    @Test
+    fun automaticNodeCanBeSelectedWithoutHidingManualNodes() {
+        setApp(
+            AppSettings(chain = ChainSettings(enabled = true, manual = "socks5://127.0.0.1:9#first")),
+            status = EngineStatus(EngineStage.CONNECTED, EngineMode.TUN),
+            chainState = ChainState(available = true, nodes = listOf(ChainNode("first", "Socks5", 10)), selected = "first"),
+        )
+        openChain()
+        compose.onNodeWithTag("chain-node-automatic").performScrollTo().performClick()
+        assertEquals(com.whitedns.whiteaesther.core.ChainConfig.AUTOMATIC_GROUP, selected)
+        compose.onNodeWithTag("chain-node-first").assertExists()
     }
 
     @Test

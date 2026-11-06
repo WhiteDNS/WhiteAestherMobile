@@ -132,16 +132,10 @@ class CarrierConfigTest {
     }
 
     @Test
-    fun onlyTheEnginesListenerTakesDatagrams() {
-        // The tunnel behind a carrier is not the question; the loopback SOCKS5
-        // listener it hands us is. Psiphon's network carries UDP and its
-        // listener refuses UDP ASSOCIATE outright, and declaring otherwise is
-        // how DNS and QUIC came to hang while TCP worked -- mihomo handing
-        // datagrams to a proxy that swallowed them instead of refusing them.
+    fun aetherAndThePsiphonAdapterCarryDatagramsButTorDoesNot() {
         assertTrue(Carrier.AETHER.carriesUdp)
-        Carrier.entries.filter { it != Carrier.AETHER }.forEach { carrier ->
-            assertFalse(carrier.carriesUdp)
-        }
+        assertTrue(Carrier.PSIPHON.carriesUdp)
+        assertFalse(Carrier.TOR.carriesUdp)
     }
 
     @Test

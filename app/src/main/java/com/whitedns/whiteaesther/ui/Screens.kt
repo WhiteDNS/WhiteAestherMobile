@@ -48,6 +48,9 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
+import android.content.Intent
+import com.whitedns.whiteaesther.WorkerSetupActivity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -65,6 +68,7 @@ import com.whitedns.whiteaesther.IdentityMessage
 import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.data.AppLanguage
 import com.whitedns.whiteaesther.data.AppSettings
+import com.whitedns.whiteaesther.data.RoutingPreset
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import com.whitedns.whiteaesther.core.CarrierStage
@@ -281,6 +285,7 @@ fun HomeScreen(
     onGoToRoutes: () -> Unit,
     onGoToEndpoint: () -> Unit,
     onGoToTraffic: () -> Unit,
+    onGoToChain: () -> Unit = {},
     onSettingsChange: (AppSettings) -> Unit = {},
     onGoToApps: () -> Unit = {},
     onGoToDiagnostics: () -> Unit = {},
@@ -397,6 +402,7 @@ fun HomeScreen(
         HomeConnectionControls(
             settings = settings, status = status,
             onSettingsChange = onSettingsChange, onGoToRoutes = onGoToRoutes,
+            onGoToChain = onGoToChain,
             onGoToApps = onGoToApps, onGoToTools = onGoToTraffic,
         )
 
@@ -473,7 +479,7 @@ fun HomeScreen(
                         mono = addresses.real != null,
                     )
                     Divider()
-                    val viaChain = settings.chain.enabled && settings.mode == EngineMode.TUN
+                    val viaChain = settings.chainForService().enabled && settings.mode == EngineMode.TUN
                     FactRow(
                         stringResource(R.string.seen_by_websites),
                         when {
@@ -859,6 +865,8 @@ private fun carrierDetail(carrier: Carrier): String = when (carrier) {
     Carrier.AETHER -> stringResource(R.string.carrier_aether_detail)
     Carrier.PSIPHON -> stringResource(R.string.carrier_psiphon_detail)
     Carrier.TOR -> stringResource(R.string.carrier_tor_detail)
+    Carrier.WORKER -> stringResource(R.string.carrier_worker_detail)
+    Carrier.PROXY -> stringResource(R.string.carrier_proxy_detail)
 }
 
 @Composable
@@ -877,6 +885,7 @@ fun RoutesScreen(
     chainModifier: Modifier = Modifier,
     routingRulesModifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     var advanced by rememberSaveable { mutableStateOf(settings.showAdvanced) }
     var previousAdvancedDefault by rememberSaveable { mutableStateOf(settings.showAdvanced) }
     LaunchedEffect(settings.showAdvanced) {
@@ -913,7 +922,7 @@ fun RoutesScreen(
             }
         }
         Spacer(Modifier.height(12.dp))
-        if (!settings.automaticCarrier) {
+        if (!settings.automaticCarrier && !settings.carrier.isStandalone) {
             AetherCard {
                 AdvancedSection(
                     badge = stringResource(R.string.home_multi_hop),
@@ -932,7 +941,7 @@ fun RoutesScreen(
                             stringResource(R.string.carrier_first),
                             Modifier.padding(start = 4.dp, bottom = 4.dp),
                         )
-                        Carrier.entries.forEach { carrier ->
+                        Carrier.entries.filterNot { it.isStandalone }.forEach { carrier ->
                             OptionRow(
                                 code = carrier.wireName.take(3).uppercase(),
                                 title = stringResource(carrier.label),
@@ -968,7 +977,7 @@ fun RoutesScreen(
                             selected = settings.secondCarrier == null,
                             onClick = { onSettingsChange(settings.copy(secondCarrier = null)) },
                         )
-                        Carrier.entries.filter { it != settings.carrier }.forEach { carrier ->
+                        Carrier.entries.filter { it != settings.carrier && !it.isStandalone }.forEach { carrier ->
                             OptionRow(
                                 code = carrier.wireName.take(3).uppercase(),
                                 title = stringResource(carrier.label),
@@ -1226,11 +1235,20 @@ fun RoutesScreen(
             Divider()
             RowCard(
                 icon = AetherIcons.Globe,
-                title = stringResource(R.string.exit_chain),
+                title = stringResource(if (settings.carrier == Carrier.PROXY) R.string.carrier_proxy else R.string.exit_chain),
                 subtitle = settings.chainSummary(),
                 iconTint = AetherTheme.colors.brand,
                 modifier = chainModifier.testTag("routes-chain"),
                 onClick = onGoToChain,
+            )
+            Divider()
+            RowCard(
+                icon = AetherIcons.Globe,
+                title = stringResource(R.string.worker_setup_title),
+                subtitle = stringResource(R.string.worker_setup_summary),
+                iconTint = AetherTheme.colors.cyan,
+                modifier = Modifier.testTag("routes-workers"),
+                onClick = { context.startActivity(Intent(context, WorkerSetupActivity::class.java)) },
             )
             if (settings.chain.enabled && !settings.chain.hasNodes) {
                 Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -2283,6 +2301,29 @@ fun RoutingRulesScreen(
             stringResource(R.string.everything_not_named_here_goes_through_the),
         )
 
+        AetherCard {
+            CardHead(stringResource(R.string.routing_presets), stringResource(R.string.routing_presets_summary))
+            RoutingPreset.entries.forEach { preset ->
+                val (title, summary) = when (preset) {
+                    RoutingPreset.IRANIAN_DOMAINS -> R.string.preset_iran to R.string.preset_iran_summary
+                    RoutingPreset.LOCAL_NETWORK -> R.string.preset_local to R.string.preset_local_summary
+                    RoutingPreset.COMMON_ADS -> R.string.preset_ads to R.string.preset_ads_summary
+                }
+                ToggleSettingRow(
+                    title = stringResource(title), subtitle = stringResource(summary),
+                    checked = preset in settings.routingPresets,
+                    onCheckedChange = { enabled ->
+                        onSettingsChange(settings.copy(
+                            routingPresets = if (enabled) settings.routingPresets + preset else settings.routingPresets - preset,
+                            routeSniff = if (enabled) true else settings.routeSniff,
+                        ))
+                    },
+                    modifier = Modifier.testTag("routing-preset-${preset.name}"),
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+
         if (!settings.routeSniff) {
             AetherCard {
                 CardHead(
@@ -2335,7 +2376,7 @@ fun RoutingRulesScreen(
             stringResource(R.string.a_plain_name_matches_it_and_everything),
         )
 
-        if (settings.routeDirect.isNotBlank()) {
+        if (settings.effectiveRouteDirect().isNotBlank()) {
             Text(
                 stringResource(R.string.anything_under_skip_the_tunnel_leaves_with),
                 style = AetherTheme.type.Small,

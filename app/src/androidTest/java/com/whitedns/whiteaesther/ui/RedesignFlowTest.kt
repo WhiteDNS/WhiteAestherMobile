@@ -17,6 +17,7 @@ import com.whitedns.whiteaesther.AddressPair
 import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.Carrier
+import com.whitedns.whiteaesther.data.ChainSettings
 import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatus
@@ -57,6 +58,23 @@ class RedesignFlowTest {
         compose.onNodeWithTag("home-apps").assertIsNotEnabled()
         compose.onNodeWithTag("home-mode-tun").performClick()
         compose.runOnIdle { assertEquals(EngineMode.TUN, saved.mode) }
+    }
+
+    @Test
+    fun workerKeepsItsOwnSettingsAndDoesNotResetThePreviousExit() {
+        setApp(AppSettings(chain = ChainSettings(enabled = true, manual = "fixture", node = "My exit")))
+        compose.onNodeWithTag("home-method").performScrollTo().performClick()
+        compose.onNodeWithTag("option-cloudflare-worker").performScrollTo().performClick()
+        compose.onNodeWithTag("home-method").assertTextContains("VLESS", substring = true)
+        compose.onNodeWithTag("home-worker-settings").assertExists()
+        compose.onNodeWithTag("home-exit-node").assertDoesNotExist()
+        compose.onNodeWithTag("home-mode-proxy").assertIsNotEnabled()
+        compose.runOnIdle {
+            assertEquals(Carrier.WORKER, saved.carrier)
+            assertEquals("My exit", saved.chain.node)
+            assertTrue(saved.chain.enabled)
+            assertFalse(saved.chainForService().enabled)
+        }
     }
 
     @Test

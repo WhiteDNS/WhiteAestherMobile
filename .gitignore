@@ -36,6 +36,7 @@ native/tor/third_party/
 # list's signatures, and the marker recording that the check passed.
 native/psiphon/third_party/
 native/tor/build/
+native/xray/build/
 
 # The Kotlin compiler's per-project session and error cache.
 .kotlin/

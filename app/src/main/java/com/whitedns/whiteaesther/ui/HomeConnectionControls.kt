@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -43,6 +44,11 @@ import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.EngineMode
+import com.whitedns.whiteaesther.data.TunnelProtocol
+import com.whitedns.whiteaesther.WorkerSetupActivity
+import androidx.compose.ui.platform.LocalContext
+import android.content.Intent
+import com.whitedns.whiteaesther.core.ChainConfig
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatus
 import com.whitedns.whiteaesther.service.TrafficSample
@@ -52,6 +58,7 @@ import com.whitedns.whiteaesther.ui.theme.AetherTheme
 @Composable
 internal fun AppSettings.methodSummary(): String = when {
     automaticCarrier -> stringResource(R.string.carrier_automatic)
+    carrier == Carrier.WORKER -> "${stringResource(carrier.label)} · VLESS"
     secondCarrier != null -> stringResource(
         R.string.home_method_pair, stringResource(carrier.label), stringResource(secondCarrier.label),
     )
@@ -65,14 +72,24 @@ internal fun HomeConnectionControls(
     status: EngineStatus,
     onSettingsChange: (AppSettings) -> Unit,
     onGoToRoutes: () -> Unit,
+    onGoToChain: () -> Unit,
     onGoToApps: () -> Unit,
     onGoToTools: () -> Unit,
 ) {
     val colors = AetherTheme.colors
     val editable = status.stage == EngineStage.IDLE || status.stage == EngineStage.ERROR
     val television = LocalTvMode.current
+    val context = LocalContext.current
+    val worker = !settings.automaticCarrier && settings.carrier == Carrier.WORKER
+    val profiles = !settings.automaticCarrier && settings.carrier == Carrier.PROXY
     var chooseMethod by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(editable) { if (!editable) chooseMethod = false }
+    var chooseTransport by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(editable) {
+        if (!editable) {
+            chooseMethod = false
+            chooseTransport = false
+        }
+    }
 
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
@@ -82,25 +99,27 @@ internal fun HomeConnectionControls(
     ) {
         EngineMode.entries.forEach { mode ->
             val selected = settings.mode == mode
+            val available = editable && (mode == EngineMode.TUN || settings.automaticCarrier ||
+                settings.carrier.usesEngine && settings.secondCarrier == null)
             val label = stringResource(if (mode == EngineMode.TUN) R.string.home_mode_vpn else R.string.home_mode_proxy)
             val interaction = remember(mode) { MutableInteractionSource() }
             val shape = RoundedCornerShape(8.dp)
             Box(
                 Modifier.weight(1f).heightIn(min = 48.dp).clip(shape)
                     .background(if (selected) colors.ink2 else androidx.compose.ui.graphics.Color.Transparent)
-                    .tvControllerActivation(enabled = editable) { onSettingsChange(settings.copy(mode = mode)) }
+                    .tvControllerActivation(enabled = available) { onSettingsChange(settings.copy(mode = mode)) }
                     .selectable(
-                        selected = selected, enabled = editable, role = Role.RadioButton,
+                        selected = selected, enabled = available, role = Role.RadioButton,
                         interactionSource = interaction, indication = LocalIndication.current,
                         onClick = { onSettingsChange(settings.copy(mode = mode)) },
                     )
-                    .controllerFocus(interaction, shape, editable)
+                    .controllerFocus(interaction, shape, available)
                     .testTag("home-mode-${mode.wireName}")
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(label, style = AetherTheme.type.RowTitle,
-                    color = if (selected) colors.brand else colors.text2, maxLines = 1)
+                    color = if (selected) colors.brand else if (available) colors.text2 else colors.text2.copy(alpha = 0.55f), maxLines = 1)
             }
         }
     }
@@ -112,6 +131,32 @@ internal fun HomeConnectionControls(
                 if (television) onGoToRoutes() else chooseMethod = true
             },
         )
+        if (worker) {
+            Divider()
+            val deployment = settings.worker
+            val summary = deployment?.takeIf { it.ready }?.let {
+                "${stringResource(it.options.mode.label)} · ${it.connectionHost}"
+            } ?: stringResource(R.string.home_worker_setup)
+            HomeSelectionRow(stringResource(R.string.worker_setup_title), summary, "home-worker-settings", editable) {
+                context.startActivity(Intent(context, WorkerSetupActivity::class.java))
+            }
+        } else if (!settings.automaticCarrier && settings.carrier == Carrier.AETHER && settings.secondCarrier == null) {
+            Divider()
+            HomeSelectionRow(stringResource(R.string.home_transport), stringResource(settings.transport.label), "home-transport", editable) {
+                chooseTransport = true
+            }
+        }
+        if (!worker && (profiles || !settings.automaticCarrier || settings.chain.enabled) && settings.mode == EngineMode.TUN) {
+            Divider()
+            val node = when {
+                !profiles && !settings.chain.enabled -> stringResource(R.string.home_default_exit)
+                settings.chain.node == ChainConfig.AUTOMATIC_GROUP -> stringResource(R.string.chain_automatic)
+                settings.chain.node != null -> settings.chain.node
+                else -> stringResource(R.string.home_choose_node)
+            }
+            HomeSelectionRow(stringResource(if (profiles) R.string.carrier_proxy else R.string.home_exit_node),
+                node, "home-exit-node", editable, onClick = onGoToChain)
+        }
         Divider()
         HomeSelectionRow(
             stringResource(R.string.apps), settings.coverageSummary(),
@@ -132,6 +177,7 @@ internal fun HomeConnectionControls(
     if (chooseMethod && editable) {
         ModalBottomSheet(
             onDismissRequest = { chooseMethod = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             containerColor = colors.ink2,
             contentColor = colors.text,
         ) {
@@ -154,6 +200,25 @@ internal fun HomeConnectionControls(
             }
         }
     }
+    if (chooseTransport && editable) {
+        ModalBottomSheet(
+            onDismissRequest = { chooseTransport = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = colors.ink2,
+            contentColor = colors.text,
+        ) {
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp)) {
+                Text(stringResource(R.string.home_transport), style = AetherTheme.type.PageTitle)
+                TunnelProtocol.entries.forEach { protocol ->
+                    OptionRow(null, stringResource(protocol.label), "", settings.transport == protocol,
+                        tag = "home-transport-${protocol.wireName}") {
+                        onSettingsChange(settings.copy(transport = protocol))
+                        chooseTransport = false
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -166,15 +231,23 @@ internal fun MethodChoices(settings: AppSettings, onSelect: (AppSettings) -> Uni
     )
     Carrier.entries.forEach { carrier ->
         OptionRow(
-            code = carrier.wireName.take(3).uppercase(),
+            code = when (carrier) {
+                Carrier.WORKER -> "VLESS"
+                Carrier.PSIPHON -> "SSH"
+                Carrier.TOR -> "ONION"
+                else -> null
+            },
             title = stringResource(carrier.label),
             subtitle = stringResource(when (carrier) {
                 Carrier.AETHER -> R.string.carrier_aether_detail
                 Carrier.PSIPHON -> R.string.carrier_psiphon_detail
                 Carrier.TOR -> R.string.carrier_tor_detail
+                Carrier.WORKER -> R.string.carrier_worker_detail
+                Carrier.PROXY -> R.string.carrier_proxy_detail
             }),
             selected = !settings.automaticCarrier && settings.carrier == carrier && settings.secondCarrier == null,
-            onClick = { onSelect(settings.copy(automaticCarrier = false, carrier = carrier, secondCarrier = null)) },
+            onClick = { onSelect(settings.copy(automaticCarrier = false, carrier = carrier, secondCarrier = null,
+                mode = if (carrier.usesEngine) settings.mode else EngineMode.TUN)) },
         )
     }
     if (!settings.automaticCarrier && settings.secondCarrier != null) {

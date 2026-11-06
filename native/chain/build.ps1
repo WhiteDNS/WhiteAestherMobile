@@ -21,6 +21,17 @@ if (-not (Test-Path (Join-Path $core 'go.mod'))) {
     throw "core missing. Run native/chain/setup.ps1 first."
 }
 
+Copy-Item -LiteralPath (Join-Path $here 'catalog/catalog.go') -Destination (Join-Path $core 'wa_catalog.go') -Force
+Copy-Item -LiteralPath (Join-Path $here 'catalog/provider/catalog.go') -Destination (Join-Path $core 'Clash.Meta/adapter/provider/wa_catalog.go') -Force
+$dispatchFile = Join-Path $core 'method.go'
+$dispatch = [IO.File]::ReadAllText($dispatchFile)
+if (-not $dispatch.Contains('case "previewProxies":')) {
+    $anchor = "`tcase getProxiesMethod:"
+    if (-not $dispatch.Contains($anchor)) { throw 'Proxy preview dispatcher anchor missing' }
+    $dispatch = $dispatch.Replace($anchor, "`tcase `"previewProxies`":`n`t`thandleProxyCatalog(call, response)`n`t`treturn`n$anchor")
+    [IO.File]::WriteAllText($dispatchFile, $dispatch)
+}
+
 # proxy.golang.org is a single point of failure for a release and it does drop
 # connections mid-zip: one such stream error ended a v1.4.0 build twenty minutes
 # in, with every module but one already fetched. Pull the whole graph up front

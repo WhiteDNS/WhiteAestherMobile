@@ -340,6 +340,7 @@
     <string name="status_starting_chain">در حال راه‌اندازی زنجیرهٔ خروج</string>
     <string name="status_chain_carries">ترافیک از زنجیرهٔ خروج بیرون می‌رود</string>
     <string name="status_chain_direct">ترافیک از زنجیرهٔ خروج بیرون می‌رود، با شماره‌گیری مستقیم</string>
+    <string name="err_chain_no_answer">پروفایل پروکسی انتخاب‌شده به درخواست آزمایشی پاسخ نداد. پروفایل یا شبکهٔ دیگری را امتحان کنید.</string>
     <string name="status_searching_wg">در حال جست‌وجوی نقطهٔ پایانی WireGuard. ممکن است چند دقیقه طول بکشد.</string>
     <string name="status_preparing_identity">در حال آماده‌سازی هویت و دروازه</string>
     <string name="protocol_automatic">خودکار</string>
@@ -651,4 +652,14 @@
     <string name="masque_sni">نام سرور MASQUE (اختیاری)</string>
     <string name="warp_api_host">نام میزبان API وارپ (اختیاری)</string>
     <string name="warp_api_sni">نام سرور TLS برای API وارپ (اختیاری)</string>
+    <string name="chain_automatic">گره خودکار</string>
+    <string name="chain_automatic_summary">استفاده از گره با کمترین تأخیر؛ بررسی دوباره هر پنج دقیقه.</string>
+    <string name="routing_presets">قانون‌های آمادهٔ مسیریابی</string>
+    <string name="routing_presets_summary">قانون‌های اختیاری در کنار قانون‌های شخصی شما. تغییرات بلافاصله روی اتصال اعمال می‌شوند.</string>
+    <string name="preset_iran">عبور مستقیم سایت‌های ‎.ir</string>
+    <string name="preset_iran_summary">اتصال مستقیم به دامنه‌های ‎.ir با نشانی واقعی شما.</string>
+    <string name="preset_local">دسترسی به شبکهٔ محلی</string>
+    <string name="preset_local_summary">اتصال مستقیم به نشانی‌های محلی، بیرون از تونل.</string>
+    <string name="preset_ads">مسدود کردن تبلیغات و ردیاب‌های رایج</string>
+    <string name="preset_ads_summary">فهرست داخلی کوچکی که همراه برنامه به‌روز می‌شود. ممکن است بعضی سرویس‌ها به خاموش کردن آن نیاز داشته باشند.</string>
 </resources>

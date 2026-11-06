@@ -346,6 +346,7 @@
     <string name="status_starting_chain">Starting the exit chain</string>
     <string name="status_chain_carries">Traffic leaves through the exit chain</string>
     <string name="status_chain_direct">Traffic leaves through the exit chain, dialled directly</string>
+    <string name="err_chain_no_answer">The selected proxy profile did not answer a test request. Try another profile or network.</string>
     <string name="status_searching_wg">Searching for a WireGuard endpoint. This can take a few minutes.</string>
     <string name="status_preparing_identity">Preparing identity and gateway</string>
     <string name="protocol_automatic">Automatic</string>
@@ -657,4 +658,14 @@
     <string name="masque_sni">MASQUE server name (optional)</string>
     <string name="warp_api_host">WARP API host (optional)</string>
     <string name="warp_api_sni">WARP API server name (optional)</string>
+    <string name="chain_automatic">Automatic node</string>
+    <string name="chain_automatic_summary">Use the node with the lowest latency. Recheck every five minutes.</string>
+    <string name="routing_presets">Routing presets</string>
+    <string name="routing_presets_summary">Optional rules added to your custom rules. Changes apply to the connection immediately.</string>
+    <string name="preset_iran">Bypass .ir sites</string>
+    <string name="preset_iran_summary">Reach .ir domains directly, using your real IP address.</string>
+    <string name="preset_local">Allow local network</string>
+    <string name="preset_local_summary">Reach local addresses directly, outside the tunnel.</string>
+    <string name="preset_ads">Block common ads and trackers</string>
+    <string name="preset_ads_summary">A small built-in domain list, updated with the app. Some services may need this off.</string>
 </resources>

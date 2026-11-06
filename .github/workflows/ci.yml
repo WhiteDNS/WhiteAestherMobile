@@ -83,6 +83,10 @@ jobs:
           ./native/tor/setup.ps1
           ./native/tor/build.ps1
 
+      - name: Build the Worker engine
+        shell: pwsh
+        run: ./native/xray/build.ps1
+
       - name: Test, lint and package Android
         run: >-
           ./gradlew
@@ -90,6 +94,16 @@ jobs:
           lintPreviewDebug
           assemblePreviewDebug
           assemblePreviewDebugAndroidTest
+
+      - name: Verify Worker engine modes and browser bridge
+        shell: pwsh
+        env:
+          GOTOOLCHAIN: auto
+        run: |
+          go -C native/xray build -mod=readonly -trimpath -ldflags '-s -w -checklinkname=0' -o ../../build/worker-engine-test github.com/xtls/xray-core/main
+          if ($LASTEXITCODE -ne 0) { throw 'Worker host build failed' }
+          python3 tools/test_worker_engine.py build/worker-engine-test app/build/worker-config-test
+          if ($LASTEXITCODE -ne 0) { throw 'Worker engine checks failed' }
 
       - name: Verify split APKs, universal APK and VPN manifest
         shell: bash
@@ -112,6 +126,7 @@ jobs:
             # The chain engine, without which nothing but Aether alone can
             # connect, and Tor with both of its transports.
             jar tf "$apk" | grep -F "lib/${abi}/libwhiteaestherchain.so"
+            jar tf "$apk" | grep -F "lib/${abi}/libwhiteaesther_xray.so"
             jar tf "$apk" | grep -F "lib/${abi}/libtor.so"
             jar tf "$apk" | grep -F "lib/${abi}/liblyrebird.so"
             jar tf "$apk" | grep -F "lib/${abi}/libsnowflake.so"
@@ -130,7 +145,7 @@ jobs:
           done
           # Every engine, once per ABI: the universal APK is the one people
           # take when they are not sure which phone they have.
-          for lib in libwhiteaesther_core libwhiteaestherchain libgojni libtor liblyrebird libsnowflake; do
+          for lib in libwhiteaesther_core libwhiteaestherchain libwhiteaesther_xray libgojni libtor liblyrebird libsnowflake; do
             test "$(jar tf "$universal" | grep -c "^lib/.*/${lib}\.so$")" -eq 3
           done
           ! jar tf "$universal" | grep -E 'lib(quiche|boringtun.*)\.so'
@@ -160,6 +175,9 @@ jobs:
           cache-dependency-path: design/package-lock.json
 
       - run: npm --prefix design ci
+
+      - name: Verify Worker parser and relay recovery
+        run: node tools/test_worker.mjs
 
       - name: Source must stay pure ASCII
         # The published page cannot declare a charset, so a multi-byte

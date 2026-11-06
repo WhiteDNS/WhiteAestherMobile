@@ -12,6 +12,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.whitedns.whiteaesther.core.AppLocale
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import org.json.JSONObject
 
 private val Context.settingsDataStore by preferencesDataStore(
     name = "whiteaesther_settings",
@@ -92,12 +93,14 @@ class SettingsRepository(private val context: Context) {
             encryptedHello = preferences[ENCRYPTED_HELLO] ?: false,
             tlsOptions = TlsOptions.decode(preferences[TLS_OPTIONS]),
             chain = ChainSettings.decode(preferences[CHAIN]),
+            worker = preferences[WORKER]?.takeIf(String::isNotBlank)?.let { runCatching { WorkerDeployment.fromJson(JSONObject(it)) }.getOrNull() },
             splitTunnel = SplitTunnel.decode(preferences[SPLIT_TUNNEL]),
             lanSharing = preferences[LAN_SHARING] ?: false,
             lanUsername = preferences[LAN_USERNAME].orEmpty(),
             lanPassword = preferences[LAN_PASSWORD].orEmpty(),
             routeBlock = preferences[ROUTE_BLOCK].orEmpty(),
             routeDirect = preferences[ROUTE_DIRECT].orEmpty(),
+            routingPresets = RoutingPreset.decode(preferences[ROUTING_PRESETS]),
             killSwitch = preferences[KILL_SWITCH] ?: false,
             strictKillSwitch = preferences[STRICT_KILL_SWITCH] ?: false,
             wgKeepalive = preferences[WG_KEEPALIVE]?.coerceIn(0, 300) ?: 25,
@@ -148,12 +151,14 @@ class SettingsRepository(private val context: Context) {
             preferences[ENCRYPTED_HELLO] = settings.encryptedHello
             preferences[TLS_OPTIONS] = settings.tlsOptions.encode()
             preferences[CHAIN] = settings.chain.encode()
+            preferences[WORKER] = settings.worker?.toJson()?.toString().orEmpty()
             preferences[SPLIT_TUNNEL] = settings.splitTunnel.encode()
             preferences[LAN_SHARING] = settings.lanSharing
             preferences[LAN_USERNAME] = settings.lanUsername
             preferences[LAN_PASSWORD] = settings.lanPassword
             preferences[ROUTE_BLOCK] = settings.routeBlock
             preferences[ROUTE_DIRECT] = settings.routeDirect
+            preferences[ROUTING_PRESETS] = RoutingPreset.encode(settings.routingPresets)
             preferences[KILL_SWITCH] = settings.killSwitch
             preferences[STRICT_KILL_SWITCH] = settings.strictKillSwitch
             preferences[WG_KEEPALIVE] = settings.wgKeepalive
@@ -176,6 +181,7 @@ class SettingsRepository(private val context: Context) {
         private val PROXY_PORT = intPreferencesKey("proxy_port")
         private val TRANSPORT = stringPreferencesKey("transport")
         private val CARRIER = stringPreferencesKey("carrier")
+        private val WORKER = stringPreferencesKey("worker_connection")
         private val SECOND_CARRIER = stringPreferencesKey("second_carrier")
 
         /**
@@ -241,6 +247,7 @@ class SettingsRepository(private val context: Context) {
         val SPLIT_TUNNEL = stringPreferencesKey("split_tunnel")
         val ROUTE_BLOCK = stringPreferencesKey("route_block")
         val ROUTE_DIRECT = stringPreferencesKey("route_direct")
+        val ROUTING_PRESETS = stringPreferencesKey("routing_presets")
         val KILL_SWITCH = booleanPreferencesKey("kill_switch")
         val STRICT_KILL_SWITCH = booleanPreferencesKey("strict_kill_switch")
 

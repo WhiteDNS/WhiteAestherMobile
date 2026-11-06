@@ -23,6 +23,7 @@ import com.whitedns.whiteaesther.data.AppRelease
 import com.whitedns.whiteaesther.data.AppUpdateManager
 import com.whitedns.whiteaesther.data.UpdateDownload
 import com.whitedns.whiteaesther.data.AppSettings
+import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.EndpointMode
 import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.data.TorBridge
@@ -615,6 +616,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (chainJob?.isCompleted == false) return
         chainJob = viewModelScope.launch {
             mutableChainState.value = mutableChainState.value.copy(busy = true, error = null)
+            if (settings.carrier == Carrier.PROXY && !settings.automaticCarrier &&
+                EngineStatusStore.status.value.stage in setOf(EngineStage.IDLE, EngineStage.ERROR)) {
+                try {
+                    val preview = withContext(Dispatchers.IO) { chain.previewNodes(settings.chainForService()) }
+                    mutableChainState.value = ChainState(available = chain.isAvailable, nodes = preview.nodes, selected = preview.selected)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    mutableChainState.value = ChainState(available = chain.isAvailable, error = failure.message)
+                }
+                return@launch
+            }
             // Editing a subscription does not reconfigure a chain that is
             // already running, so the engine would answer with the previous
             // one's nodes. Reporting them as the new subscription's is what
@@ -664,6 +677,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // still what the user asked for, and the next connect honours it --
             // better than a screen that silently reverts.
             repository.save(settings.copy(chain = settings.chain.copy(node = node)))
+            if (EngineStatusStore.status.value.stage != EngineStage.CONNECTED) return@launch
             val failure = withContext(Dispatchers.IO) { chain.select(node) }
             val reported = withContext(Dispatchers.IO) { chain.nodes() }
             mutableChainState.value = ChainState(

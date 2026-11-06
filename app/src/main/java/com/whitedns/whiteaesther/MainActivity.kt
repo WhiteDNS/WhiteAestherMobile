@@ -27,9 +27,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import com.whitedns.whiteaesther.core.AppLocale
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EngineMode
+import com.whitedns.whiteaesther.data.Carrier
+import com.whitedns.whiteaesther.data.SettingsRepository
+import com.whitedns.whiteaesther.data.WorkerDeployment
 import com.whitedns.whiteaesther.service.AetherVpnService
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatus
@@ -378,6 +383,35 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestConnection(settings: AppSettings) {
+        if (!settings.automaticCarrier && settings.carrier == Carrier.WORKER) {
+            val deployments = runCatching { WorkerDeployment.saved(this) }.getOrDefault(emptyList())
+            val deployment = WorkerDeployment.pickReady(deployments, settings.worker?.key)
+            if (deployment == null) {
+                startActivity(Intent(this, WorkerSetupActivity::class.java)
+                    .putExtra("pick_worker", deployments.any { it.ready }))
+                return
+            }
+            val configured = deployment.configure(settings)
+            lifecycleScope.launch {
+                try {
+                    if (configured != settings) SettingsRepository(this@MainActivity).save(configured)
+                    requestConfiguredConnection(configured)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    EngineStatusStore.update(EngineStatus(EngineStage.ERROR, configured.mode, message = getString(R.string.worker_connection_failed)))
+                }
+            }
+            return
+        }
+        requestConfiguredConnection(settings)
+    }
+
+    private fun requestConfiguredConnection(settings: AppSettings) {
+        settings.standaloneError()?.let { error ->
+            EngineStatusStore.update(EngineStatus(EngineStage.ERROR, settings.mode, message = error))
+            return
+        }
         if (viewModel.endpointScannerState.value.operation != null) {
             EngineStatusStore.update(
                 EngineStatus(
@@ -388,13 +422,13 @@ class MainActivity : ComponentActivity() {
             )
             return
         }
-        settings.endpointValidationError()?.let { error ->
+        if (settings.automaticCarrier || settings.carrierPath.any { it.usesEngine }) settings.endpointValidationError()?.let { error ->
             EngineStatusStore.update(
                 EngineStatus(EngineStage.ERROR, settings.mode, message = getString(error)),
             )
             return
         }
-        settings.tlsOptions.validationError(settings.fragmentTls, settings.encryptedHello)?.let { error ->
+        if (settings.automaticCarrier || settings.carrierPath.any { it.usesEngine }) settings.tlsOptions.validationError(settings.fragmentTls, settings.encryptedHello)?.let { error ->
             EngineStatusStore.update(EngineStatus(EngineStage.ERROR, settings.mode, message = getString(error)))
             return
         }

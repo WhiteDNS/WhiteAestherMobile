@@ -121,6 +121,13 @@ captures IPv4, IPv6 and DNS, or exposes a loopback SOCKS5 proxy.
   links, and are dialled from inside the tunnel by default so neither your
   network nor the node learns the other'''s address
 
+The exit chain also offers automatic node selection. Routing rules include
+opt-in local-network, `.ir` and common ad/tracker presets. Psiphon's local
+adapter forwards UDP as well as TCP; Tor remains TCP only. The Cloudflare
+Workers screen can deploy and manage your own TCP proxy on Workers or Pages.
+See [connection improvements](docs/CONNECTION_IMPROVEMENTS.md) and
+[Worker setup](docs/WORKER_SETUP.md) for behavior and limits.
+
 ## Requirements
 
 Android 8.0 (API 26) or newer, on `arm64-v8a`, `armeabi-v7a` or `x86_64`.

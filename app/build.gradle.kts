@@ -218,6 +218,7 @@ android {
         // runs and only its bridge modes are unavailable, which is what a build
         // without them should do.
         getByName("main").jniLibs.srcDir(rootProject.file("native/tor/build"))
+        getByName("main").jniLibs.srcDir(rootProject.file("native/xray/build"))
     }
 }
 

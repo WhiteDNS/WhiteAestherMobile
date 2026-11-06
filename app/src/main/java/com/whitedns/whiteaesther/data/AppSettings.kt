@@ -121,6 +121,8 @@ enum class Carrier(val wireName: String, @StringRes val label: Int) {
      * asked.
      */
     TOR("tor", R.string.carrier_tor),
+    WORKER("worker", R.string.carrier_worker),
+    PROXY("proxy", R.string.carrier_proxy),
     ;
 
     /** True when the Aether engine is in the path at all. */
@@ -129,22 +131,14 @@ enum class Carrier(val wireName: String, @StringRes val label: Int) {
     /**
      * Whether this carrier's SOCKS5 listener forwards datagrams.
      *
-     * The listener, not the tunnel behind it, and the difference is the whole
-     * point. Psiphon's network carries UDP; the local proxy it hands us does
-     * not -- tunnel-core binds it through goptlib, whose SOCKS server answers
-     * CONNECT and refuses UDP ASSOCIATE outright, and Psiphon's own client
-     * reaches datagrams by a separate udpgw channel this app does not speak.
-     * Tor has no datagrams at any layer. Only the engine's own listener
-     * implements UDP ASSOCIATE, in socks.rs.
-     *
-     * Saying so is not a detail. A proxy declared as carrying UDP that cannot
-     * swallows every datagram instead of refusing it, and a phone experiences
-     * that as DNS and QUIC hanging while TCP works -- the hardest shape of
-     * broken to recognise. Declared false, mihomo refuses them and everything
-     * falls back to TCP within a round trip. DNS is unaffected either way: the
-     * chain resolves over DoH, which is TCP.
+     * Aether implements UDP ASSOCIATE itself. PsiphonSocksProxy adds it to
+     * Psiphon's stock TCP listener using the server's shared udpgw channel.
+     * Tor has no datagrams; declaring that explicitly lets clients fall back
+     * to TCP instead of sending packets into a listener that cannot carry them.
      */
-    val carriesUdp: Boolean get() = this == AETHER
+    val carriesUdp: Boolean get() = this != TOR && this != WORKER
+
+    val isStandalone: Boolean get() = this == WORKER || this == PROXY
 
     /**
      * True when the carrier needs mihomo to reach the interface.
@@ -382,6 +376,7 @@ data class AppSettings(
     // The second hop. Carried to the service beside the engine config rather
     // than inside it -- mihomo's settings are not the engine's business.
     val chain: ChainSettings = ChainSettings(),
+    val worker: WorkerDeployment? = null,
     /**
      * Offer the local SOCKS5 proxy to the rest of the network, not just this
      * phone.
@@ -416,6 +411,7 @@ data class AppSettings(
      * point and also the risk.
      */
     val routeDirect: String = "",
+    val routingPresets: Set<RoutingPreset> = emptySet(),
     /**
      * Hold a blocking interface up when the tunnel drops unexpectedly.
      *
@@ -553,7 +549,15 @@ data class AppSettings(
      * the English, and would have to be rewritten to say nothing useful the
      * moment a second language existed.
      */
-    fun routingCounts(): RuleCounts = RuleCounts(ruleCount(routeBlock), ruleCount(routeDirect))
+    fun effectiveRouteBlock(): String =
+        (listOf(routeBlock) + RoutingPreset.entries.filter { it in routingPresets }.map { it.block })
+            .filter(String::isNotBlank).joinToString("\n")
+
+    fun effectiveRouteDirect(): String =
+        (listOf(routeDirect) + RoutingPreset.entries.filter { it in routingPresets }.map { it.direct })
+            .filter(String::isNotBlank).joinToString("\n")
+
+    fun routingCounts(): RuleCounts = RuleCounts(ruleCount(effectiveRouteBlock()), ruleCount(effectiveRouteDirect()))
 
     private fun ruleCount(raw: String): Int =
         raw.split(NEWLINE, ',', ';')
@@ -632,12 +636,31 @@ data class AppSettings(
      * call site, so a caller cannot forget and leave a chain with no rules.
      */
     fun chainForService(): ChainSettings =
-        chain.copy(routeBlock = routeBlock, routeDirect = routeDirect)
+        chain.copy(routeBlock = effectiveRouteBlock(), routeDirect = effectiveRouteDirect(),
+            enabled = when {
+                automaticCarrier -> chain.enabled
+                carrier == Carrier.WORKER -> false
+                carrier == Carrier.PROXY -> true
+                else -> chain.enabled
+            },
+            throughTunnel = if (!automaticCarrier && carrier == Carrier.PROXY) false else chain.throughTunnel,
+            worker = if (!automaticCarrier && carrier == Carrier.PROXY) "" else chain.worker,
+            remoteDns = if (!automaticCarrier && carrier == Carrier.WORKER) worker?.options?.remoteDns.orEmpty() else "")
+
+    fun standaloneError(): String? = when {
+        automaticCarrier || !carrier.isStandalone -> null
+        secondCarrier != null -> "Select Worker or proxy profiles as an independent connection"
+        mode != EngineMode.TUN -> "Worker and proxy profiles require whole-device VPN mode"
+        carrier == Carrier.WORKER && worker?.ready != true -> "Deploy or select a Cloudflare Worker first"
+        carrier == Carrier.PROXY && !chainForService().hasNodes -> "Add a subscription or import a proxy profile first"
+        else -> null
+    }
 
     fun connectionChoiceChanged(previous: AppSettings): Boolean =
         carrier != previous.carrier || secondCarrier != previous.secondCarrier ||
             automaticCarrier != previous.automaticCarrier || transport != previous.transport ||
-            scanStrategy != previous.scanStrategy || chain.enabled != previous.chain.enabled
+            scanStrategy != previous.scanStrategy || chain.enabled != previous.chain.enabled ||
+            routingPresets != previous.routingPresets || worker != previous.worker
 
     fun toNativeJson(context: Context): String {
         val json = JSONObject()
@@ -651,8 +674,8 @@ data class AppSettings(
             .put("upstreamProxy", upstreamProxy.trim())
             .put("dnsServers", dnsServers.trim())
             .put("routeSniff", routeSniff)
-            .put("routeBlock", routeBlock.trim())
-            .put("routeDirect", routeDirect.trim())
+            .put("routeBlock", effectiveRouteBlock().trim())
+            .put("routeDirect", effectiveRouteDirect().trim())
             .put("autoReprovision", autoReprovision)
             .put("logLevel", engineLogLevel)
             .put("tlsGroups", tlsGroups.trim())
@@ -668,6 +691,7 @@ data class AppSettings(
             EndpointAddress.normalize(customEndpoint)?.let { json.put("peer", it) }
         }
         tlsOptions.applyTo(json)
+        if (carrier == Carrier.WORKER) worker?.let { json.put("worker", it.toJson()) }
         return json.toString()
     }
 }

@@ -15,6 +15,28 @@ class ChainConfigTest {
     )
 
     @Test
+    fun automaticSelectionUsesTheExistingProvidersAndNeverFallsBackToDirect() {
+        val config = ChainConfig.render(settings, socksPort = 1819)
+        assertTrue(config.contains("name: __whiteaesther_auto\n    type: url-test"))
+        assertTrue(config.contains("proxies: [__whiteaesther_auto]"))
+        assertTrue(config.contains("empty-fallback: REJECT"))
+        assertTrue(config.contains("tolerance: 100"))
+        assertTrue(config.contains("https://www.gstatic.com/generate_204"))
+        assertTrue(config.endsWith("  - MATCH,exit\n"))
+    }
+
+    @Test
+    fun automaticSelectionExcludesHiddenNamesAsLiteralWholeNames() {
+        val config = ChainConfig.render(
+            settings.copy(hiddenNodes = listOf("node.+(one)", "node|two")),
+            socksPort = 1819,
+        )
+        assertTrue(config.contains("exclude-filter:"))
+        assertTrue(config.contains("node\\\\.\\\\+\\\\(one\\\\)"))
+        assertTrue(config.contains("node\\\\|two"))
+    }
+
+    @Test
     fun everySourceIsDialledThroughTheTunnel() {
         val config = ChainConfig.render(settings, socksPort = 1819)
 
@@ -29,6 +51,16 @@ class ChainConfigTest {
                     "server: 127.0.0.1, port: 1819, udp: true}",
             ),
         )
+    }
+
+    @Test
+    fun managedWorkerIsASeparateFileProviderAndSurvivesStorage() {
+        val worker = ChainSettings(enabled = true, worker = "{\"proxies\":[]}")
+        assertTrue(worker.hasNodes)
+        assertEquals(worker, ChainSettings.decode(worker.encode()))
+        val config = ChainConfig.render(worker, socksPort = null)
+        assertTrue(config.contains("path: ./providers/worker.yaml"))
+        assertTrue(config.contains("use: [worker]"))
     }
 
     @Test
