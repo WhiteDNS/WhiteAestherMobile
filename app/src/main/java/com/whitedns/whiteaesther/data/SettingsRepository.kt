@@ -79,7 +79,7 @@ class SettingsRepository(private val context: Context) {
             torBridge = enumValueOrDefault(preferences[TOR_BRIDGE], TorBridge.NONE),
             torBridges = preferences[TOR_BRIDGES].orEmpty(),
             scanStrategy = enumValueOrDefault(preferences[SCAN], ScanStrategy.BALANCED),
-            dualStack = preferences[DUAL_STACK] ?: true,
+            addresses = AddressFamily.fromStored(preferences[ADDRESSES], preferences[DUAL_STACK]),
             validationEnabled = preferences[VALIDATION] ?: true,
             noizeProfile = preferences[NOIZE] ?: "firewall",
             endpointMode = endpointMode,
@@ -138,7 +138,9 @@ class SettingsRepository(private val context: Context) {
             preferences[TOR_BRIDGE] = settings.torBridge.name
             preferences[TOR_BRIDGES] = settings.torBridges
             preferences[SCAN] = settings.scanStrategy.name
-            preferences[DUAL_STACK] = settings.dualStack
+            preferences[ADDRESSES] = settings.addresses.wireName
+            // Kept so an older build reading this store still avoids IPv6 when asked to.
+            preferences[DUAL_STACK] = settings.addresses != AddressFamily.V4
             preferences[VALIDATION] = settings.validationEnabled
             preferences[NOIZE] = settings.noizeProfile
             preferences[ENDPOINT_MODE] = settings.endpointMode.name
@@ -230,6 +232,7 @@ class SettingsRepository(private val context: Context) {
         val TOR_BRIDGES = stringPreferencesKey("tor_bridges")
         val SCAN = stringPreferencesKey("scan")
         val DUAL_STACK = booleanPreferencesKey("dual_stack")
+        val ADDRESSES = stringPreferencesKey("addresses")
         val VALIDATION = booleanPreferencesKey("validation")
         val NOIZE = stringPreferencesKey("noize")
         val ENDPOINT_MODE = stringPreferencesKey("endpoint_mode")

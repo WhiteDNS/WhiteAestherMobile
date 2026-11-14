@@ -202,6 +202,30 @@ enum class ScanStrategy(val wireName: String, @StringRes val label: Int) {
     IRONCLAD("ironclad", R.string.scan_ironclad),
 }
 
+/**
+ * Which Cloudflare addresses the engine dials. Not what apps see inside the
+ * tunnel: the interface carries both families whatever this says.
+ */
+enum class AddressFamily(val wireName: String, @StringRes val label: Int) {
+    DUAL("both", R.string.ipv4_ipv6),
+    V4("v4", R.string.ipv4_only),
+    V6("v6", R.string.ipv6_only),
+    ;
+
+    companion object {
+        fun fromWire(value: String?): AddressFamily? = when (value?.trim()?.lowercase()) {
+            "both", "dual" -> DUAL
+            "v4", "4", "ipv4" -> V4
+            "v6", "6", "ipv6" -> V6
+            else -> null
+        }
+
+        /** Saved before there were three choices: `dual_stack` false meant IPv4 only. */
+        fun fromStored(addresses: String?, dualStack: Boolean?): AddressFamily =
+            fromWire(addresses) ?: if (dualStack == false) V4 else DUAL
+    }
+}
+
 enum class EndpointMode(@StringRes val label: Int) {
     AUTOMATIC(R.string.protocol_automatic),
     CUSTOM_FIRST(R.string.endpoint_custom_first),
@@ -349,7 +373,7 @@ data class AppSettings(
     // that blocks UDP spent minutes failing before anything else was tried.
     val transport: TunnelProtocol = TunnelProtocol.AUTO,
     val scanStrategy: ScanStrategy = ScanStrategy.BALANCED,
-    val dualStack: Boolean = true,
+    val addresses: AddressFamily = AddressFamily.DUAL,
     val validationEnabled: Boolean = true,
     val noizeProfile: String = "firewall",
     val endpointMode: EndpointMode = EndpointMode.AUTOMATIC,
@@ -591,6 +615,12 @@ data class AppSettings(
         endpointMode == EndpointMode.AUTOMATIC -> null
         customEndpoint.isBlank() -> R.string.endpoint_error_empty
         EndpointAddress.normalize(customEndpoint) == null -> R.string.endpoint_error_malformed
+        // An IPv6 address normalizes into brackets; anything else is IPv4 or a name.
+        addresses == AddressFamily.V6 && EndpointAddress.normalize(customEndpoint)?.let {
+            !it.startsWith("[") && it.substringBeforeLast(':').all { c -> c.isDigit() || c == '.' }
+        } == true -> R.string.endpoint_error_family
+        addresses == AddressFamily.V4 && EndpointAddress.normalize(customEndpoint)?.startsWith("[") == true ->
+            R.string.endpoint_error_family
         else -> null
     }
 
@@ -659,7 +689,8 @@ data class AppSettings(
     fun connectionChoiceChanged(previous: AppSettings): Boolean =
         carrier != previous.carrier || secondCarrier != previous.secondCarrier ||
             automaticCarrier != previous.automaticCarrier || transport != previous.transport ||
-            scanStrategy != previous.scanStrategy || chain.enabled != previous.chain.enabled ||
+            scanStrategy != previous.scanStrategy || addresses != previous.addresses ||
+            chain.enabled != previous.chain.enabled ||
             routingPresets != previous.routingPresets || worker != previous.worker
 
     fun toNativeJson(context: Context): String {
@@ -680,7 +711,7 @@ data class AppSettings(
             .put("logLevel", engineLogLevel)
             .put("tlsGroups", tlsGroups.trim())
             .put("scanMode", scanStrategy.wireName)
-            .put("ipScan", if (dualStack) "both" else "v4")
+            .put("ipScan", addresses.wireName)
             .put("transport", transport.wireName)
             .put("noize", noizeProfile)
             .put("validationEnabled", validationEnabled)

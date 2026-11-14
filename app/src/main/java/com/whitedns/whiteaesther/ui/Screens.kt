@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalContext
 import android.content.Intent
+import com.whitedns.whiteaesther.data.AddressFamily
 import com.whitedns.whiteaesther.WorkerSetupActivity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
@@ -569,7 +570,7 @@ fun HomeScreen(
                     Divider()
                     FactRow(stringResource(R.string.fact_coverage), settings.coverageSummary())
                     Divider()
-                    FactRow(stringResource(R.string.fact_addresses), if (settings.dualStack) stringResource(R.string.ipv4_ipv6) else stringResource(R.string.ipv4_only))
+                    FactRow(stringResource(R.string.fact_addresses), stringResource(settings.addresses.label))
                     if (settings.mode == EngineMode.PROXY) {
                         Divider()
                         FactRow(stringResource(R.string.local_proxy), settings.proxyBindLabel(), mono = true)
@@ -1758,12 +1759,22 @@ fun TrafficScreen(
         AetherCard {
             CardHead(stringResource(R.string.addresses), stringResource(R.string.turn_off_ipv6_if_a_network_handles))
             Box(Modifier.padding(11.dp)) {
-                SegGroup(
-                    options = listOf(true, false),
-                    selected = settings.dualStack,
-                    label = { if (it) stringResource(R.string.ipv4_ipv6) else stringResource(R.string.ipv4_only) },
-                    onSelect = { onSettingsChange(settings.copy(dualStack = it)) },
-                )
+                Column {
+                    SegGroup(
+                        options = AddressFamily.entries,
+                        selected = settings.addresses,
+                        label = { stringResource(it.label) },
+                        onSelect = { onSettingsChange(settings.copy(addresses = it)) },
+                    )
+                    if (settings.addresses == AddressFamily.V6 && !networkHasGlobalIpv6()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.ipv6_only_no_ipv6_here),
+                            style = AetherTheme.type.Small,
+                            color = AetherTheme.colors.text2,
+                        )
+                    }
+                }
             }
         }
 
@@ -3032,7 +3043,7 @@ private fun buildReport(
         appendLine(
             "settings profile=${settings.activeProfile().name.lowercase()} transport=${settings.transport.wireName} " +
                 "scan=${settings.scanStrategy.wireName} coverage=${settings.mode.wireName} " +
-                "noize=${settings.noizeProfile} bind=${settings.proxyBindLabel()} lanAuth=${settings.lanCredentialsUsable()} dualStack=${settings.dualStack}",
+                "noize=${settings.noizeProfile} bind=${settings.proxyBindLabel()} lanAuth=${settings.lanCredentialsUsable()} addresses=${settings.addresses.wireName}",
         )
     }
     if (includeEvents) {
@@ -3045,5 +3056,30 @@ private fun buildReport(
     if (redact) {
         appendLine()
         append("# IP addresses replaced")
+    }
+}
+
+/**
+ * Whether the network under the tunnel has a global IPv6 address. Read from
+ * the system, not guessed: a VPN interface is skipped, since this app's own
+ * would always say yes.
+ */
+@Composable
+private fun networkHasGlobalIpv6(): Boolean {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return androidx.compose.runtime.remember(context) {
+        val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
+        connectivity?.allNetworks.orEmpty().any { network ->
+            val capabilities = connectivity?.getNetworkCapabilities(network)
+            capabilities != null &&
+                capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                !capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) &&
+                connectivity.getLinkProperties(network)?.linkAddresses.orEmpty().any { link ->
+                    val address = link.address
+                    address is java.net.Inet6Address && !address.isLinkLocalAddress &&
+                        !address.isSiteLocalAddress && !address.isLoopbackAddress &&
+                        (address.address[0].toInt() and 0xFE) != 0xFC
+                }
+        }
     }
 }

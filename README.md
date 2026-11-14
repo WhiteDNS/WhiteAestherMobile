@@ -87,8 +87,10 @@ for the full diagnostic history.
 | `Connected to a different endpoint` | Your pinned address failed and fallback substituted a working one. |
 
 Worth trying, in order: choose **Strict network** under **Methods → Advanced**; set
-**Addresses** to *IPv4 only* under **Tools** if the network handles IPv6 badly;
-turn **Obfuscation** up to *Aggressive*.
+**Addresses** to *IPv4 only* under **Tools** if the network handles IPv6 badly,
+or to *IPv6 only* if its IPv6 is the cleaner path (this picks which Cloudflare
+addresses the engine dials, not what apps see in the tunnel); turn
+**Obfuscation** up to *Aggressive*.
 
 Under **Logs** you can raise the detail level, reproduce the
 problem, and send a report. It shows you the exact text before anything is sent,

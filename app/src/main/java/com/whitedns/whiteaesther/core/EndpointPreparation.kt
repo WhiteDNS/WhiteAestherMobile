@@ -65,7 +65,7 @@ class AutomaticEndpointPreparation(
             return AppSettings(
                 transport = TunnelProtocol.entries.firstOrNull { it.wireName == json.optString("transport") } ?: TunnelProtocol.H2,
                 scanStrategy = ScanStrategy.entries.firstOrNull { it.wireName == json.optString("scanMode") } ?: ScanStrategy.BALANCED,
-                dualStack = json.optString("ipScan", "both") !in listOf("v4", "4", "ipv4"),
+                addresses = AddressFamily.fromWire(json.optString("ipScan", "both")) ?: AddressFamily.DUAL,
                 noizeProfile = json.optString("noize", "firewall"),
                 fragmentTls = json.optBoolean("fragmentTls"),
                 encryptedHello = json.optBoolean("encryptedHello"),
@@ -82,7 +82,7 @@ class AutomaticEndpointPreparation(
                 .put("fragmentTls", settings.fragmentTls).put("encryptedHello", settings.encryptedHello)
                 .put("tlsGroups", settings.tlsGroups).put("noize", settings.noizeProfile)
             if (json.optString("ipScan") !in listOf("v6", "6", "ipv6")) {
-                json.put("ipScan", if (settings.dualStack) "both" else "v4")
+                json.put("ipScan", settings.addresses.wireName)
             }
             json.remove("peer")
             json.put("peerFallback", false)

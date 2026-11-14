@@ -50,6 +50,9 @@
     <string name="measured_on_the_encrypted_side_which_is">Measured on the encrypted side, which is what your data plan is billed for, so it runs a little above what an app reports.</string>
     <string name="ipv4_ipv6">IPv4 + IPv6</string>
     <string name="ipv4_only">IPv4 only</string>
+    <string name="ipv6_only">IPv6 only</string>
+    <string name="ipv6_only_no_ipv6_here">This network has no IPv6 address, so IPv6 only will not connect here.</string>
+    <string name="endpoint_error_family">The custom endpoint is not in the address family chosen under Addresses.</string>
     <string name="local_proxy">Local proxy</string>
     <string name="live_values_change_them_under_routes_and">Live values. Change them under Routes and Traffic.</string>
     <string name="what_will_be_used_when_you_connect">What will be used when you connect. Change it under Routes and Traffic.</string>
@@ -127,7 +130,7 @@
     <string name="proxy_only">Proxy only</string>
     <string name="just_apps_you_point_at_the_local">Just apps you point at the local proxy.</string>
     <string name="addresses">Addresses</string>
-    <string name="turn_off_ipv6_if_a_network_handles">Turn off IPv6 if a network handles it badly.</string>
+    <string name="turn_off_ipv6_if_a_network_handles">Which Cloudflare addresses the engine dials. Apps inside the tunnel still get both.</string>
     <string name="obfuscation_blocking_port">Obfuscation · Blocking · Port</string>
     <string name="obfuscation">Obfuscation</string>
     <string name="makes_tunnel_traffic_harder_to_fingerprint_costs">Makes tunnel traffic harder to fingerprint. Costs a little speed.</string>

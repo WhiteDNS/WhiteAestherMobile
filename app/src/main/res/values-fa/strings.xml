@@ -48,6 +48,9 @@
     <string name="measured_on_the_encrypted_side_which_is">در سمت رمزگذاری‌شده اندازه گرفته می‌شود، یعنی همان چیزی که بستهٔ اینترنت شما بابتش حساب می‌کند؛ برای همین کمی بالاتر از عددی است که خود برنامه‌ها گزارش می‌دهند.</string>
     <string name="ipv4_ipv6">IPv4 + IPv6</string>
     <string name="ipv4_only">فقط IPv4</string>
+    <string name="ipv6_only">فقط IPv6</string>
+    <string name="ipv6_only_no_ipv6_here">این شبکه آدرس IPv6 ندارد، پس با «فقط IPv6» اینجا وصل نمی‌شود.</string>
+    <string name="endpoint_error_family">نقطهٔ پایانی سفارشی با نوع آدرسی که در «آدرس‌ها» انتخاب شده نمی‌خواند.</string>
     <string name="local_proxy">پروکسی محلی</string>
     <string name="live_values_change_them_under_routes_and">مقادیر زنده. از بخش مسیرها و ترافیک تغییرشان دهید.</string>
     <string name="what_will_be_used_when_you_connect">آنچه هنگام اتصال استفاده می‌شود. از بخش مسیرها و ترافیک تغییرش دهید.</string>
@@ -125,7 +128,7 @@
     <string name="proxy_only">فقط پروکسی</string>
     <string name="just_apps_you_point_at_the_local">فقط برنامه‌هایی که خودتان به پروکسی محلی وصل کنید.</string>
     <string name="addresses">آدرس‌ها</string>
-    <string name="turn_off_ipv6_if_a_network_handles">اگر شبکه‌ای با IPv6 بد رفتار می‌کند، خاموشش کنید.</string>
+    <string name="turn_off_ipv6_if_a_network_handles">موتور با کدام آدرس‌های Cloudflare وصل شود. برنامه‌های داخل تونل همچنان هر دو را دارند.</string>
     <string name="obfuscation_blocking_port">مبهم‌سازی · مسدودسازی · پورت</string>
     <string name="obfuscation">مبهم‌سازی</string>
     <string name="makes_tunnel_traffic_harder_to_fingerprint_costs">شناسایی ترافیک تونل را سخت‌تر می‌کند. کمی از سرعت کم می‌کند.</string>

@@ -1,5 +1,6 @@
 package com.whitedns.whiteaesther.core
 
+import com.whitedns.whiteaesther.data.AddressFamily
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EndpointMode
 import com.whitedns.whiteaesther.data.ScanStrategy
@@ -20,7 +21,7 @@ data class EndpointProbeProfile(
     val tlsOptions: TlsOptions = TlsOptions(),
     val tlsGroups: String = "",
     val noizeProfile: String = "firewall",
-    val dualStack: Boolean = true,
+    val addresses: AddressFamily = AddressFamily.DUAL,
 ) {
     fun applyTo(settings: AppSettings): AppSettings = settings.copy(
         transport = transport,
@@ -29,7 +30,7 @@ data class EndpointProbeProfile(
         tlsOptions = tlsOptions.copy(fragmentMode = fragmentMode),
         tlsGroups = tlsGroups,
         noizeProfile = noizeProfile,
-        dualStack = dualStack,
+        addresses = addresses,
     )
 
     companion object {
@@ -37,7 +38,7 @@ data class EndpointProbeProfile(
             settings.transport, settings.fragmentTls, settings.encryptedHello,
             settings.tlsOptions.fragmentMode,
             settings.tlsOptions.copy(fragmentMode = TlsFragmentMode.AUTOMATIC),
-            settings.tlsGroups, settings.noizeProfile, settings.dualStack,
+            settings.tlsGroups, settings.noizeProfile, settings.addresses,
         )
     }
 }

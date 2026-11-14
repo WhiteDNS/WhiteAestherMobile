@@ -3,6 +3,7 @@ package com.whitedns.whiteaesther
 import android.app.Application
 import android.os.FileObserver
 import androidx.annotation.StringRes
+import com.whitedns.whiteaesther.data.AddressFamily
 import com.whitedns.whiteaesther.core.AppLocale
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -347,11 +348,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *
      * Read from the repository rather than from [settings]. That flow is a
      * stateIn holding AppSettings() until DataStore answers, and this runs from
-     * onResume -- early enough to see the placeholder, whose dualStack is true.
+     * onResume -- early enough to see the placeholder, which allows both families.
      * The address lookup was therefore deciding by the default instead of by
      * the user, and kept showing the IPv6 address it was meant to discard.
      */
-    private suspend fun ipv4Only(): Boolean = !repository.settings.first().dualStack
+    private suspend fun ipv4Only(): Boolean = repository.settings.first().addresses == AddressFamily.V4
 
     /**
      * Whether a second hop is carrying this session's traffic.

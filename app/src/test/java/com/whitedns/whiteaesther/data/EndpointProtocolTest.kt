@@ -1,5 +1,6 @@
 package com.whitedns.whiteaesther.data
 
+import com.whitedns.whiteaesther.data.AddressFamily
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -30,7 +31,7 @@ class EndpointProtocolTest {
         // the user chose is the one the fresh search should probe with.
         val cleared = pinned.copy(transport = TunnelProtocol.H2).withoutPinnedEndpoint()
         assertEquals(TunnelProtocol.H2, cleared.transport)
-        assertEquals(pinned.copy(transport = TunnelProtocol.H2).dualStack, cleared.dualStack)
+        assertEquals(pinned.copy(transport = TunnelProtocol.H2).addresses, cleared.addresses)
     }
 
     @Test

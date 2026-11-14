@@ -13,7 +13,12 @@ class EndpointDiscoveryMemory(context: Context) {
 
     private fun key(network: String, settings: AppSettings): String {
         val material = listOf(
-            network, settings.transport.endpointFamily.name, settings.dualStack.toString(),
+            // The two older choices keep their original keys, so saved results survive.
+            network, settings.transport.endpointFamily.name, when (settings.addresses) {
+                AddressFamily.DUAL -> "true"
+                AddressFamily.V4 -> "false"
+                AddressFamily.V6 -> "v6"
+            },
             settings.noizeProfile, settings.tlsGroups, settings.tlsOptions.encode(),
         ).joinToString("\u0000")
         return MessageDigest.getInstance("SHA-256").digest(material.toByteArray())
