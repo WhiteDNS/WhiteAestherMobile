@@ -3,6 +3,7 @@ package com.whitedns.whiteaesther.core
 import android.content.Context
 import android.os.Build
 import com.whitedns.whiteaesther.data.ChainSettings
+import com.whitedns.whiteaesther.data.RuleListStore
 import com.whitedns.whiteaesther.service.EngineLog
 import com.whitedns.whiteaesther.service.LogLevel
 import org.json.JSONObject
@@ -107,7 +108,7 @@ class ChainController(private val context: Context) {
             } else {
                 home.mkdirs()
                 File(home, "config.yaml").writeText(
-                    ChainConfig.renderCarrier(settings, socksPort, udp, auth),
+                    ChainConfig.renderCarrier(RuleListStore.of(context).withImported(settings), socksPort, udp, auth),
                 )
             }
 
@@ -328,7 +329,9 @@ class ChainController(private val context: Context) {
         home.mkdirs()
         val providers = File(home, "providers")
         providers.mkdirs()
-        File(home, "config.yaml").writeText(ChainConfig.render(settings, socksPort, proxyName, auth))
+        File(home, "config.yaml").writeText(
+            ChainConfig.render(RuleListStore.of(context).withImported(settings), socksPort, proxyName, auth),
+        )
 
         // Cached node lists for subscriptions the user has since removed. They
         // are not merely clutter: mihomo keys its own state by provider name, so

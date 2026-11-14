@@ -2262,7 +2262,7 @@ private fun SettingsPlainField(
  * value between keystrokes and cannot be typed into.
  */
 @Composable
-private fun PlainField(
+internal fun PlainField(
     value: String,
     tag: String,
     modifier: Modifier = Modifier,
@@ -2336,6 +2336,7 @@ fun RoutingRulesScreen(
             }
         }
         Spacer(Modifier.height(12.dp))
+        ImportedRuleLists(settings, onSettingsChange)
 
         if (!settings.routeSniff) {
             AetherCard {

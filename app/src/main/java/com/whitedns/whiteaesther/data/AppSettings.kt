@@ -437,6 +437,11 @@ data class AppSettings(
     val routeDirect: String = "",
     val routingPresets: Set<RoutingPreset> = emptySet(),
     /**
+     * Which imported rule lists are on, as RuleListStore.signature. The rules
+     * themselves stay in their files; this is here so a change reconnects.
+     */
+    val importedRulesVersion: String = "",
+    /**
      * Hold a blocking interface up when the tunnel drops unexpectedly.
      *
      * Without it, a tunnel that dies takes its interface with it and the phone
@@ -699,7 +704,8 @@ data class AppSettings(
             automaticCarrier != previous.automaticCarrier || transport != previous.transport ||
             scanStrategy != previous.scanStrategy || addresses != previous.addresses ||
             chain.enabled != previous.chain.enabled ||
-            routingPresets != previous.routingPresets || worker != previous.worker
+            routingPresets != previous.routingPresets || worker != previous.worker ||
+            importedRulesVersion != previous.importedRulesVersion
 
     fun toNativeJson(context: Context): String {
         val json = JSONObject()

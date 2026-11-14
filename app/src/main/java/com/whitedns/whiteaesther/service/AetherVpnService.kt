@@ -880,7 +880,13 @@ class AetherVpnService : VpnService() {
             // leaves the interface registered with the system after the session
             // it belonged to has ended.
             val result = withContext(Dispatchers.IO) {
-                NativeAetherBridge.run(engineConfig, peer.orEmpty(), tun?.detachFd() ?: -1, listener)
+                // The engine routes this session itself, so it takes the imported lists here.
+                NativeAetherBridge.run(
+                    com.whitedns.whiteaesther.data.RuleListStore.of(this@AetherVpnService).mergeInto(engineConfig),
+                    peer.orEmpty(),
+                    tun?.detachFd() ?: -1,
+                    listener,
+                )
             }
             tun?.close()
             clearSocketProtector(sessionGeneration)

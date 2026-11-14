@@ -101,6 +101,7 @@ class SettingsRepository(private val context: Context) {
             routeBlock = preferences[ROUTE_BLOCK].orEmpty(),
             routeDirect = preferences[ROUTE_DIRECT].orEmpty(),
             routingPresets = RoutingPreset.decode(preferences[ROUTING_PRESETS]),
+            importedRulesVersion = preferences[ROUTE_LISTS].orEmpty(),
             killSwitch = preferences[KILL_SWITCH] ?: false,
             strictKillSwitch = preferences[STRICT_KILL_SWITCH] ?: false,
             wgKeepalive = preferences[WG_KEEPALIVE]?.coerceIn(0, 300) ?: 25,
@@ -161,6 +162,7 @@ class SettingsRepository(private val context: Context) {
             preferences[ROUTE_BLOCK] = settings.routeBlock
             preferences[ROUTE_DIRECT] = settings.routeDirect
             preferences[ROUTING_PRESETS] = RoutingPreset.encode(settings.routingPresets)
+            preferences[ROUTE_LISTS] = settings.importedRulesVersion
             preferences[KILL_SWITCH] = settings.killSwitch
             preferences[STRICT_KILL_SWITCH] = settings.strictKillSwitch
             preferences[WG_KEEPALIVE] = settings.wgKeepalive
@@ -250,6 +252,7 @@ class SettingsRepository(private val context: Context) {
         val SPLIT_TUNNEL = stringPreferencesKey("split_tunnel")
         val ROUTE_BLOCK = stringPreferencesKey("route_block")
         val ROUTE_DIRECT = stringPreferencesKey("route_direct")
+        val ROUTE_LISTS = stringPreferencesKey("route_lists_version")
         val ROUTING_PRESETS = stringPreferencesKey("routing_presets")
         val KILL_SWITCH = booleanPreferencesKey("kill_switch")
         val STRICT_KILL_SWITCH = booleanPreferencesKey("strict_kill_switch")
