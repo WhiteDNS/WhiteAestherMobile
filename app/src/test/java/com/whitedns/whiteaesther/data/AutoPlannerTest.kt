@@ -252,7 +252,7 @@ class AutoPlannerTest {
     fun theRaceTakesItsFramingOrderFromTheOneRule() {
         for (mobile in listOf(false, true)) {
             for (proven in listOf(null, "h2", "h3")) {
-                val expected = AutoPlanner.framingOrder(proven, mobile)
+                val expected = AutoPlanner.framingOrder(proven)
                 val lane = AutoPlanner.aetherLane(
                     everything.copy(provenFraming = proven, onMobileData = mobile),
                 )
@@ -277,8 +277,8 @@ class AutoPlannerTest {
      */
     @Test
     fun whatConnectedHereLastLeadsWhateverTheNetworkIs() {
-        assertEquals(listOf("h2", "h3"), AutoPlanner.framingOrder("h2", onMobileData = false))
-        assertEquals(listOf("h3", "h2"), AutoPlanner.framingOrder("h3", onMobileData = true))
+        assertEquals(listOf("h2", "h3"), AutoPlanner.framingOrder("h2"))
+        assertEquals(listOf("h3", "h2"), AutoPlanner.framingOrder("h3"))
     }
 
     /**
@@ -286,8 +286,8 @@ class AutoPlannerTest {
      */
     @Test
     fun withNothingProvenH2LeadsOnEveryNetwork() {
-        assertEquals(listOf("h2", "h3"), AutoPlanner.framingOrder(null, onMobileData = true))
-        assertEquals(listOf("h2", "h3"), AutoPlanner.framingOrder(null, onMobileData = false))
+        assertEquals(listOf("h2", "h3"), AutoPlanner.framingOrder(null))
+        assertEquals(listOf("h2", "h3"), AutoPlanner.framingOrder(null))
     }
 
     /** Both framings are always offered, whichever leads. */
@@ -298,7 +298,7 @@ class AutoPlannerTest {
                 assertEquals(
                     "proven=$proven mobile=$mobile",
                     setOf("h2", "h3"),
-                    AutoPlanner.framingOrder(proven, mobile).toSet(),
+                    AutoPlanner.framingOrder(proven).toSet(),
                 )
             }
         }

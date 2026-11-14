@@ -31,7 +31,6 @@ import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.data.TunnelProtocol
 import com.whitedns.whiteaesther.data.SettingsRepository
 import com.whitedns.whiteaesther.data.AutoPlanner
-import com.whitedns.whiteaesther.data.NetworkKey
 import com.whitedns.whiteaesther.data.UpdateChecker
 import com.whitedns.whiteaesther.service.NetworkIdentity
 import com.whitedns.whiteaesther.service.AetherVpnService
@@ -540,14 +539,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *
      * The same question the connect path asks, answered in the same place. The
      * scanner has no memory of its own -- what connected last is the service's
-     * to know -- so it asks with what it has, which is the kind of network the
-     * phone is on. Getting only that half right still beats a third rule.
+     * to know -- so it asks with nothing proven, and gets the same answer the
+     * connect path would. Asking here rather than writing H2 down keeps it one rule.
      */
     private fun scanFirstFraming(): TunnelProtocol {
-        val cellular = runCatching {
-            NetworkKey.isCellular(NetworkIdentity.current(getApplication()).key.orEmpty())
-        }.getOrDefault(false)
-        return when (AutoPlanner.framingOrder(provenFraming = null, onMobileData = cellular).first()) {
+        return when (AutoPlanner.framingOrder(provenFraming = null).first()) {
             "h2" -> TunnelProtocol.H2
             else -> TunnelProtocol.H3
         }

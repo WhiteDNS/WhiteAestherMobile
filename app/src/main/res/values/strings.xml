@@ -168,7 +168,7 @@
     <string name="fixed_in_the_engine_not_configurable_yet">Fixed in the engine. Not configurable yet.</string>
     <string name="default_padding_tuned_for_ordinary_filtering">Default. Padding tuned for ordinary filtering.</string>
     <string name="heavier_padding_for_networks_that_inspect_closel">Heavier padding for networks that inspect closely.</string>
-    <string name="no_obfuscation_faster_but_easier_to_block">No obfuscation. Faster, but easier to block.</string>
+    <string name="no_obfuscation_faster_but_easier_to_block">No obfuscation. Faster where nothing inspects the tunnel; on a filtered network it is the setting most likely to stop the connection working.</string>
     <string name="routes_rules">Routing rules</string>
     <string name="everything_not_named_here_goes_through_the">Everything not named here goes through the tunnel.</string>
     <string name="domain_rules_will_not_match">Domain rules will not match</string>

@@ -124,7 +124,9 @@ captures IPv4, IPv6 and DNS, or exposes a loopback SOCKS5 proxy.
   network nor the node learns the other'''s address
 
 The exit chain also offers automatic node selection. Routing rules include
-opt-in local-network, `.ir` and common ad/tracker presets. Psiphon's local
+opt-in local-network, `.ir` and common ad/tracker presets, and lists imported
+from a file on the phone (plain names, hosts files, CIDRs or Clash rule
+lists), each reported with what was left out and why. Psiphon's local
 adapter forwards UDP as well as TCP; Tor remains TCP only. The Cloudflare
 Workers screen can deploy and manage your own TCP proxy on Workers or Pages.
 See [connection improvements](docs/CONNECTION_IMPROVEMENTS.md) and

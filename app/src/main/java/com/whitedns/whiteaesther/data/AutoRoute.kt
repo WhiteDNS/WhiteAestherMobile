@@ -321,14 +321,6 @@ object AutoPlanner {
     fun fitsAgain(route: AutoRoute, remainingMs: Long): Boolean = budgetMs(route) <= remainingMs
 
     /**
-     * The longest one pass of [plan] can take.
-     *
-     * Lanes run beside each other, so a pass lasts as long as its slowest lane
-     * and not as long as all of them added up. Computed rather than written
-     * down, because a number written down drifts the moment a rung is added and
-     * the thing it guards is how long a person is asked to wait.
-     */
-    /**
      * Whether another pass can *finish* inside what this search is allowed.
      *
      * Not whether the ceiling has already been passed, which is the question
@@ -344,6 +336,14 @@ object AutoPlanner {
     fun hasRoomForAnotherPass(spentMs: Long, passMs: Long, ceilingMs: Long): Boolean =
         spentMs + passMs <= ceilingMs
 
+    /**
+     * The longest one pass of [plan] can take.
+     *
+     * Lanes run beside each other, so a pass lasts as long as its slowest lane
+     * and not as long as all of them added up. Computed rather than written
+     * down, because a number written down drifts the moment a rung is added and
+     * the thing it guards is how long a person is asked to wait.
+     */
     fun longestPassMs(remembered: AutoRoute?, options: AutoOptions): Long =
         plan(remembered, options).sumOf { step ->
             when (step) {
@@ -403,16 +403,6 @@ object AutoPlanner {
     }
 
     /**
-     * The engine's runs in a race, in the order worth trying them.
-     *
-     * Quick searches first, one per framing, then the full ones: a network
-     * that carries either framing at all usually shows it within a quick
-     * search. The framing that connected last goes first; with nothing to go
-     * on, H2 first on mobile data -- where operators have dropped QUIC for
-     * weeks at a time -- and H3 first elsewhere, which is what the Wi-Fi in
-     * that log needed.
-     */
-    /**
      * The order to try the MASQUE framings in, and the only place that decides.
      *
      * There were three answers to this and they disagreed: the race preferred
@@ -430,19 +420,12 @@ object AutoPlanner {
      * nothing about this one, and treating it as evidence is how a phone that
      * connected at home opens every session on mobile data with the wrong guess.
      */
-    @Suppress("UNUSED_PARAMETER")
-    fun framingOrder(provenFraming: String?, onMobileData: Boolean): List<String> {
-        val h3First = when (provenFraming) {
-            "h3" -> true
-            "h2" -> false
-            else -> false
-        }
-        return if (h3First) listOf("h3", "h2") else listOf("h2", "h3")
-    }
+    fun framingOrder(provenFraming: String?): List<String> =
+        if (provenFraming == "h3") listOf("h3", "h2") else listOf("h2", "h3")
 
     fun aetherLane(options: AutoOptions, remembered: AutoRoute? = null): List<AutoRoute> {
         val h3First =
-            framingOrder(options.provenFraming, options.onMobileData).first() == "h3"
+            framingOrder(options.provenFraming).first() == "h3"
         // Nested MASQUE last, always. It is the slowest thing the engine can
         // do -- an outer tunnel plus up to six inner handshakes through it --
         // and on most networks one of the framings above gets out first. But it

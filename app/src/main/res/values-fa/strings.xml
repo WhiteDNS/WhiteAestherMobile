@@ -166,7 +166,7 @@
     <string name="fixed_in_the_engine_not_configurable_yet">در هسته ثابت است. هنوز قابل تنظیم نیست.</string>
     <string name="default_padding_tuned_for_ordinary_filtering">پیش‌فرض. لایه‌گذاری تنظیم‌شده برای فیلترینگ معمولی.</string>
     <string name="heavier_padding_for_networks_that_inspect_closel">لایه‌گذاری سنگین‌تر، برای شبکه‌هایی که دقیق بازرسی می‌کنند.</string>
-    <string name="no_obfuscation_faster_but_easier_to_block">بدون مبهم‌سازی. سریع‌تر، ولی راحت‌تر مسدود می‌شود.</string>
+    <string name="no_obfuscation_faster_but_easier_to_block">بدون مبهم‌سازی. جایی که کسی تونل را بررسی نمی‌کند سریع‌تر است؛ روی شبکهٔ فیلترشده بیشترین احتمال را دارد که اتصال را از کار بیندازد.</string>
     <string name="routes_rules">قواعد مسیریابی</string>
     <string name="everything_not_named_here_goes_through_the">هر چه اینجا نامش نیامده از تونل عبور می‌کند.</string>
     <string name="domain_rules_will_not_match">قواعد دامنه تطبیق نخواهند یافت</string>
