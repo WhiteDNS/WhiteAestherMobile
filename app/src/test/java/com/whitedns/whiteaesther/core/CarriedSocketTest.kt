@@ -3,7 +3,12 @@ package com.whitedns.whiteaesther.core
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
+import java.io.DataInputStream
 import java.io.IOException
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+import kotlin.concurrent.thread
 
 /**
  * The HTTP this app had to write by hand.
@@ -16,6 +21,77 @@ import java.io.IOException
  */
 class CarriedSocketTest {
     private val crlf = "\r\n"
+
+    /**
+     * A SOCKS5 listener that wants [expected], records what it was asked to
+     * reach, and grants it. Returns the port and a slot for the asked name.
+     */
+    private fun listener(expected: SocksAuth?, asked: Array<String?>): Int {
+        val server = ServerSocket(0, 4, InetAddress.getLoopbackAddress())
+        thread(isDaemon = true) {
+            server.use {
+                it.accept().use { sock ->
+                    val input = DataInputStream(sock.getInputStream())
+                    val out = sock.getOutputStream()
+                    input.readUnsignedByte()
+                    val offered = ByteArray(input.readUnsignedByte()).also(input::readFully)
+                    val wanted = if (expected == null) 0x00 else 0x02
+                    if (offered.none { b -> b.toInt() == wanted }) {
+                        out.write(byteArrayOf(0x05, 0xFF.toByte()))
+                        return@thread
+                    }
+                    out.write(byteArrayOf(0x05, wanted.toByte()))
+                    if (expected != null) {
+                        input.readUnsignedByte()
+                        val user = String(ByteArray(input.readUnsignedByte()).also(input::readFully))
+                        val password = String(ByteArray(input.readUnsignedByte()).also(input::readFully))
+                        val ok = user == expected.user && password == expected.password
+                        out.write(byteArrayOf(0x01, if (ok) 0x00 else 0x01))
+                        if (!ok) return@thread
+                    }
+                    repeat(3) { input.readUnsignedByte() }
+                    check(input.readUnsignedByte() == 0x03) { "the name was not sent as a name" }
+                    asked[0] = String(ByteArray(input.readUnsignedByte()).also(input::readFully))
+                    input.readFully(ByteArray(2))
+                    out.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                    out.flush()
+                }
+            }
+        }
+        return server.localPort
+    }
+
+    private fun handshake(port: Int, auth: SocksAuth?) = Socket("127.0.0.1", port).use { socket ->
+        socket.soTimeout = 2_000
+        CarriedSocket.connect(socket, "www.example.org", 443, auth)
+    }
+
+    @Test
+    fun aListenerWithAPasswordIsReachedWithIt() {
+        val auth = SocksAuth("user-token", "password-token")
+        val asked = arrayOfNulls<String>(1)
+        handshake(listener(auth, asked), auth)
+        assertEquals("www.example.org", asked[0])
+    }
+
+    @Test
+    fun aListenerWithoutAPasswordIsStillReached() {
+        val asked = arrayOfNulls<String>(1)
+        handshake(listener(null, asked), null)
+        assertEquals("www.example.org", asked[0])
+    }
+
+    @Test
+    fun wrongCredentialsAreAFailureNotAConnection() {
+        val port = listener(SocksAuth("user-token", "password-token"), arrayOfNulls(1))
+        assertThrows(IOException::class.java) { handshake(port, SocksAuth("user-token", "guess")) }
+    }
+
+    @Test
+    fun aListenerThatWantsAPasswordRefusesAnAppWithout() {
+        val port = listener(SocksAuth("user-token", "password-token"), arrayOfNulls(1))
+        assertThrows(IOException::class.java) { handshake(port, null) }
+    }
 
     @Test
     fun aPlainAnswerIsSplitIntoItsStatusAndItsBody() {

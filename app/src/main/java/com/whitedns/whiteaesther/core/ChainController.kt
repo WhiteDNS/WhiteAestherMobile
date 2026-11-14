@@ -3,6 +3,7 @@ package com.whitedns.whiteaesther.core
 import android.content.Context
 import android.os.Build
 import com.whitedns.whiteaesther.data.ChainSettings
+import com.whitedns.whiteaesther.data.RuleListStore
 import com.whitedns.whiteaesther.service.EngineLog
 import com.whitedns.whiteaesther.service.LogLevel
 import org.json.JSONObject
@@ -87,6 +88,7 @@ class ChainController(private val context: Context) {
         socksPort: Int,
         udp: Boolean,
         tun: TunnelHandoff,
+        auth: SocksAuth? = null,
     ): String? = tun.use {
         if (!isAvailable) return "This build cannot route a carrier: the chain library is missing"
         settings.startupError()?.let { return it }
@@ -102,11 +104,11 @@ class ChainController(private val context: Context) {
                 // prepareHome, not a bare write: this path fetches providers,
                 // and that fetch travels through the carrier's listener, which
                 // is why the carrier has to be established before we get here.
-                prepareHome(settings, socksPort, ChainConfig.CARRIER_PROXY)
+                prepareHome(settings, socksPort, ChainConfig.CARRIER_PROXY, auth)
             } else {
                 home.mkdirs()
                 File(home, "config.yaml").writeText(
-                    ChainConfig.renderCarrier(settings, socksPort, udp),
+                    ChainConfig.renderCarrier(RuleListStore.of(context).withImported(settings), socksPort, udp, auth),
                 )
             }
 
@@ -322,11 +324,14 @@ class ChainController(private val context: Context) {
         settings: ChainSettings,
         socksPort: Int?,
         proxyName: String = ChainConfig.TUNNEL_PROXY,
+        auth: SocksAuth? = null,
     ) {
         home.mkdirs()
         val providers = File(home, "providers")
         providers.mkdirs()
-        File(home, "config.yaml").writeText(ChainConfig.render(settings, socksPort, proxyName))
+        File(home, "config.yaml").writeText(
+            ChainConfig.render(RuleListStore.of(context).withImported(settings), socksPort, proxyName, auth),
+        )
 
         // Cached node lists for subscriptions the user has since removed. They
         // are not merely clutter: mihomo keys its own state by provider name, so

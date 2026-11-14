@@ -10,7 +10,7 @@ import java.net.URI
 internal object WorkerConfig {
     private val DNS_SERVERS = listOf("https+local://1.1.1.1/dns-query", "https+local://8.8.8.8/dns-query", "localhost")
 
-    fun render(deployment: WorkerDeployment, socksPort: Int): String {
+    fun render(deployment: WorkerDeployment, socksPort: Int, auth: SocksAuth): String {
         val options = deployment.options
         options.validate()
         require(socksPort in 1..65535)
@@ -59,7 +59,8 @@ internal object WorkerConfig {
             // Resolve the Worker hostname over DoH first; operator DNS may answer it with NXDOMAIN.
             .put("dns", JSONObject().put("servers", JSONArray(DNS_SERVERS)))
             .put("inbounds", JSONArray().put(JSONObject().put("tag", "worker-in").put("listen", "127.0.0.1").put("port", socksPort)
-                .put("protocol", "socks").put("settings", JSONObject().put("auth", "noauth").put("udp", false))))
+                .put("protocol", "socks").put("settings", JSONObject().put("auth", "password").put("udp", false)
+                    .put("accounts", JSONArray().put(JSONObject().put("user", auth.user).put("pass", auth.password))))))
             .put("outbounds", outbounds).put("routing", routing)
         if (!browser) config.put("observatory", JSONObject().put("subjectSelector", JSONArray(listOf("worker-node-")))
             .put("probeURL", "https://www.gstatic.com/generate_204").put("probeInterval", "${options.probeInterval}s").put("enableConcurrency", true))

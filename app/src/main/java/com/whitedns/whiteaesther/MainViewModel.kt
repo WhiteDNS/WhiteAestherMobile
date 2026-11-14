@@ -3,6 +3,7 @@ package com.whitedns.whiteaesther
 import android.app.Application
 import android.os.FileObserver
 import androidx.annotation.StringRes
+import com.whitedns.whiteaesther.data.AddressFamily
 import com.whitedns.whiteaesther.core.AppLocale
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -30,7 +31,6 @@ import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.data.TunnelProtocol
 import com.whitedns.whiteaesther.data.SettingsRepository
 import com.whitedns.whiteaesther.data.AutoPlanner
-import com.whitedns.whiteaesther.data.NetworkKey
 import com.whitedns.whiteaesther.data.UpdateChecker
 import com.whitedns.whiteaesther.service.NetworkIdentity
 import com.whitedns.whiteaesther.service.AetherVpnService
@@ -347,11 +347,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *
      * Read from the repository rather than from [settings]. That flow is a
      * stateIn holding AppSettings() until DataStore answers, and this runs from
-     * onResume -- early enough to see the placeholder, whose dualStack is true.
+     * onResume -- early enough to see the placeholder, which allows both families.
      * The address lookup was therefore deciding by the default instead of by
      * the user, and kept showing the IPv6 address it was meant to discard.
      */
-    private suspend fun ipv4Only(): Boolean = !repository.settings.first().dualStack
+    private suspend fun ipv4Only(): Boolean = repository.settings.first().addresses == AddressFamily.V4
 
     /**
      * Whether a second hop is carrying this session's traffic.
@@ -539,14 +539,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *
      * The same question the connect path asks, answered in the same place. The
      * scanner has no memory of its own -- what connected last is the service's
-     * to know -- so it asks with what it has, which is the kind of network the
-     * phone is on. Getting only that half right still beats a third rule.
+     * to know -- so it asks with nothing proven, and gets the same answer the
+     * connect path would. Asking here rather than writing H2 down keeps it one rule.
      */
     private fun scanFirstFraming(): TunnelProtocol {
-        val cellular = runCatching {
-            NetworkKey.isCellular(NetworkIdentity.current(getApplication()).key.orEmpty())
-        }.getOrDefault(false)
-        return when (AutoPlanner.framingOrder(provenFraming = null, onMobileData = cellular).first()) {
+        return when (AutoPlanner.framingOrder(provenFraming = null).first()) {
             "h2" -> TunnelProtocol.H2
             else -> TunnelProtocol.H3
         }

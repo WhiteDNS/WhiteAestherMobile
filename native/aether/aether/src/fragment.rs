@@ -15,6 +15,8 @@ pub struct FragmentConfig {
     pub delay_min_ms: u64,
     pub delay_max_ms: u64,
     pub sni_split: bool,
+    /// Send the ClientHello with an out-of-band desync (see `crate::oob`).
+    pub oob: Option<crate::oob::OobMethod>,
 }
 
 impl FragmentConfig {
@@ -26,6 +28,7 @@ impl FragmentConfig {
             delay_min_ms: 0,
             delay_max_ms: 0,
             sni_split: false,
+            oob: None,
         }
     }
 
@@ -57,6 +60,7 @@ impl FragmentConfig {
             delay_min_ms,
             delay_max_ms: delay_max_ms.max(delay_min_ms),
             sni_split,
+            oob: None,
         }
     }
 
@@ -162,6 +166,16 @@ pub struct FragmentingStream<S> {
     hello_shape: Option<crate::hello_shape::HelloShape>,
     pending_hello: Option<crate::hello_shape::PendingHello>,
     hello_input: Option<Vec<u8>>,
+    oob: OobState,
+}
+
+enum OobState {
+    Off,
+    /// The next write is the ClientHello; its prefix goes out through this
+    /// handle to the same socket.
+    Prefix(crate::oob::OobMethod, socket2::Socket),
+    /// The prefix left; after the pause, `buf[resume..]` goes out normally.
+    Pause(Pin<Box<tokio::time::Sleep>>, usize),
 }
 
 impl<S> FragmentingStream<S> {
@@ -179,7 +193,22 @@ impl<S> FragmentingStream<S> {
             },
             pending_hello: None,
             hello_input: None,
+            oob: OobState::Off,
         }
+    }
+
+    /// The first write goes out with the out-of-band `method` through
+    /// `socket`, a handle to the inner stream's own socket. Nothing else
+    /// reshapes it.
+    pub fn with_oob(mut self, method: crate::oob::OobMethod, socket: socket2::Socket) -> Self {
+        self.oob = OobState::Prefix(method, socket);
+        self.fragmenting = false;
+        self.hello_shape = None;
+        self
+    }
+
+    pub fn get_ref(&self) -> &S {
+        &self.inner
     }
 
     fn poll_hello(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>>
@@ -232,6 +261,36 @@ where
             std::task::ready!(this.poll_hello(cx))?;
             this.hello_input = None;
             return Poll::Ready(Ok(accepted));
+        }
+        if let OobState::Prefix(method, socket) = &this.oob {
+            if buf.len() > 1 {
+                let method = *method;
+                match crate::oob::send_prefix(socket, buf, method) {
+                    Ok(resume) => {
+                        this.oob =
+                            OobState::Pause(Box::pin(tokio::time::sleep(method.pause())), resume)
+                    }
+                    Err(error) => {
+                        this.oob = OobState::Off;
+                        return Poll::Ready(Err(error));
+                    }
+                }
+            }
+        }
+        if let OobState::Pause(sleep, resume) = &mut this.oob {
+            // BoringSSL retries the same hello until some of it is taken.
+            if sleep.as_mut().poll(cx).is_pending() {
+                return Poll::Pending;
+            }
+            let resume = (*resume).min(buf.len());
+            this.oob = OobState::Off;
+            this.first_write = false;
+            return match Pin::new(&mut this.inner).poll_write(cx, &buf[resume..]) {
+                Poll::Ready(Ok(n)) => Poll::Ready(Ok(resume + n)),
+                // The bytes before `resume` already left.
+                Poll::Pending if resume > 0 => Poll::Ready(Ok(resume)),
+                other => other,
+            };
         }
         if this.first_write && !buf.is_empty() {
             if let Some(shape) = this.hello_shape {

@@ -63,6 +63,14 @@ data class WorkerOptions(
     val tcpFastOpen: Boolean = false,
     val probeInterval: Int = 60,
 ) {
+    /**
+     * Another mode, without carrying over what it cannot use. ECH is offered
+     * only by Normal: Fragment reshapes the hello ECH would encrypt, and Browser
+     * lets the browser build its own. A switched-on ECH that the config then
+     * leaves out would read as protection that is not there.
+     */
+    fun withMode(next: WorkerMode): WorkerOptions = copy(mode = next, ech = ech && next == WorkerMode.NORMAL)
+
     fun validate() {
         require(cleanAddresses.size <= 32 && cdnAddresses.size <= 32 && proxyIps.size <= 16) { "Too many Worker addresses" }
         (cleanAddresses + cdnAddresses).forEach { require(host(it)) { "Invalid Worker address: $it" } }

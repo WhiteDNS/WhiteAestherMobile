@@ -17,9 +17,65 @@ class AppSettingsTest {
         // Automatic, because which framing works depends on the network and
         // the user has no way to know it.
         assertEquals(TunnelProtocol.AUTO, settings.transport)
-        assertTrue(settings.dualStack)
+        assertEquals(AddressFamily.DUAL, settings.addresses)
         assertTrue(settings.validationEnabled)
         assertEquals(EndpointMode.AUTOMATIC, settings.endpointMode)
+    }
+
+    @Test
+    fun anOlderSavedAddressChoiceKeepsItsMeaning() {
+        assertEquals(AddressFamily.DUAL, AddressFamily.fromStored(null, null))
+        assertEquals(AddressFamily.DUAL, AddressFamily.fromStored(null, true))
+        assertEquals(AddressFamily.V4, AddressFamily.fromStored(null, false))
+        // The new key wins once it is written.
+        assertEquals(AddressFamily.V6, AddressFamily.fromStored("v6", true))
+        assertEquals(AddressFamily.V4, AddressFamily.fromStored("v4", true))
+        assertEquals(AddressFamily.DUAL, AddressFamily.fromStored("nonsense", true))
+    }
+
+    @Test
+    fun eachAddressChoiceReachesTheEngineAndRestartsAConnection() {
+        // The values prober.rs IpScan::parse accepts.
+        assertEquals(listOf("both", "v4", "v6"), AddressFamily.entries.map { it.wireName })
+        AddressFamily.entries.forEach { assertEquals(it, AddressFamily.fromWire(it.wireName)) }
+        val previous = AppSettings()
+        assertTrue(previous.copy(addresses = AddressFamily.V6).connectionChoiceChanged(previous))
+    }
+
+    @Test
+    fun aCustomEndpointMustMatchTheChosenAddressFamily() {
+        fun error(family: AddressFamily, endpoint: String) = AppSettings(
+            endpointMode = EndpointMode.CUSTOM_ONLY,
+            customEndpoint = endpoint,
+            addresses = family,
+        ).endpointValidationError()
+        assertEquals(R.string.endpoint_error_family, error(AddressFamily.V6, "162.159.192.1:443"))
+        assertEquals(R.string.endpoint_error_family, error(AddressFamily.V4, "[2606:4700:d0::1]:443"))
+        assertNull(error(AddressFamily.V6, "[2606:4700:d0::1]:443"))
+        assertNull(error(AddressFamily.V4, "162.159.192.1:443"))
+        assertNull(error(AddressFamily.DUAL, "162.159.192.1:443"))
+        assertNull(error(AddressFamily.DUAL, "[2606:4700:d0::1]:443"))
+    }
+
+    @Test
+    fun engineSettingsApplyOnlyWhenTheEngineIsInTheConnection() {
+        assertTrue(AppSettings(carrier = Carrier.AETHER, automaticCarrier = false).engineSettingsApply)
+        assertTrue(AppSettings(carrier = Carrier.PSIPHON, automaticCarrier = true).engineSettingsApply)
+        // Aether behind another carrier still dials with them.
+        assertTrue(AppSettings(carrier = Carrier.PSIPHON, secondCarrier = Carrier.AETHER, automaticCarrier = false).engineSettingsApply)
+        listOf(Carrier.PSIPHON, Carrier.TOR, Carrier.WORKER, Carrier.PROXY).forEach {
+            assertFalse("$it", AppSettings(carrier = it, automaticCarrier = false).engineSettingsApply)
+        }
+    }
+
+    @Test
+    fun aWorkerModeThatCannotOfferEchDoesNotKeepItSwitchedOn() {
+        val normal = WorkerOptions(mode = WorkerMode.NORMAL, ech = true)
+        assertFalse(normal.withMode(WorkerMode.FRAGMENT).ech)
+        assertFalse(normal.withMode(WorkerMode.BROWSER).ech)
+        assertTrue(normal.withMode(WorkerMode.NORMAL).ech)
+        // Not switched back on by itself on the way back.
+        assertFalse(normal.withMode(WorkerMode.FRAGMENT).withMode(WorkerMode.NORMAL).ech)
     }
 
     @Test

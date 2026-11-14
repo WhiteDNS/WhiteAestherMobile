@@ -1,5 +1,6 @@
 package com.whitedns.whiteaesther.core
 
+import com.whitedns.whiteaesther.data.AddressFamily
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EndpointMode
 import com.whitedns.whiteaesther.data.TlsFragmentMode
@@ -145,13 +146,13 @@ class EndpointDiscoveryTest {
     }
 
     @Test fun editsMadeDuringDiscoveryCannotReplaceTheTestedHandshakeRecipe() {
-        val original = settings.copy(transport = TunnelProtocol.H2, tlsGroups = "X25519", noizeProfile = "off", dualStack = true)
+        val original = settings.copy(transport = TunnelProtocol.H2, tlsGroups = "X25519", noizeProfile = "off", addresses = AddressFamily.DUAL)
         val result = hit.copy(profile = EndpointProbeProfile.from(original))
-        val edited = settings.copy(tlsGroups = "P-256", noizeProfile = "firewall", dualStack = false)
+        val edited = settings.copy(tlsGroups = "P-256", noizeProfile = "firewall", addresses = AddressFamily.V4)
         val selected = result.applyTo(edited)
         assertEquals("X25519", selected.tlsGroups)
         assertEquals("off", selected.noizeProfile)
-        assertTrue(selected.dualStack)
+        assertEquals(AddressFamily.DUAL, selected.addresses)
     }
 
     @Test fun cancellationExceptionsArePropagated() = runTest {

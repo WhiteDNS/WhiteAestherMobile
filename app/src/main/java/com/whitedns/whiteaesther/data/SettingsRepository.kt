@@ -79,7 +79,7 @@ class SettingsRepository(private val context: Context) {
             torBridge = enumValueOrDefault(preferences[TOR_BRIDGE], TorBridge.NONE),
             torBridges = preferences[TOR_BRIDGES].orEmpty(),
             scanStrategy = enumValueOrDefault(preferences[SCAN], ScanStrategy.BALANCED),
-            dualStack = preferences[DUAL_STACK] ?: true,
+            addresses = AddressFamily.fromStored(preferences[ADDRESSES], preferences[DUAL_STACK]),
             validationEnabled = preferences[VALIDATION] ?: true,
             noizeProfile = preferences[NOIZE] ?: "firewall",
             endpointMode = endpointMode,
@@ -101,6 +101,7 @@ class SettingsRepository(private val context: Context) {
             routeBlock = preferences[ROUTE_BLOCK].orEmpty(),
             routeDirect = preferences[ROUTE_DIRECT].orEmpty(),
             routingPresets = RoutingPreset.decode(preferences[ROUTING_PRESETS]),
+            importedRulesVersion = preferences[ROUTE_LISTS].orEmpty(),
             killSwitch = preferences[KILL_SWITCH] ?: false,
             strictKillSwitch = preferences[STRICT_KILL_SWITCH] ?: false,
             wgKeepalive = preferences[WG_KEEPALIVE]?.coerceIn(0, 300) ?: 25,
@@ -138,7 +139,9 @@ class SettingsRepository(private val context: Context) {
             preferences[TOR_BRIDGE] = settings.torBridge.name
             preferences[TOR_BRIDGES] = settings.torBridges
             preferences[SCAN] = settings.scanStrategy.name
-            preferences[DUAL_STACK] = settings.dualStack
+            preferences[ADDRESSES] = settings.addresses.wireName
+            // Kept so an older build reading this store still avoids IPv6 when asked to.
+            preferences[DUAL_STACK] = settings.addresses != AddressFamily.V4
             preferences[VALIDATION] = settings.validationEnabled
             preferences[NOIZE] = settings.noizeProfile
             preferences[ENDPOINT_MODE] = settings.endpointMode.name
@@ -159,6 +162,7 @@ class SettingsRepository(private val context: Context) {
             preferences[ROUTE_BLOCK] = settings.routeBlock
             preferences[ROUTE_DIRECT] = settings.routeDirect
             preferences[ROUTING_PRESETS] = RoutingPreset.encode(settings.routingPresets)
+            preferences[ROUTE_LISTS] = settings.importedRulesVersion
             preferences[KILL_SWITCH] = settings.killSwitch
             preferences[STRICT_KILL_SWITCH] = settings.strictKillSwitch
             preferences[WG_KEEPALIVE] = settings.wgKeepalive
@@ -230,6 +234,7 @@ class SettingsRepository(private val context: Context) {
         val TOR_BRIDGES = stringPreferencesKey("tor_bridges")
         val SCAN = stringPreferencesKey("scan")
         val DUAL_STACK = booleanPreferencesKey("dual_stack")
+        val ADDRESSES = stringPreferencesKey("addresses")
         val VALIDATION = booleanPreferencesKey("validation")
         val NOIZE = stringPreferencesKey("noize")
         val ENDPOINT_MODE = stringPreferencesKey("endpoint_mode")
@@ -247,6 +252,7 @@ class SettingsRepository(private val context: Context) {
         val SPLIT_TUNNEL = stringPreferencesKey("split_tunnel")
         val ROUTE_BLOCK = stringPreferencesKey("route_block")
         val ROUTE_DIRECT = stringPreferencesKey("route_direct")
+        val ROUTE_LISTS = stringPreferencesKey("route_lists_version")
         val ROUTING_PRESETS = stringPreferencesKey("routing_presets")
         val KILL_SWITCH = booleanPreferencesKey("kill_switch")
         val STRICT_KILL_SWITCH = booleanPreferencesKey("strict_kill_switch")

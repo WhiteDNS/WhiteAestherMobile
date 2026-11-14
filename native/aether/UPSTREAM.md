@@ -47,3 +47,8 @@ Upstream's `tor` feature is deliberately not carried; see that document.
 
 This tracked snapshot is the Android integration baseline. Android-specific
 refactoring must preserve upstream copyright, trademark, and license notices.
+- Out-of-band API bootstrap (2026-11-14): the ClientHello desync methods in
+  `src/oob.rs` are adapted from the AGPL-3.0 Aether fork in
+  `Floxu1/UAC-SNI-Spoofer-Android` (`core/aether/src/oob.rs`), commit
+  `200de3b1f029839d2860042680afebf8817c3a90`. They run as one more lane of the
+  verified API race; certificate checks are unchanged.

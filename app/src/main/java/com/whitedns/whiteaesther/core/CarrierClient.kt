@@ -12,6 +12,20 @@ enum class CarrierStage { STOPPED, CONNECTING, CONNECTED, FAILED }
  * the tunnel behind it does, and the two are separate because routing into a
  * listener with nothing behind it drops traffic rather than refusing it.
  */
+/** Credentials for a loopback SOCKS5 listener, made fresh for each session. */
+class SocksAuth(val user: String, val password: String) {
+    // Never in a log line.
+    override fun toString(): String = "SocksAuth(***)"
+
+    companion object {
+        fun random(): SocksAuth {
+            val random = java.security.SecureRandom()
+            fun token() = ByteArray(16).also(random::nextBytes).joinToString("") { "%02x".format(it) }
+            return SocksAuth(token(), token())
+        }
+    }
+}
+
 data class CarrierSnapshot(
     val stage: CarrierStage = CarrierStage.STOPPED,
     val port: Int = 0,
@@ -30,6 +44,15 @@ data class CarrierSnapshot(
  */
 interface CarrierClient {
     val state: StateFlow<CarrierSnapshot>
+
+    /**
+     * What the listener asks for, or null for one without a password.
+     *
+     * Loopback is not private: every app on the phone can reach it, including
+     * the ones the user sent around the tunnel. A listener without a password
+     * hands any of them the exit, and tells them the device runs a VPN.
+     */
+    val socksAuth: SocksAuth? get() = null
 
     /**
      * Starts the carrier and waits for a usable tunnel.

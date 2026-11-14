@@ -422,13 +422,13 @@ class MainActivity : ComponentActivity() {
             )
             return
         }
-        if (settings.automaticCarrier || settings.carrierPath.any { it.usesEngine }) settings.endpointValidationError()?.let { error ->
+        if (settings.engineSettingsApply) settings.endpointValidationError()?.let { error ->
             EngineStatusStore.update(
                 EngineStatus(EngineStage.ERROR, settings.mode, message = getString(error)),
             )
             return
         }
-        if (settings.automaticCarrier || settings.carrierPath.any { it.usesEngine }) settings.tlsOptions.validationError(settings.fragmentTls, settings.encryptedHello)?.let { error ->
+        if (settings.engineSettingsApply) settings.tlsOptions.validationError(settings.fragmentTls, settings.encryptedHello)?.let { error ->
             EngineStatusStore.update(EngineStatus(EngineStage.ERROR, settings.mode, message = getString(error)))
             return
         }

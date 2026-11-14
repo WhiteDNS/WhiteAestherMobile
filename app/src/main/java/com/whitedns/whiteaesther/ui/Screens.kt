@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalContext
 import android.content.Intent
+import com.whitedns.whiteaesther.data.AddressFamily
 import com.whitedns.whiteaesther.WorkerSetupActivity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
@@ -569,7 +570,7 @@ fun HomeScreen(
                     Divider()
                     FactRow(stringResource(R.string.fact_coverage), settings.coverageSummary())
                     Divider()
-                    FactRow(stringResource(R.string.fact_addresses), if (settings.dualStack) stringResource(R.string.ipv4_ipv6) else stringResource(R.string.ipv4_only))
+                    FactRow(stringResource(R.string.fact_addresses), stringResource(settings.addresses.label))
                     if (settings.mode == EngineMode.PROXY) {
                         Divider()
                         FactRow(stringResource(R.string.local_proxy), settings.proxyBindLabel(), mono = true)
@@ -917,7 +918,7 @@ fun RoutesScreen(
             Column(Modifier.padding(8.dp)) {
                 MethodChoices(settings, onSettingsChange)
             }
-            if (!settings.automaticCarrier && settings.carrierPath.none { it.usesEngine }) {
+            if (!settings.engineSettingsApply) {
                 Note(stringResource(R.string.carrier_not_engine_note), Modifier.padding(horizontal = 16.dp))
             }
         }
@@ -1758,12 +1759,23 @@ fun TrafficScreen(
         AetherCard {
             CardHead(stringResource(R.string.addresses), stringResource(R.string.turn_off_ipv6_if_a_network_handles))
             Box(Modifier.padding(11.dp)) {
-                SegGroup(
-                    options = listOf(true, false),
-                    selected = settings.dualStack,
-                    label = { if (it) stringResource(R.string.ipv4_ipv6) else stringResource(R.string.ipv4_only) },
-                    onSelect = { onSettingsChange(settings.copy(dualStack = it)) },
-                )
+                Column {
+                    SegGroup(
+                        options = AddressFamily.entries,
+                        selected = settings.addresses,
+                        label = { stringResource(it.label) },
+                        onSelect = { onSettingsChange(settings.copy(addresses = it)) },
+                    )
+                    EngineSettingsNotInUse(settings)
+                    if (settings.addresses == AddressFamily.V6 && !networkHasGlobalIpv6()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.ipv6_only_no_ipv6_here),
+                            style = AetherTheme.type.Small,
+                            color = AetherTheme.colors.text2,
+                        )
+                    }
+                }
             }
         }
 
@@ -1775,6 +1787,7 @@ fun TrafficScreen(
                 onToggle = { advanced = !advanced },
             ) {
                 CardHead(stringResource(R.string.obfuscation), stringResource(R.string.makes_tunnel_traffic_harder_to_fingerprint_costs))
+                EngineSettingsNotInUse(settings, Modifier.padding(horizontal = 11.dp))
                 Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     NOIZE_PROFILES.forEach { (value, title, subtitle) ->
                         OptionRow(
@@ -2249,7 +2262,7 @@ private fun SettingsPlainField(
  * value between keystrokes and cannot be typed into.
  */
 @Composable
-private fun PlainField(
+internal fun PlainField(
     value: String,
     tag: String,
     modifier: Modifier = Modifier,
@@ -2323,6 +2336,7 @@ fun RoutingRulesScreen(
             }
         }
         Spacer(Modifier.height(12.dp))
+        ImportedRuleLists(settings, onSettingsChange)
 
         if (!settings.routeSniff) {
             AetherCard {
@@ -3032,7 +3046,7 @@ private fun buildReport(
         appendLine(
             "settings profile=${settings.activeProfile().name.lowercase()} transport=${settings.transport.wireName} " +
                 "scan=${settings.scanStrategy.wireName} coverage=${settings.mode.wireName} " +
-                "noize=${settings.noizeProfile} bind=${settings.proxyBindLabel()} lanAuth=${settings.lanCredentialsUsable()} dualStack=${settings.dualStack}",
+                "noize=${settings.noizeProfile} bind=${settings.proxyBindLabel()} lanAuth=${settings.lanCredentialsUsable()} addresses=${settings.addresses.wireName}",
         )
     }
     if (includeEvents) {
@@ -3046,4 +3060,43 @@ private fun buildReport(
         appendLine()
         append("# IP addresses replaced")
     }
+}
+
+/**
+ * Whether the network under the tunnel has a global IPv6 address. Read from
+ * the system, not guessed: a VPN interface is skipped, since this app's own
+ * would always say yes.
+ */
+@Composable
+private fun networkHasGlobalIpv6(): Boolean {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return androidx.compose.runtime.remember(context) {
+        val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
+        connectivity?.allNetworks.orEmpty().any { network ->
+            val capabilities = connectivity?.getNetworkCapabilities(network)
+            capabilities != null &&
+                capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                !capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) &&
+                connectivity.getLinkProperties(network)?.linkAddresses.orEmpty().any { link ->
+                    val address = link.address
+                    address is java.net.Inet6Address && !address.isLinkLocalAddress &&
+                        !address.isSiteLocalAddress && !address.isLoopbackAddress &&
+                        (address.address[0].toInt() and 0xFE) != 0xFC
+                }
+        }
+    }
+}
+
+/**
+ * Said, not hidden: a setting that does nothing for this connection is still
+ * the one that will apply when Aether is back in the path, so it stays
+ * editable, with the reason next to it.
+ */
+@Composable
+private fun EngineSettingsNotInUse(settings: AppSettings, modifier: Modifier = Modifier) {
+    if (settings.engineSettingsApply) return
+    Note(
+        stringResource(R.string.engine_settings_not_in_use, stringResource(settings.carrier.label)),
+        modifier,
+    )
 }
