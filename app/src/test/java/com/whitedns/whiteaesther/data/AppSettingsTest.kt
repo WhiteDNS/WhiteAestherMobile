@@ -58,6 +58,27 @@ class AppSettingsTest {
     }
 
     @Test
+    fun engineSettingsApplyOnlyWhenTheEngineIsInTheConnection() {
+        assertTrue(AppSettings(carrier = Carrier.AETHER, automaticCarrier = false).engineSettingsApply)
+        assertTrue(AppSettings(carrier = Carrier.PSIPHON, automaticCarrier = true).engineSettingsApply)
+        // Aether behind another carrier still dials with them.
+        assertTrue(AppSettings(carrier = Carrier.PSIPHON, secondCarrier = Carrier.AETHER, automaticCarrier = false).engineSettingsApply)
+        listOf(Carrier.PSIPHON, Carrier.TOR, Carrier.WORKER, Carrier.PROXY).forEach {
+            assertFalse("$it", AppSettings(carrier = it, automaticCarrier = false).engineSettingsApply)
+        }
+    }
+
+    @Test
+    fun aWorkerModeThatCannotOfferEchDoesNotKeepItSwitchedOn() {
+        val normal = WorkerOptions(mode = WorkerMode.NORMAL, ech = true)
+        assertFalse(normal.withMode(WorkerMode.FRAGMENT).ech)
+        assertFalse(normal.withMode(WorkerMode.BROWSER).ech)
+        assertTrue(normal.withMode(WorkerMode.NORMAL).ech)
+        // Not switched back on by itself on the way back.
+        assertFalse(normal.withMode(WorkerMode.FRAGMENT).withMode(WorkerMode.NORMAL).ech)
+    }
+
+    @Test
     fun theProxyIsPrivateUntilSharingIsTurnedOn() {
         val settings = AppSettings()
 

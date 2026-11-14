@@ -522,6 +522,7 @@
     <string name="err_carrier_needs_chain">This build cannot route Psiphon: the chain library is missing</string>
     <string name="err_carrier_failed">Psiphon could not connect</string>
     <string name="err_carrier_stopped">Psiphon stopped</string>
+    <string name="engine_settings_not_in_use">Settings on this page belong to the Aether engine. %1$s does not use it, so they wait until Aether is back in the connection. A Worker has its own TLS options in its settings.</string>
     <string name="carrier_not_engine_note">Endpoint, protocol and discovery depth below apply to Aether only. This carrier finds its own way out.</string>
     <string name="carrier_tor">Tor</string>
     <string name="carrier_tor_detail">Three relays, and the exit does not know who asked. The slowest option, and it carries no UDP.</string>

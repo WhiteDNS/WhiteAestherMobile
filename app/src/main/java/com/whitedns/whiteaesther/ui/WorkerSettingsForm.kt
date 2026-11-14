@@ -25,7 +25,7 @@ internal fun WorkerSettingsForm(deployment: WorkerDeployment, busy: Boolean, onS
             Note(stringResource(R.string.worker_vless_only))
             WorkerMode.entries.forEach { mode ->
                 OptionRow(null, stringResource(mode.label), "", draft.mode == mode, tag = "worker-mode-${mode.name.lowercase()}") {
-                    if (!busy) draft = draft.copy(mode = mode)
+                    if (!busy) draft = draft.withMode(mode)
                 }
             }
             WorkerField(draft.remoteDns, { draft = draft.copy(remoteDns = it) }, R.string.worker_remote_dns, "worker-remote-dns", busy)

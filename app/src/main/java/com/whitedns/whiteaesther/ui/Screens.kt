@@ -918,7 +918,7 @@ fun RoutesScreen(
             Column(Modifier.padding(8.dp)) {
                 MethodChoices(settings, onSettingsChange)
             }
-            if (!settings.automaticCarrier && settings.carrierPath.none { it.usesEngine }) {
+            if (!settings.engineSettingsApply) {
                 Note(stringResource(R.string.carrier_not_engine_note), Modifier.padding(horizontal = 16.dp))
             }
         }
@@ -1766,6 +1766,7 @@ fun TrafficScreen(
                         label = { stringResource(it.label) },
                         onSelect = { onSettingsChange(settings.copy(addresses = it)) },
                     )
+                    EngineSettingsNotInUse(settings)
                     if (settings.addresses == AddressFamily.V6 && !networkHasGlobalIpv6()) {
                         Spacer(Modifier.height(8.dp))
                         Text(
@@ -1786,6 +1787,7 @@ fun TrafficScreen(
                 onToggle = { advanced = !advanced },
             ) {
                 CardHead(stringResource(R.string.obfuscation), stringResource(R.string.makes_tunnel_traffic_harder_to_fingerprint_costs))
+                EngineSettingsNotInUse(settings, Modifier.padding(horizontal = 11.dp))
                 Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     NOIZE_PROFILES.forEach { (value, title, subtitle) ->
                         OptionRow(
@@ -3082,4 +3084,18 @@ private fun networkHasGlobalIpv6(): Boolean {
                 }
         }
     }
+}
+
+/**
+ * Said, not hidden: a setting that does nothing for this connection is still
+ * the one that will apply when Aether is back in the path, so it stays
+ * editable, with the reason next to it.
+ */
+@Composable
+private fun EngineSettingsNotInUse(settings: AppSettings, modifier: Modifier = Modifier) {
+    if (settings.engineSettingsApply) return
+    Note(
+        stringResource(R.string.engine_settings_not_in_use, stringResource(settings.carrier.label)),
+        modifier,
+    )
 }

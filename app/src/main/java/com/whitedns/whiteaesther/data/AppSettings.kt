@@ -643,6 +643,14 @@ data class AppSettings(
      */
     val carrierPath: List<Carrier> get() = listOfNotNull(carrier, secondCarrier)
 
+    /**
+     * Whether the Aether engine is part of this connection, and so whether its
+     * settings -- addresses, obfuscation, TLS splitting, ECH, the TLS options --
+     * do anything. The one place that answers it: the screens grey out what
+     * this says is unused, and the connect checks skip what it says is unused.
+     */
+    val engineSettingsApply: Boolean get() = automaticCarrier || carrierPath.any { it.usesEngine }
+
     fun withoutPinnedEndpoint(): AppSettings = copy(
         endpointMode = EndpointMode.AUTOMATIC,
         customEndpoint = "",
