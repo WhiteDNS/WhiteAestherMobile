@@ -33,6 +33,8 @@ internal class WorkerCarrierClient(
     @Volatile private var stopping = false
     private var configuration: File? = null
     private var browser: WebView? = null
+    @Volatile override var socksAuth: SocksAuth? = null
+        private set
 
     override suspend fun start(timeoutMs: Long): Result<Int> = withContext(Dispatchers.IO) {
         stopping = false
@@ -44,7 +46,8 @@ internal class WorkerCarrierClient(
             check(binary.isFile && binary.canExecute()) { "The Worker engine is missing from this build" }
             val directory = File(context.noBackupFilesDir, "worker-runtime").apply { mkdirs() }
             val config = File.createTempFile("connection-", ".json", directory).also { configuration = it }
-            config.writeText(WorkerConfig.render(deployment, port))
+            val auth = SocksAuth.random().also { socksAuth = it }
+            config.writeText(WorkerConfig.render(deployment, port, auth))
             val builder = ProcessBuilder(binary.absolutePath, "run", "-config", config.absolutePath).redirectErrorStream(true)
             if (dialerPort > 0) builder.environment()["xray.browser.dialer"] = "127.0.0.1:$dialerPort"
             val running = builder.start().also { process = it }
@@ -75,7 +78,7 @@ internal class WorkerCarrierClient(
                 var online = false
                 while (!online) {
                     check(running.isAlive && !stopping) { "Worker engine stopped during connection testing" }
-                    online = CarrierProbe.works(port, listOf("www.google.com", "www.wikipedia.org"))
+                    online = CarrierProbe.works(port, listOf("www.google.com", "www.wikipedia.org"), auth)
                     if (!online) delay(500)
                 }
                 true

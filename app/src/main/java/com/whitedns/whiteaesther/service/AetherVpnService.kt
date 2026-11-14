@@ -1326,6 +1326,7 @@ class AetherVpnService : VpnService() {
                     // one whose answer this is.
                     udp = hops.last().carriesUdp,
                     tun = handoff,
+                    auth = startedHops.last().second.socksAuth,
                 )
             }
             if (failure != null) {
@@ -1794,6 +1795,7 @@ class AetherVpnService : VpnService() {
                     socksPort = winner.port,
                     udp = carrier.carriesUdp,
                     tun = handoff,
+                    auth = winner.client.socksAuth,
                 )
             }
             if (failure != null) {
@@ -1979,7 +1981,7 @@ class AetherVpnService : VpnService() {
             }
             if (sessionGeneration != generation) return null
             EngineLog.record(LogLevel.INFO, "auto", "${route.wireName} is up; checking that traffic gets through")
-            if (!CarrierProbe.works(port)) {
+            if (!CarrierProbe.works(port, auth = client.socksAuth)) {
                 EngineLog.record(
                     LogLevel.WARN,
                     "auto",

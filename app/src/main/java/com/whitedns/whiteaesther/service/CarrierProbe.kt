@@ -8,6 +8,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.selects.select
 import com.whitedns.whiteaesther.core.CarriedSocket
+import com.whitedns.whiteaesther.core.SocksAuth
 
 /**
  * Whether anything actually reaches the internet through a carrier.
@@ -53,11 +54,11 @@ object CarrierProbe {
      * socket read does not hear a cancellation, and a scope that waited for the
      * slow target to time out would turn the first answer into the last.
      */
-    suspend fun works(socksPort: Int, targets: List<String> = TARGETS): Boolean {
+    suspend fun works(socksPort: Int, targets: List<String> = TARGETS, auth: SocksAuth? = null): Boolean {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
             val pending: MutableList<Deferred<Boolean>> =
-                targets.map { host -> scope.async { answers(host, socksPort) } }.toMutableList()
+                targets.map { host -> scope.async { answers(host, socksPort, auth) } }.toMutableList()
             while (pending.isNotEmpty()) {
                 val (done, reached) = select<Pair<Deferred<Boolean>, Boolean>> {
                     pending.forEach { attempt -> attempt.onAwait { attempt to it } }
@@ -75,8 +76,8 @@ object CarrierProbe {
      * Opens a verified TLS session to [host] through the carrier, and says
      * whether it got one.
      */
-    private fun answers(host: String, socksPort: Int): Boolean = runCatching {
-        CarriedSocket.openTls(host, PORT, socksPort, TIMEOUT_MS).use { tls ->
+    private fun answers(host: String, socksPort: Int, auth: SocksAuth?): Boolean = runCatching {
+        CarriedSocket.openTls(host, PORT, socksPort, TIMEOUT_MS, auth).use { tls ->
             EngineLog.record(
                 LogLevel.INFO,
                 "auto",

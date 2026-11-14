@@ -37,6 +37,20 @@ class CarrierConfigTest {
     }
 
     @Test
+    fun aCarrierWithAPasswordIsDialledWithIt() {
+        val auth = SocksAuth("a1b2", "c3d4")
+        val carrier = ChainConfig.renderCarrier(off, socksPort = 41234, udp = false, auth = auth)
+        assertTrue(carrier.contains("port: 41234, username: a1b2, password: c3d4, udp: false}"))
+        val sources = ChainSettings(
+            enabled = true,
+            sources = listOf(ChainSource("Test", "https://example.invalid/sub", true)),
+        )
+        val chain = ChainConfig.render(sources, socksPort = 41234, proxyName = ChainConfig.CARRIER_PROXY, auth = auth)
+        assertTrue(chain.contains("port: 41234, username: a1b2, password: c3d4, udp: true}"))
+        assertFalse(ChainConfig.renderCarrier(off, socksPort = 41234).contains("username"))
+    }
+
+    @Test
     fun resolversGoThroughTheCarrierAndNotPastIt() {
         val config = ChainConfig.renderCarrier(off, socksPort = 41234)
 

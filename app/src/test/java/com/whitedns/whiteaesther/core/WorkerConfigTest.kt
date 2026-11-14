@@ -7,11 +7,12 @@ import org.junit.Test
 import java.io.File
 
 class WorkerConfigTest {
+    private val auth = SocksAuth("u".repeat(32), "p".repeat(32))
     private val deployment = WorkerDeployment("a".repeat(32), "whiteaesther-test", false, host = "test.example.workers.dev", ready = true)
     @Test fun eachVariantProducesAnActualEngineConfiguration() {
         WorkerMode.entries.forEach { mode ->
             val options = WorkerOptions(mode = mode, ports = listOf(443, 8443), ech = true, upstreamProxy = "relay.example.com:443")
-            val text = WorkerConfig.render(deployment.copy(options = options), 19876)
+            val text = WorkerConfig.render(deployment.copy(options = options), 19876, auth)
             val config = JSONObject(text)
             val outbounds = config.getJSONArray("outbounds")
             val stream = outbounds.getJSONObject(0).getJSONObject("streamSettings")
@@ -33,7 +34,7 @@ class WorkerConfigTest {
     }
     @Test fun startsOnACleanAddressAndResolvesTheWorkerOverDoh() {
         fun fallbackAddress(options: WorkerOptions): String {
-            val config = JSONObject(WorkerConfig.render(deployment.copy(options = options), 19876))
+            val config = JSONObject(WorkerConfig.render(deployment.copy(options = options), 19876, auth))
             assertTrue(config.getJSONObject("dns").getJSONArray("servers").getString(0).startsWith("https+local://"))
             val tag = config.getJSONObject("routing").getJSONArray("balancers").getJSONObject(0).getString("fallbackTag")
             val outbounds = config.getJSONArray("outbounds")
@@ -44,9 +45,25 @@ class WorkerConfigTest {
         assertEquals("104.17.148.22", fallbackAddress(WorkerOptions(mode = WorkerMode.FRAGMENT)))
         assertEquals("test.example.workers.dev", fallbackAddress(WorkerOptions(cleanAddresses = emptyList())))
     }
+    @Test fun theListenerAsksForThisSessionsPassword() {
+        val settings = JSONObject(WorkerConfig.render(deployment, 19876, auth))
+            .getJSONArray("inbounds").getJSONObject(0).getJSONObject("settings")
+        assertEquals("password", settings.getString("auth"))
+        val account = settings.getJSONArray("accounts").getJSONObject(0)
+        assertEquals(auth.user, account.getString("user"))
+        assertEquals(auth.password, account.getString("pass"))
+    }
+    @Test fun everySessionGetsItsOwnCredentials() {
+        val first = SocksAuth.random()
+        val second = SocksAuth.random()
+        assertEquals(32, first.user.length)
+        assertNotEquals(first.user, second.user)
+        assertNotEquals(first.password, second.password)
+        assertFalse(first.toString().contains(first.password))
+    }
     @Test fun cdnChangesOnlyItsOwnCandidatesAndUsesTheAttachedDomain() {
         val options = WorkerOptions(customCdn = true, cdnAddresses = listOf("cdn.example.net"), cdnHost = "front.example.net", cdnSni = "tls.example.net")
-        val config = JSONObject(WorkerConfig.render(deployment.copy(customDomain = "vpn.example.org", options = options), 19876))
+        val config = JSONObject(WorkerConfig.render(deployment.copy(customDomain = "vpn.example.org", options = options), 19876, auth))
         val outbounds = config.getJSONArray("outbounds")
         assertEquals("vpn.example.org", outbounds.getJSONObject(0).getJSONObject("settings").getString("address"))
         val custom = outbounds.getJSONObject(3).getJSONObject("streamSettings")

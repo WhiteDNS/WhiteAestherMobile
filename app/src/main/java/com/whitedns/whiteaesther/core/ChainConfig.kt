@@ -58,10 +58,15 @@ object ChainConfig {
      *   listener, and a config calling Psiphon "aether" would mislead every log
      *   line and screen that reads a proxy name back.
      */
+    /** Hex tokens from [SocksAuth.random], so they need no YAML quoting. */
+    private fun credentials(auth: SocksAuth?): String =
+        auth?.let { ", username: ${it.user}, password: ${it.password}" }.orEmpty()
+
     fun render(
         settings: ChainSettings,
         socksPort: Int?,
         proxyName: String = TUNNEL_PROXY,
+        auth: SocksAuth? = null,
     ): String = buildString {
         // No external-controller. The desktop needs one because mihomo is a
         // separate process there; in-process we drive it through the action
@@ -83,7 +88,7 @@ object ChainConfig {
             // carrier that does not gets renderCarrier, not this.
             append(
                 "  - {name: $proxyName, type: socks5, server: 127.0.0.1, " +
-                    "port: $socksPort, udp: true}\n",
+                    "port: $socksPort${credentials(auth)}, udp: true}\n",
             )
             "\n    dialer-proxy: $proxyName"
         } else {
@@ -142,7 +147,12 @@ object ChainConfig {
      *   swallows every datagram -- DNS and QUIC failing silently while TCP
      *   works, which is the hardest shape of broken to recognise.
      */
-    fun renderCarrier(settings: ChainSettings, socksPort: Int, udp: Boolean = true): String =
+    fun renderCarrier(
+        settings: ChainSettings,
+        socksPort: Int,
+        udp: Boolean = true,
+        auth: SocksAuth? = null,
+    ): String =
         buildString {
             append("mode: rule\n")
             append("log-level: info\n")
@@ -154,7 +164,7 @@ object ChainConfig {
             append("proxies:\n")
             append(
                 "  - {name: $CARRIER_PROXY, type: socks5, server: 127.0.0.1, " +
-                    "port: $socksPort, udp: $udp}\n",
+                    "port: $socksPort${credentials(auth)}, udp: $udp}\n",
             )
 
             // A group of one, rather than routing to the proxy by name. mihomo
