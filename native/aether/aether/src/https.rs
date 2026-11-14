@@ -128,7 +128,15 @@ pub(crate) async fn open(
         }
         let tcp = dial(address, port).await?;
         let _ = tcp.set_nodelay(true);
-        let stream = FragmentingStream::new(tcp, fragments);
+        let stream = match fragments.oob {
+            Some(method) => {
+                let socket = socket2::SockRef::from(&tcp)
+                    .try_clone()
+                    .map_err(AetherError::Io)?;
+                FragmentingStream::new(tcp, fragments).with_oob(method, socket)
+            }
+            None => FragmentingStream::new(tcp, fragments),
+        };
         match tokio_boring::connect(config, request.sni.unwrap_or(request.host), stream).await {
             Ok(tls) => break tls,
             Err(e) => {
@@ -812,6 +820,7 @@ mod tests {
             delay_min_ms: 50,
             delay_max_ms: 50,
             sni_split: false,
+            oob: None,
         };
         for pieces in [Some(fragment), None] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

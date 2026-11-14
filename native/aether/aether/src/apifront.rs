@@ -27,6 +27,10 @@ const SAMPLES_PER_RANGE: usize = 3;
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1200);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_REACHABLE: usize = 4;
+/// The out-of-band lane waits this long, so a network where an ordinary route
+/// works never takes the slower desync, and a blocked one still gets it well
+/// inside the bootstrap budget.
+const OOB_LANE_DELAY: Duration = Duration::from_secs(3);
 
 pub(crate) struct Session {
     pub(crate) tls: tokio_boring::SslStream<FragmentingStream<TcpStream>>,
@@ -41,6 +45,7 @@ enum Method {
     Split,
     SplitLegacy,
     Ech,
+    Oob(crate::oob::OobMethod),
 }
 
 impl Method {
@@ -51,6 +56,7 @@ impl Method {
             Self::Split => "split-clienthello",
             Self::SplitLegacy => "split-tls12",
             Self::Ech => "ech",
+            Self::Oob(method) => method.name(),
         }
     }
 }
@@ -224,6 +230,38 @@ async fn open_edges(
     first_ready(pending).await
 }
 
+/// One desync method at a time, each against every reachable edge: two at once
+/// would be two hellos racing the same inspector. The one that works is kept
+/// first for the next call, such as the MASQUE enrolment right after.
+async fn open_oob(
+    request: &https::Request<'_>,
+    fingerprint: &tls::Fingerprint,
+    addresses: Vec<SocketAddr>,
+) -> Result<Session> {
+    let mut failure = AetherError::Api("no edge for the out-of-band lane".into());
+    for method in crate::oob::ordered_methods() {
+        let mut fragments = FragmentConfig::disabled();
+        fragments.oob = Some(method);
+        match open_edges(
+            request,
+            fingerprint,
+            addresses.clone(),
+            fragments,
+            None,
+            Method::Oob(method),
+        )
+        .await
+        {
+            Ok(session) => {
+                crate::oob::remember(method);
+                return Ok(session);
+            }
+            Err(error) => failure = error,
+        }
+    }
+    Err(failure)
+}
+
 /// The three methods share one edge probe. ECH resolution runs inside its
 /// lane, so a blocked resolver cannot delay raw TLS or a split ClientHello.
 pub(crate) async fn send(
@@ -283,6 +321,7 @@ pub(crate) async fn prepare(
             .boxed(),
         );
         let split_edges = edges.clone();
+        let oob_edges = edges.clone();
         pending.push(
             async {
                 let mut fragments = FragmentConfig::from_env();
@@ -333,6 +372,14 @@ pub(crate) async fn prepare(
                     Method::Ech,
                 )
                 .await
+            }
+            .boxed(),
+        );
+        pending.push(
+            async {
+                tokio::time::sleep(OOB_LANE_DELAY).await;
+                let addresses = oob_edges.await;
+                open_oob(request, fingerprint, addresses).await
             }
             .boxed(),
         );
@@ -524,6 +571,55 @@ mod tests {
         assert_eq!(received.load(Ordering::SeqCst), 2);
         server.abort();
         stalled.abort();
+    }
+
+    #[tokio::test]
+    async fn every_out_of_band_method_completes_a_verified_handshake() {
+        let _setting = crate::upstream::hold_setting().await;
+        let (address, listener, acceptor) = https::test_server(b"h2").await;
+        let server = tokio::spawn(async move {
+            loop {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let _ = tokio_boring::accept(&acceptor, tcp).await;
+                    futures::future::pending::<()>().await;
+                });
+            }
+        });
+        let request = https::Request {
+            method: "POST",
+            host: "api.cloudflareclient.com",
+            port: 443,
+            address: None,
+            sni: None,
+            path: "/reg",
+            headers: &[],
+            body: None,
+        };
+        for method in crate::oob::METHOD_ORDER.iter().copied() {
+            let mut fragments = FragmentConfig::disabled();
+            fragments.oob = Some(method);
+            let session = tokio::time::timeout(
+                Duration::from_secs(5),
+                open_route(
+                    &request,
+                    &tls::Fingerprint::default(),
+                    Some(address),
+                    fragments,
+                    None,
+                    Method::Oob(method),
+                ),
+            )
+            .await
+            .unwrap();
+            assert!(
+                session.is_ok(),
+                "{} did not complete the handshake",
+                method.name()
+            );
+        }
+        server.abort();
     }
 
     #[test]
