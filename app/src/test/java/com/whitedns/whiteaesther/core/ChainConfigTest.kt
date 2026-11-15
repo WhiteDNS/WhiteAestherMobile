@@ -45,6 +45,9 @@ class ChainConfigTest {
         // not look like a failure -- the chain would still work, and every node
         // would be dialled straight off the local network.
         assertTrue(config.contains("dialer-proxy: ${ChainConfig.TUNNEL_PROXY}"))
+        // The download too: left to the rules it lands in the still-empty exit
+        // group and is rejected, so a new subscription never loads.
+        assertTrue(config.contains("    proxy: ${ChainConfig.TUNNEL_PROXY}\n"))
         assertTrue(
             config.contains(
                 "- {name: ${ChainConfig.TUNNEL_PROXY}, type: socks5, " +
@@ -95,6 +98,7 @@ class ChainConfigTest {
         assertFalse(config.contains("dialer-proxy"))
         assertFalse(config.contains("type: socks5"))
         assertFalse(config.contains("dns-query#"))
+        assertTrue(config.contains("    proxy: DIRECT\n"))
     }
 
     @Test
