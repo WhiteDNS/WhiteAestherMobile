@@ -599,7 +599,12 @@ impl ScanMode {
     }
 }
 
-const IRONCLAD_TCPING_TIMEOUT: Duration = Duration::from_secs(10);
+// The whole of a real HTTP round trip through a fresh tunnel: TCP, TLS,
+// connect-ip, the data-plane check and then DNS, TCP and a request inside it.
+// Matched to the per-probe budget of the ironclad strategy and to
+// verify_gateway_traffic; ten seconds cut it off at 500 ms RTT, where it takes
+// five to nine.
+const IRONCLAD_TCPING_TIMEOUT: Duration = Duration::from_secs(15);
 
 struct Strategy {
     concurrency: usize,
@@ -1119,7 +1124,11 @@ pub async fn verify_gateway_traffic(probe: &MasqueProbe, peer: SocketAddr) -> Re
         local_ipv4_str: probe.local_ipv4.to_string(),
         local_ipv6_str: String::new(),
     };
-    crate::tunnelping::masque_http_ping(&params, Duration::from_secs(15)).await
+    // Asked once more after a quick refusal, as the handshake-only check is.
+    crate::masque_h2::once_more_if_refused(Duration::from_secs(5), || {
+        crate::tunnelping::masque_http_ping(&params, IRONCLAD_TCPING_TIMEOUT)
+    })
+    .await
 }
 
 /// `candidates` without the addresses in `avoid`, whatever their port.

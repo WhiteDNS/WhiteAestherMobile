@@ -96,7 +96,7 @@ impl TunnelConfig {
     }
 }
 
-fn validation_timeout() -> Duration {
+pub(crate) fn validation_timeout() -> Duration {
     let secs = std::env::var("AETHER_MASQUE_VALIDATE_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())

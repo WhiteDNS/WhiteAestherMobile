@@ -1,6 +1,7 @@
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use boring::pkey::PKey;
@@ -105,7 +106,7 @@ fn data_check_enabled() -> bool {
     std::env::var("AETHER_MASQUE_NO_DATA_CHECK").is_err()
 }
 
-fn validation_timeout() -> Duration {
+pub(crate) fn validation_timeout() -> Duration {
     let secs = std::env::var("AETHER_MASQUE_VALIDATE_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -273,6 +274,17 @@ async fn connect_tls(
     cfg: &H2TunnelConfig,
     fragment: FragmentConfig,
 ) -> Result<tokio_boring::SslStream<FragmentingStream<TcpStream>>> {
+    connect_tls_with(cfg, fragment, None, None).await
+}
+
+/// [`connect_tls`], with the TCP connect held to `dial_within` and the step it
+/// has reached written to `stage`, for a check that has to say where it stalled.
+async fn connect_tls_with(
+    cfg: &H2TunnelConfig,
+    fragment: FragmentConfig,
+    dial_within: Option<Duration>,
+    stage: Option<&AtomicU8>,
+) -> Result<tokio_boring::SslStream<FragmentingStream<TcpStream>>> {
     let mut ech = cfg.ech_config_list.clone();
     let mut retried = false;
     loop {
@@ -284,7 +296,24 @@ async fn connect_tls(
                 .set_ech_config_list(list)
                 .map_err(|e| AetherError::Tls(format!("h2 ech config: {e}")))?;
         }
-        let tcp = dial(cfg.peer).await?;
+        let tcp = match dial_within {
+            Some(limit) => tokio::time::timeout(limit, dial(cfg.peer))
+                .await
+                .map_err(|_| {
+                    AetherError::Io(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!(
+                            "tcp connect to {} timed out after {}s",
+                            cfg.peer,
+                            limit.as_secs()
+                        ),
+                    ))
+                })??,
+            None => dial(cfg.peer).await?,
+        };
+        if let Some(stage) = stage {
+            stage.store(STAGE_TLS, Ordering::Relaxed);
+        }
         let _ = tcp.set_nodelay(true);
         let stream = FragmentingStream::new(tcp, fragment);
         match tokio_boring::connect(tls_config, &cfg.sni, stream).await {
@@ -341,12 +370,47 @@ async fn connect_tls(
     }
 }
 
+// How far an endpoint check got. A timeout that names the step it stalled on
+// tells a silent address from a slow edge, which "h2 verify timeout" did not.
+const STAGE_TCP: u8 = 0;
+const STAGE_TLS: u8 = 1;
+const STAGE_H2: u8 = 2;
+const STAGE_CONNECT: u8 = 3;
+const STAGE_DATA: u8 = 4;
+
+fn stalled_at(stage: u8) -> &'static str {
+    match stage {
+        STAGE_TCP => "no TCP connection",
+        STAGE_TLS => "no answer to the TLS handshake",
+        STAGE_H2 => "no HTTP/2 answer after TLS",
+        STAGE_CONNECT => "no answer to the connect-ip request",
+        _ => "no data came back through the tunnel",
+    }
+}
+
 pub async fn verify_h2(cfg: &H2TunnelConfig, timeout: Duration) -> Result<Duration> {
+    verify_h2_bounded(cfg, None, timeout).await
+}
+
+/// [`verify_h2`], with the TCP connect held to `dial_within` inside `timeout`.
+///
+/// An address that never answers the connect is given up on at `dial_within`,
+/// as before; one that does connect gets the rest of `timeout` for TLS, the
+/// connect-ip request and the data-plane answers, which on a long, lossy path
+/// is several seconds of retransmission on its own.
+pub async fn verify_h2_bounded(
+    cfg: &H2TunnelConfig,
+    dial_within: Option<Duration>,
+    timeout: Duration,
+) -> Result<Duration> {
     let start = Instant::now();
     let data_check = data_check_enabled();
+    let stage = AtomicU8::new(STAGE_TCP);
 
     let attempt = async {
-        let tls = connect_tls(cfg, FragmentConfig::from_env()).await?;
+        let tls =
+            connect_tls_with(cfg, FragmentConfig::from_env(), dial_within, Some(&stage)).await?;
+        stage.store(STAGE_H2, Ordering::Relaxed);
         let (h2, connection) = h2_builder()
             .handshake(tls)
             .await
@@ -361,6 +425,7 @@ pub async fn verify_h2(cfg: &H2TunnelConfig, timeout: Duration) -> Result<Durati
             .ready()
             .await
             .map_err(|e| AetherError::Masque(format!("h2 ready: {e}")))?;
+        stage.store(STAGE_CONNECT, Ordering::Relaxed);
         let req = build_connect_request(cfg)?;
         let (resp_fut, mut send_stream) = h2
             .send_request(req, false)
@@ -381,6 +446,7 @@ pub async fn verify_h2(cfg: &H2TunnelConfig, timeout: Duration) -> Result<Durati
             return Ok(());
         }
 
+        stage.store(STAGE_DATA, Ordering::Relaxed);
         let mut recv_body = response.into_body();
         let probe = masque::build_dns_probe_packet(cfg.local_ipv4);
         prove_data_plane(&mut recv_body, &mut send_stream, &probe).await
@@ -389,7 +455,55 @@ pub async fn verify_h2(cfg: &H2TunnelConfig, timeout: Duration) -> Result<Durati
     match tokio::time::timeout(timeout, attempt).await {
         Ok(Ok(())) => Ok(start.elapsed()),
         Ok(Err(e)) => Err(e),
-        Err(_) => Err(AetherError::Other("h2 verify timeout".into())),
+        Err(_) => Err(AetherError::Other(format!(
+            "h2 verify timeout after {}s: {}",
+            timeout.as_secs(),
+            stalled_at(stage.load(Ordering::Relaxed))
+        ))),
+    }
+}
+
+/// Whether a check failed on a refusal or reset that the next connection may
+/// well not meet.
+///
+/// A filtered path resets a share of connections at random, and an edge sheds
+/// load the same way; measured on one such network, about one connect in seven
+/// to a working edge was refused. One attempt turned each of those into "this
+/// endpoint does not work". A certificate, an HTTP refusal or a timeout is an
+/// answer, and is not asked twice.
+pub(crate) fn refused_in_passing(error: &AetherError) -> bool {
+    if let AetherError::Io(e) = error {
+        return matches!(
+            e.kind(),
+            std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+        );
+    }
+    // A reset that lands mid-handshake arrives inside a TLS error.
+    let text = error.to_string().to_ascii_lowercase();
+    matches!(error, AetherError::Tls(_))
+        && (text.contains("unexpected eof")
+            || text.contains("connection reset")
+            || text.contains("forcibly closed"))
+}
+
+/// Runs `check`, and once more after a short pause if it was refused in passing
+/// (see [`refused_in_passing`]) within `quickly`. A refusal that took longer is
+/// not cheap to ask again, and the caller's budget was sized for one try.
+pub(crate) async fn once_more_if_refused<T, F, Fut>(quickly: Duration, mut check: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let started = Instant::now();
+    match check().await {
+        Err(error) if refused_in_passing(&error) && started.elapsed() < quickly => {
+            log::debug!("[*] refused in passing ({error}); checking once more");
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            check().await
+        }
+        other => other,
     }
 }
 
@@ -1058,6 +1172,87 @@ mod tests {
             started.elapsed()
         );
         edge.abort();
+    }
+
+    #[tokio::test]
+    async fn a_check_that_stalls_after_tls_says_so_rather_than_just_timing_out() {
+        let _upstream = crate::upstream::hold_setting().await;
+        let _options = crate::tls::hold_options().await;
+        let (cfg, server) = local_tls_peer(Some(b"\x02h2")).await;
+        let outcome =
+            verify_h2_bounded(&cfg, Some(Duration::from_secs(3)), Duration::from_secs(2)).await;
+        server.abort();
+        let message = outcome.expect_err("a peer that never answers HTTP/2 cannot pass").to_string();
+        assert!(message.contains("timeout after 2s"), "{message}");
+        // It connected and finished TLS, so the words must not blame either.
+        assert!(!message.contains("no TCP connection"), "{message}");
+        assert!(!message.contains("TLS handshake"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn a_closed_port_is_a_refusal_worth_one_more_try_and_no_more() {
+        let _upstream = crate::upstream::hold_setting().await;
+        let _options = crate::tls::hold_options().await;
+        // Bound and dropped: nothing listens there now, so the connect is refused.
+        let peer = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let (mut cfg, server) = local_tls_peer(Some(b"\x02h2")).await;
+        server.abort();
+        cfg.peer = peer;
+
+        let tries = std::sync::atomic::AtomicUsize::new(0);
+        let outcome = once_more_if_refused(Duration::from_secs(5), || {
+            tries.fetch_add(1, Ordering::SeqCst);
+            verify_h2_bounded(&cfg, Some(Duration::from_secs(3)), Duration::from_secs(4))
+        })
+        .await;
+        let error = outcome.expect_err("nothing listens there");
+        assert!(refused_in_passing(&error), "{error}");
+        assert_eq!(tries.load(Ordering::SeqCst), 2, "asked once more, and only once");
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_is_not_a_refusal_is_not_asked_twice() {
+        let tries = std::sync::atomic::AtomicUsize::new(0);
+        let outcome: Result<()> = once_more_if_refused(Duration::from_secs(5), || {
+            tries.fetch_add(1, Ordering::SeqCst);
+            async { Err(AetherError::Other("h2 verify timeout after 15s: no data".into())) }
+        })
+        .await;
+        assert!(outcome.is_err());
+        assert_eq!(tries.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn refusals_and_resets_are_told_apart_from_answers() {
+        use std::io::{Error, ErrorKind};
+        for kind in [
+            ErrorKind::ConnectionRefused,
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionAborted,
+        ] {
+            assert!(refused_in_passing(&AetherError::Io(Error::from(kind))), "{kind:?}");
+        }
+        assert!(refused_in_passing(&AetherError::Tls(
+            "h2 tls handshake: TLS handshake failed unexpected EOF".into()
+        )));
+        assert!(refused_in_passing(&AetherError::Tls(
+            "h2 tls handshake: An existing connection was forcibly closed by the remote host. (os error 10054)".into()
+        )));
+        for answer in [
+            AetherError::Io(Error::new(ErrorKind::TimedOut, "tcp connect timed out after 5s")),
+            AetherError::Tls(
+                "h2 tls handshake: TLS handshake failed: cert verification failed - application verification failure".into(),
+            ),
+            AetherError::Masque("connect-ip status 403: refused".into()),
+            AetherError::Other("h2 verify timeout after 15s: no data came back through the tunnel".into()),
+            // Words alone are not enough outside a TLS error.
+            AetherError::Other("the edge refused the request".into()),
+        ] {
+            assert!(!refused_in_passing(&answer), "{answer}");
+        }
     }
 
     #[test]

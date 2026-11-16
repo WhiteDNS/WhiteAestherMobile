@@ -3660,7 +3660,77 @@ async fn quick_verify_masque_peer(
     peer: SocketAddr,
     ech: Option<Vec<u8>>,
 ) -> bool {
-    verify_masque_with_ech(identity, peer, ech).await.is_ok()
+    verify_masque_with_ech(identity, peer, ech, Patience::Quick)
+        .await
+        .is_ok()
+}
+
+/// How long an endpoint check gives a peer to accept the TCP connection.
+///
+/// The figure every check used for the whole of itself. Kept for the connect
+/// alone, where it decides how long a silent address -- the usual shape of a
+/// filtered one -- holds up the next candidate.
+const PEER_DIAL_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How much an endpoint check may spend, by who is waiting for its answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Patience {
+    /// A candidate checked on the way to connecting: the remembered, assigned
+    /// or pinned endpoint. A dead one only delays the search behind it.
+    Quick,
+    /// The endpoint someone asked to have tested, and is waiting to be told
+    /// about. A wrong "does not work" sends them looking for a new one.
+    Full,
+}
+
+/// What a check may spend: on HTTP/2, the TCP connect is held to
+/// [`PEER_DIAL_WITHIN`] and what follows gets the data-plane validation window
+/// the tunnel itself is given (`--validate-secs`, ten seconds by default).
+///
+/// Five seconds for the whole of it was what failed working endpoints on long
+/// international paths: TLS with a fragmented ClientHello, HTTP/2, the
+/// connect-ip request and two data-plane answers are six round trips or more,
+/// two seconds at a 330 ms RTT with nothing lost, and one lost segment early
+/// in a connection costs a further second of retransmission timeout. Measured
+/// at 500 ms RTT with a lossy line in front of a working edge, three checks in
+/// ten timed out at five seconds; the tunnel would have come up on all ten.
+fn check_budget(patience: Patience, h2: bool) -> (Option<std::time::Duration>, std::time::Duration) {
+    if h2 {
+        return (
+            Some(PEER_DIAL_WITHIN),
+            PEER_DIAL_WITHIN + masque_h2::validation_timeout(),
+        );
+    }
+    // QUIC has no connect of its own to bound separately, so a silent address
+    // costs the whole budget; a quick check keeps to the old five seconds.
+    match patience {
+        Patience::Quick => (None, PEER_DIAL_WITHIN),
+        Patience::Full => (None, PEER_DIAL_WITHIN + quic::validation_timeout()),
+    }
+}
+
+#[cfg(test)]
+mod check_budget_tests {
+    use super::*;
+
+    #[test]
+    fn an_http2_check_bounds_the_connect_and_gives_the_rest_the_tunnels_own_window() {
+        for patience in [Patience::Quick, Patience::Full] {
+            let (dial, total) = check_budget(patience, true);
+            assert_eq!(dial, Some(PEER_DIAL_WITHIN), "{patience:?}");
+            assert_eq!(total, PEER_DIAL_WITHIN + masque_h2::validation_timeout(), "{patience:?}");
+            assert!(total > std::time::Duration::from_secs(5), "the old ceiling failed working edges");
+        }
+    }
+
+    #[test]
+    fn a_quick_quic_check_keeps_its_old_ceiling_and_a_requested_one_gets_the_window() {
+        assert_eq!(check_budget(Patience::Quick, false), (None, PEER_DIAL_WITHIN));
+        assert_eq!(
+            check_budget(Patience::Full, false),
+            (None, PEER_DIAL_WITHIN + quic::validation_timeout())
+        );
+    }
 }
 
 /// The parameters [`verify_masque_peer`] would dial with, without dialling.
@@ -3687,14 +3757,37 @@ async fn verify_masque_peer(
     identity: &account::Identity,
     peer: SocketAddr,
 ) -> Result<std::time::Duration> {
-    verify_masque_with_ech(identity, peer, attempt_ech().await?).await
+    verify_masque_with_ech(identity, peer, attempt_ech().await?, Patience::Full).await
 }
 
 async fn verify_masque_with_ech(
     identity: &account::Identity,
     peer: SocketAddr,
     ech: Option<Vec<u8>>,
+    patience: Patience,
 ) -> Result<std::time::Duration> {
+    // A refusal is asked again only when it came quickly, so a quick check of a
+    // silent address still costs one dial window and no more.
+    let carrier = if masque_h2::enabled() { "HTTP/2" } else { "HTTP/3" };
+    masque_h2::once_more_if_refused(PEER_DIAL_WITHIN, || {
+        verify_masque_once(identity, peer, ech.clone(), patience)
+    })
+    .await
+    .map_err(|error| {
+        AetherError::Other(format!(
+            "{carrier} endpoint validation failed: {}",
+            error.detail()
+        ))
+    })
+}
+
+async fn verify_masque_once(
+    identity: &account::Identity,
+    peer: SocketAddr,
+    ech: Option<Vec<u8>>,
+    patience: Patience,
+) -> Result<std::time::Duration> {
+    let (dial_within, budget) = check_budget(patience, masque_h2::enabled());
     let vp = quic::VerifyParams {
         peer,
         sni: quic::masque_sni()?,
@@ -3704,7 +3797,7 @@ async fn verify_masque_with_ech(
         key_pem: identity.key_pem.clone(),
         ech_config_list: ech.clone(),
         noize: noize_config(),
-        timeout: std::time::Duration::from_secs(5),
+        timeout: budget,
         local_ipv4: parse_local_v4(&identity.ipv4),
     };
 
@@ -3722,16 +3815,12 @@ async fn verify_masque_with_ech(
             expected_pins: consts::masque_pins().iter().map(|p| p.to_vec()).collect(),
             ech_config_list: ech.clone(),
         };
-        return masque_h2::verify_h2(&cfg, std::time::Duration::from_secs(5))
-            .await
-            .map_err(|error| {
-                AetherError::Other(format!("HTTP/2 endpoint validation failed: {error}"))
-            });
+        // The cause is kept as itself, not folded into Other: whether it was a
+        // refusal decides if the check is made again.
+        return masque_h2::verify_h2_bounded(&cfg, dial_within, budget).await;
     }
 
-    quic::verify_masque(&vp)
-        .await
-        .map_err(|error| AetherError::Other(format!("HTTP/3 endpoint validation failed: {error}")))
+    quic::verify_masque(&vp).await
 }
 
 async fn want_quick_reconnect(cached: &lastconn::LastConnection) -> bool {
