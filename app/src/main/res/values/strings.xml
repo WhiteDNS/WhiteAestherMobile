@@ -635,6 +635,7 @@
     <string name="scan_progress_counts">%1$d / %2$d addresses checked · %3$d s</string>
     <string name="scan_profile_details">%1$s · TLS split: %2$s · ECH: %3$s</string>
     <string name="scan_stable">Internet checked %1$d/%2$d · variation %3$d ms</string>
+    <string name="scan_checked">Internet checked %1$d/%2$d</string>
     <string name="scan_handshake_only">Tunnel answered · internet not confirmed</string>
     <string name="scan_pending_check">Tunnel answered · waiting for internet check</string>
     <string name="scan_details">Scan details</string>

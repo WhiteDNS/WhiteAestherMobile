@@ -1632,8 +1632,12 @@ fun EndpointScreen(
                         )
                         Text(
                             when {
-                                result.successfulChecks > 0 -> stringResource(R.string.scan_stable,
+                                // Variation needs two samples; with one it read "0 ms",
+                                // which looked like a perfectly steady endpoint.
+                                result.successfulChecks > 1 -> stringResource(R.string.scan_stable,
                                     result.successfulChecks, result.attemptedChecks, result.jitterMillis)
+                                result.successfulChecks > 0 -> stringResource(R.string.scan_checked,
+                                    result.successfulChecks, result.attemptedChecks)
                                 result.attemptedChecks > 0 -> stringResource(R.string.scan_handshake_only)
                                 else -> stringResource(R.string.scan_pending_check)
                             },

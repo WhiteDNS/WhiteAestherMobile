@@ -629,6 +629,7 @@
     <string name="scan_progress_counts">%1$d از %2$d آدرس بررسی شد · %3$d ثانیه</string>
     <string name="scan_profile_details">%1$s · تقسیم TLS: %2$s · ECH: %3$s</string>
     <string name="scan_stable">آزمون اینترنت: %1$d از %2$d · نوسان %3$d میلی‌ثانیه</string>
+    <string name="scan_checked">آزمون اینترنت: %1$d از %2$d</string>
     <string name="scan_handshake_only">تونل پاسخ داد · اینترنت تأیید نشد</string>
     <string name="scan_pending_check">تونل پاسخ داد · در انتظار آزمون اینترنت</string>
     <string name="scan_details">جزئیات اسکن</string>

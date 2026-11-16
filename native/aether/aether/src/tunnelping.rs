@@ -171,9 +171,14 @@ pub async fn masque_http_ping(p: &MasquePingParams, timeout: Duration) -> Result
         };
 
         if ready_rx.await.is_err() {
-            return Err(AetherError::Other(
-                "tunnel exited before data-plane validation".into(),
-            ));
+            // The tunnel ended before it was ready, and its own error says why:
+            // a refusal, a certificate, a timeout. "Exited" alone left nothing
+            // to tell a filtered address from a broken one.
+            let mut tunnel_task = tunnel_task;
+            return Err(match (&mut tunnel_task.0).await {
+                Ok(Err(error)) => error,
+                _ => AetherError::Other("tunnel exited before data-plane validation".into()),
+            });
         }
 
         let start = Instant::now();

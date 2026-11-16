@@ -26,6 +26,7 @@ import com.whitedns.whiteaesther.data.UpdateDownload
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.EndpointMode
+import com.whitedns.whiteaesther.data.ScanStrategy
 import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.data.TunnelProtocol
@@ -936,8 +937,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 results = mutableEndpointScannerState.value.results,
                 message = say(R.string.msg_testing_endpoint),
             )
-            val config = settings.copy(endpointMode = EndpointMode.CUSTOM_ONLY)
-                .toNativeJson(getApplication())
+            // The check "Find endpoints" confirms results with: real traffic
+            // through a fresh tunnel. A handshake-only check here disagreed
+            // with the list beside it, failing endpoints the list had passed.
+            val config = settings.copy(
+                endpointMode = EndpointMode.CUSTOM_ONLY,
+                scanStrategy = ScanStrategy.IRONCLAD,
+            ).toNativeJson(getApplication())
             val result = withContext(Dispatchers.IO) { NativeAetherBridge.testEndpoint(config) }
             result.fold(
                 onSuccess = { endpoint ->
