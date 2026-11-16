@@ -3694,7 +3694,10 @@ enum Patience {
 /// in a connection costs a further second of retransmission timeout. Measured
 /// at 500 ms RTT with a lossy line in front of a working edge, three checks in
 /// ten timed out at five seconds; the tunnel would have come up on all ten.
-fn check_budget(patience: Patience, h2: bool) -> (Option<std::time::Duration>, std::time::Duration) {
+fn check_budget(
+    patience: Patience,
+    h2: bool,
+) -> (Option<std::time::Duration>, std::time::Duration) {
     if h2 {
         return (
             Some(PEER_DIAL_WITHIN),
@@ -3718,14 +3721,24 @@ mod check_budget_tests {
         for patience in [Patience::Quick, Patience::Full] {
             let (dial, total) = check_budget(patience, true);
             assert_eq!(dial, Some(PEER_DIAL_WITHIN), "{patience:?}");
-            assert_eq!(total, PEER_DIAL_WITHIN + masque_h2::validation_timeout(), "{patience:?}");
-            assert!(total > std::time::Duration::from_secs(5), "the old ceiling failed working edges");
+            assert_eq!(
+                total,
+                PEER_DIAL_WITHIN + masque_h2::validation_timeout(),
+                "{patience:?}"
+            );
+            assert!(
+                total > std::time::Duration::from_secs(5),
+                "the old ceiling failed working edges"
+            );
         }
     }
 
     #[test]
     fn a_quick_quic_check_keeps_its_old_ceiling_and_a_requested_one_gets_the_window() {
-        assert_eq!(check_budget(Patience::Quick, false), (None, PEER_DIAL_WITHIN));
+        assert_eq!(
+            check_budget(Patience::Quick, false),
+            (None, PEER_DIAL_WITHIN)
+        );
         assert_eq!(
             check_budget(Patience::Full, false),
             (None, PEER_DIAL_WITHIN + quic::validation_timeout())
@@ -3768,7 +3781,11 @@ async fn verify_masque_with_ech(
 ) -> Result<std::time::Duration> {
     // A refusal is asked again only when it came quickly, so a quick check of a
     // silent address still costs one dial window and no more.
-    let carrier = if masque_h2::enabled() { "HTTP/2" } else { "HTTP/3" };
+    let carrier = if masque_h2::enabled() {
+        "HTTP/2"
+    } else {
+        "HTTP/3"
+    };
     masque_h2::once_more_if_refused(PEER_DIAL_WITHIN, || {
         verify_masque_once(identity, peer, ech.clone(), patience)
     })

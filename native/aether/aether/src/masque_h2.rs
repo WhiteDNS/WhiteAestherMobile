@@ -1182,7 +1182,9 @@ mod tests {
         let outcome =
             verify_h2_bounded(&cfg, Some(Duration::from_secs(3)), Duration::from_secs(2)).await;
         server.abort();
-        let message = outcome.expect_err("a peer that never answers HTTP/2 cannot pass").to_string();
+        let message = outcome
+            .expect_err("a peer that never answers HTTP/2 cannot pass")
+            .to_string();
         assert!(message.contains("timeout after 2s"), "{message}");
         // It connected and finished TLS, so the words must not blame either.
         assert!(!message.contains("no TCP connection"), "{message}");
@@ -1210,7 +1212,11 @@ mod tests {
         .await;
         let error = outcome.expect_err("nothing listens there");
         assert!(refused_in_passing(&error), "{error}");
-        assert_eq!(tries.load(Ordering::SeqCst), 2, "asked once more, and only once");
+        assert_eq!(
+            tries.load(Ordering::SeqCst),
+            2,
+            "asked once more, and only once"
+        );
     }
 
     #[tokio::test]
@@ -1218,7 +1224,11 @@ mod tests {
         let tries = std::sync::atomic::AtomicUsize::new(0);
         let outcome: Result<()> = once_more_if_refused(Duration::from_secs(5), || {
             tries.fetch_add(1, Ordering::SeqCst);
-            async { Err(AetherError::Other("h2 verify timeout after 15s: no data".into())) }
+            async {
+                Err(AetherError::Other(
+                    "h2 verify timeout after 15s: no data".into(),
+                ))
+            }
         })
         .await;
         assert!(outcome.is_err());
@@ -1233,7 +1243,10 @@ mod tests {
             ErrorKind::ConnectionReset,
             ErrorKind::ConnectionAborted,
         ] {
-            assert!(refused_in_passing(&AetherError::Io(Error::from(kind))), "{kind:?}");
+            assert!(
+                refused_in_passing(&AetherError::Io(Error::from(kind))),
+                "{kind:?}"
+            );
         }
         assert!(refused_in_passing(&AetherError::Tls(
             "h2 tls handshake: TLS handshake failed unexpected EOF".into()
