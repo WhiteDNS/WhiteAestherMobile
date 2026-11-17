@@ -114,6 +114,10 @@ data class ChainState(
 data class AddressPair(
     val real: String? = null,
     val tunnel: String? = null,
+    /** The exit's country as the trace endpoint names it; null until measured. */
+    val tunnelCountry: String? = null,
+    /** How long the measuring request took through the tunnel. */
+    val tunnelLatencyMs: Long? = null,
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -442,7 +446,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .collect { stage ->
                     when (stage) {
                         EngineStage.CONNECTED -> {
-                            mutableAddresses.value = mutableAddresses.value.copy(tunnel = null)
+                            mutableAddresses.value = mutableAddresses.value.copy(
+                                tunnel = null, tunnelCountry = null, tunnelLatencyMs = null,
+                            )
                             // With the exit chain running this process is kept
                             // off its own interface -- deliberately, or the
                             // engine's and mihomo's own sockets would be
@@ -462,10 +468,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 // opposite, because this process is excluded
                                 // from the interface on purpose -- which is
                                 // exactly what it did before this existed.
-                                carrierPort != null -> AddressReporter.carrierAddress(carrierPort)
-                                else -> AddressReporter.tunnelAddress(ipv4Only())
+                                carrierPort != null -> AddressReporter.carrierExit(carrierPort)
+                                else -> AddressReporter.tunnelExit(ipv4Only())
                             }
-                            mutableAddresses.value = mutableAddresses.value.copy(tunnel = exit)
+                            mutableAddresses.value = mutableAddresses.value.copy(
+                                tunnel = exit?.ip, tunnelCountry = exit?.country, tunnelLatencyMs = exit?.latencyMs,
+                            )
                             // Only here, and both of them. Asking GitHub from
                             // an unprotected socket would tell the network this
                             // device runs a circumvention tool; inside the
@@ -479,10 +487,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             )
                         }
                         EngineStage.IDLE -> {
-                            mutableAddresses.value = mutableAddresses.value.copy(tunnel = null)
+                            mutableAddresses.value = mutableAddresses.value.copy(
+                                tunnel = null, tunnelCountry = null, tunnelLatencyMs = null,
+                            )
                             captureRealAddressIfIdle()
                         }
-                        else -> mutableAddresses.value = mutableAddresses.value.copy(tunnel = null)
+                        else -> mutableAddresses.value = mutableAddresses.value.copy(
+                            tunnel = null, tunnelCountry = null, tunnelLatencyMs = null,
+                        )
                     }
                 }
         }

@@ -9,7 +9,6 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import com.whitedns.whiteaesther.data.AppSettings
-import com.whitedns.whiteaesther.service.EngineStatus
 import com.whitedns.whiteaesther.ui.theme.WhiteAestherTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -26,7 +25,7 @@ class TlsSettingsInputTest {
         stored.value = AppSettings(showAdvanced = true, encryptedHello = echEnabled)
         compose.setContent {
             WhiteAestherTheme {
-                TrafficScreen(stored.value, EngineStatus(), onSettingsChange = { pending = it })
+                StealthScreen(stored.value, onSettingsChange = { pending = it })
             }
         }
     }

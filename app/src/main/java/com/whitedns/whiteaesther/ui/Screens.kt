@@ -44,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -285,6 +286,8 @@ fun HomeScreen(
     onToggleConnection: () -> Unit,
     onGoToRoutes: () -> Unit,
     onGoToEndpoint: () -> Unit,
+    onGoToAdvanced: () -> Unit = {},
+    methodSupport: MethodSheetSupport = MethodSheetSupport(),
     onGoToTraffic: () -> Unit,
     onGoToChain: () -> Unit = {},
     onSettingsChange: (AppSettings) -> Unit = {},
@@ -297,6 +300,9 @@ fun HomeScreen(
     val state = status.stage.toConnectState()
     val configuration = LocalConfiguration.current
     var detailsExpanded by rememberSaveable { mutableStateOf(false) }
+    var chooseMethod by rememberSaveable { mutableStateOf(false) }
+    val television = LocalTvMode.current
+    val changeMethod: () -> Unit = { if (television) onGoToRoutes() else { chooseMethod = true } }
 
     // Measured from the moment the service recorded, not from when this screen
     // first saw it, so rotating the device or returning to a recreated activity
@@ -399,12 +405,12 @@ fun HomeScreen(
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             }
         }
-        HomeTrafficStrip(traffic, active = status.stage == EngineStage.CONNECTED)
+        HomeTrafficStrip(traffic, active = status.stage == EngineStage.CONNECTED, addresses = addresses)
         HomeConnectionControls(
             settings = settings, status = status,
-            onSettingsChange = onSettingsChange, onGoToRoutes = onGoToRoutes,
-            onGoToChain = onGoToChain,
-            onGoToApps = onGoToApps, onGoToTools = onGoToTraffic,
+            chooseMethod = chooseMethod, onChooseMethod = { chooseMethod = it },
+            onSettingsChange = onSettingsChange, support = methodSupport, onOpenMethodPage = onGoToRoutes,
+            onGoToAdvanced = onGoToAdvanced, onGoToChain = onGoToChain,
         )
 
         val attention = homeAttention(settings, status)
@@ -422,7 +428,7 @@ fun HomeScreen(
                 actions = attention.actions.map { (label, target) ->
                     label to {
                         when (target) {
-                            AttentionTarget.ROUTES -> onGoToRoutes()
+                            AttentionTarget.ROUTES -> changeMethod()
                             AttentionTarget.ENDPOINT -> onGoToEndpoint()
                             AttentionTarget.TRAFFIC -> onGoToTraffic()
                             AttentionTarget.LOGS -> onGoToDiagnostics()
@@ -455,12 +461,26 @@ fun HomeScreen(
             Spacer(Modifier.height(12.dp))
         }
 
+        // Opens in place, so the arrow points down rather than off to a page.
         AetherCard {
-            HomeSelectionRow(
-                stringResource(R.string.home_details),
-                stringResource(if (detailsExpanded) R.string.home_hide_details else R.string.home_details_summary),
-                "home-details-toggle", onClick = { detailsExpanded = !detailsExpanded },
-            )
+            val interaction = remember { MutableInteractionSource() }
+            val toggle = { detailsExpanded = !detailsExpanded }
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                    .tvControllerActivation(onClick = toggle)
+                    .clickable(interaction, LocalIndication.current, role = Role.Button, onClick = toggle)
+                    .controllerFocus(interaction, RoundedCornerShape(8.dp)).testTag("home-details-toggle")
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.home_details), style = AetherTheme.type.RowTitle, color = colors.text)
+                    Text(stringResource(R.string.home_details_summary), style = AetherTheme.type.Small, color = colors.text2)
+                }
+                Icon(AetherIcons.ChevronDown, null,
+                    Modifier.size(20.dp).rotate(if (detailsExpanded) 180f else 0f), colors.text2)
+            }
         }
         if (detailsExpanded) {
             Spacer(Modifier.height(12.dp))
@@ -751,8 +771,8 @@ private fun homeAttention(settings: AppSettings, status: EngineStatus): Attentio
             title = stringResource(R.string.the_last_attempt_failed),
             body = stringResource(R.string.home_error_help),
             actions = listOf(
-                stringResource(R.string.home_view_logs) to AttentionTarget.LOGS,
-                stringResource(R.string.home_change_method) to AttentionTarget.ROUTES,
+                stringResource(R.string.home_try_another_way) to AttentionTarget.ROUTES,
+                stringResource(R.string.home_report_problem) to AttentionTarget.LOGS,
             ),
         )
         validationError != null -> Attention(
@@ -855,7 +875,7 @@ internal fun ProxyModeNotice(address: String, onCopy: () -> Unit, modifier: Modi
  * language from a setting, so the names would keep the language the screen was
  * first drawn in.
  */
-private fun countryName(code: String, locale: java.util.Locale): String =
+internal fun countryName(code: String, locale: java.util.Locale): String =
     java.util.Locale.Builder().setRegion(code).build()
         .getDisplayCountry(locale)
         .ifBlank { code.uppercase() }
@@ -870,360 +890,240 @@ private fun carrierDetail(carrier: Carrier): String = when (carrier) {
     Carrier.PROXY -> stringResource(R.string.carrier_proxy_detail)
 }
 
+/** How Tor reaches its network, shown inside Tor's card in the method sheet. */
 @Composable
-fun RoutesScreen(
+internal fun TorBridgeSettings(
     settings: AppSettings,
     onSettingsChange: (AppSettings) -> Unit,
-    onGoToEndpoint: () -> Unit,
-    onGoToChain: () -> Unit = {},
-    onGoToRoutingRules: () -> Unit = {},
-    onFetchBridges: (String) -> Unit = {},
-    bridgesFetching: Boolean = false,
-    bridgesMessage: BridgeMessage? = null,
-    detectedCountry: String = "",
-    psiphonRegions: List<String> = emptyList(),
-    endpointModifier: Modifier = Modifier,
-    chainModifier: Modifier = Modifier,
-    routingRulesModifier: Modifier = Modifier,
+    support: MethodSheetSupport,
 ) {
-    val context = LocalContext.current
-    var advanced by rememberSaveable { mutableStateOf(settings.showAdvanced) }
-    var previousAdvancedDefault by rememberSaveable { mutableStateOf(settings.showAdvanced) }
-    LaunchedEffect(settings.showAdvanced) {
-        if (previousAdvancedDefault != settings.showAdvanced) {
-            advanced = settings.showAdvanced
-            previousAdvancedDefault = settings.showAdvanced
-        }
-    }
-    val active = settings.activeProfile()
-    var multiHopExpanded by rememberSaveable {
-        mutableStateOf(settings.secondCarrier != null || settings.showAdvanced)
-    }
+    val onFetchBridges = support.onFetchBridges
+    val bridgesFetching = support.bridgesFetching
+    val bridgesMessage = support.bridgesMessage
     // Held locally so typing is not fought by the settings flow round-tripping
     // through DataStore, and refreshed when something else writes them -- which
     // is what the fetch button does.
     var bridgeText by rememberSaveable(settings.torBridges) { mutableStateOf(settings.torBridges) }
-    // Read from the composition so a language change redraws the country names
-    // with it, which Locale.getDefault() would not.
-    val uiLocale = LocalConfiguration.current.locales[0]
-    var bridgeCountry by rememberSaveable(detectedCountry) {
-        mutableStateOf(detectedCountry.uppercase())
+    var bridgeCountry by rememberSaveable(support.detectedCountry) {
+        mutableStateOf(support.detectedCountry.uppercase())
     }
-
-    ScreenColumn {
-        PageTitle(stringResource(R.string.home_methods_title), stringResource(R.string.home_methods_description))
-
-        AetherCard {
-            CardHead(stringResource(R.string.home_method))
-            Column(Modifier.padding(8.dp)) {
-                MethodChoices(settings, onSettingsChange)
-            }
-            if (!settings.engineSettingsApply) {
-                Note(stringResource(R.string.carrier_not_engine_note), Modifier.padding(horizontal = 16.dp))
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        if (!settings.automaticCarrier && !settings.carrier.isStandalone) {
-            AetherCard {
-                AdvancedSection(
-                    badge = stringResource(R.string.home_multi_hop),
-                    expanded = multiHopExpanded,
-                    onToggle = { multiHopExpanded = !multiHopExpanded },
-                    tag = "multi-hop-toggle",
-                ) {
-                    Divider()
-
-                    // Two lists rather than one, because the pair is ordered and a
-                    // pair written side by side does not say which end is which. The
-                    // labels do the work an arrow would: what the network sees, and
-                    // what the internet sees.
-                    Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        SectionLabel(
-                            stringResource(R.string.carrier_first),
-                            Modifier.padding(start = 4.dp, bottom = 4.dp),
-                        )
-                        Carrier.entries.filterNot { it.isStandalone }.forEach { carrier ->
-                            OptionRow(
-                                code = carrier.wireName.take(3).uppercase(),
-                                title = stringResource(carrier.label),
-                                subtitle = carrierDetail(carrier),
-                                selected = settings.carrier == carrier,
-                                tag = "carrier-first-${carrier.wireName}",
-                                onClick = {
-                                    // A carrier chained to itself is a hop to nowhere,
-                                    // so taking one for the first position gives up
-                                    // the second rather than leaving an impossible pair.
-                                    onSettingsChange(
-                                        settings.copy(
-                                            carrier = carrier,
-                                            secondCarrier = settings.secondCarrier?.takeIf { it != carrier },
-                                        ),
-                                    )
-                                },
-                            )
-                        }
-                    }
-
-                    Divider()
-
-                    Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        SectionLabel(
-                            stringResource(R.string.carrier_then),
-                            Modifier.padding(start = 4.dp, bottom = 4.dp),
-                        )
-                        OptionRow(
-                            code = null,
-                            title = stringResource(R.string.carrier_second_none),
-                            subtitle = stringResource(R.string.carrier_second_none_detail),
-                            selected = settings.secondCarrier == null,
-                            onClick = { onSettingsChange(settings.copy(secondCarrier = null)) },
-                        )
-                        Carrier.entries.filter { it != settings.carrier && !it.isStandalone }.forEach { carrier ->
-                            OptionRow(
-                                code = carrier.wireName.take(3).uppercase(),
-                                title = stringResource(carrier.label),
-                                subtitle = carrierDetail(carrier),
-                                selected = settings.secondCarrier == carrier,
-                                tag = "carrier-second-${carrier.wireName}",
-                                onClick = { onSettingsChange(settings.copy(secondCarrier = carrier)) },
-                            )
-                        }
-                    }
-
-                    // One tap, because trying the other order is the whole point of
-                    // offering two. Behind two menus nobody tries it.
-                    val second = settings.secondCarrier
-                    if (second != null) {
-                        OutlineButton(
-                            text = stringResource(R.string.carrier_swap),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 13.dp, vertical = 2.dp),
-                            icon = AetherIcons.Traffic,
-                            onClick = {
-                                onSettingsChange(
-                                    settings.copy(carrier = second, secondCarrier = settings.carrier),
-                                )
-                            },
-                        )
-                    }
-
-                    // Said here rather than left for the user to discover at connect
-                    // time. Everything below this card -- the endpoint, the
-                    // protocol, the discovery depth -- describes a search for a
-                    // Cloudflare gateway, and a path that never looks for one makes
-                    // all of it inert. A screen full of controls that quietly do
-                    // nothing is worse than a sentence saying so.
-                    //
-                    // Padded to the card's own inset. Note adds only 2dp of its own,
-                    // which is right inside a column that already has padding and
-                    // wrong here, where it is a direct child of the card and the text
-                    // would sit on the border.
-                    val note = when {
-                        settings.carrierPath.none { it.usesEngine } ->
-                            stringResource(R.string.carrier_not_engine_note)
-                        // Aether behind something else cannot use the transports
-                        // that are datagrams, so the protocol control below is not
-                        // what this session will run.
-                        second?.usesEngine == true -> stringResource(R.string.carrier_chain_h2_note)
-                        else -> null
-                    }
-                    if (note != null) Note(note, Modifier.padding(horizontal = 13.dp))
-                    if (second == Carrier.TOR && settings.torBridge == TorBridge.SNOWFLAKE) {
-                        Note(
-                            stringResource(R.string.carrier_chain_snowflake_note),
-                            Modifier.padding(horizontal = 13.dp),
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-        }
-
-        // Only under Psiphon, and only once Psiphon has said what it has.
-        // Before the first connection there is nothing to list, and a picker
-        // showing every country in the world would be offering exits that may
-        // not exist.
-        // Whichever position Psiphon is in. A control that appears only
-        // when a carrier is first is one that vanishes when the user swaps
-        // the order, and the exit country still decides where the session
-        // leaves from when Psiphon is the last hop.
-        // Neither this card nor Tor's below under Automatic, which picks the
-        // best exit and walks the bridge modes itself: offering the controls
-        // would suggest they decide something they do not.
-        if (!settings.automaticCarrier && Carrier.PSIPHON in settings.carrierPath) {
-            Spacer(Modifier.height(12.dp))
-            AetherCard {
-                CardHead(
-                    stringResource(R.string.psiphon_region),
-                    stringResource(R.string.psiphon_region_subtitle),
+    Column {
+        Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            TorBridge.entries.forEach { bridge ->
+                OptionRow(
+                    code = null,
+                    title = stringResource(bridge.label),
+                    subtitle = when (bridge) {
+                        TorBridge.NONE -> stringResource(R.string.tor_bridge_none_detail)
+                        TorBridge.OBFS4 -> stringResource(R.string.tor_bridge_obfs4_detail)
+                        TorBridge.SNOWFLAKE -> stringResource(R.string.tor_bridge_snowflake_detail)
+                        TorBridge.CUSTOM -> stringResource(R.string.tor_bridge_custom_detail)
+                    },
+                    selected = settings.torBridge == bridge,
+                    onClick = { onSettingsChange(settings.copy(torBridge = bridge)) },
                 )
-                if (psiphonRegions.isEmpty()) {
-                    Note(
-                        stringResource(R.string.psiphon_region_unknown),
-                        Modifier.padding(horizontal = 13.dp),
+            }
+        }
+
+        if (settings.torBridge == TorBridge.CUSTOM) {
+            Divider()
+            Column(Modifier.padding(15.dp)) {
+                // What the user has, before what they can do about it.
+                // A button above a field they have not filled in reads
+                // as the only way to fill it, and pasting is the way
+                // that works when the fetch cannot reach anything.
+                Text(
+                    TorBridges.summarise(settings.torBridges)
+                        ?.let { stringResource(R.string.tor_bridges_have, it) }
+                        ?: stringResource(R.string.tor_bridges_none_yet),
+                    style = AetherTheme.type.Data,
+                    color = AetherTheme.colors.text2,
+                )
+                Spacer(Modifier.height(10.dp))
+                PrimaryButton(
+                    text = if (bridgesFetching) {
+                        stringResource(R.string.tor_bridges_fetching)
+                    } else {
+                        stringResource(R.string.tor_bridges_fetch)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("fetch-bridges-button"),
+                    enabled = !bridgesFetching,
+                    onClick = { onFetchBridges(bridgeCountry) },
+                )
+                Spacer(Modifier.height(8.dp))
+                // Shown so it can be corrected. The country comes from
+                // the network operator, which is right for somebody at
+                // home and wrong for somebody asking on behalf of a
+                // place they are not -- and Tor answers per country, so
+                // asking as the wrong one gets a correct answer to the
+                // wrong question.
+                OutlinedTextField(
+                    value = bridgeCountry,
+                    onValueChange = { bridgeCountry = it.take(2).uppercase() },
+                    label = { Text(stringResource(R.string.tor_bridges_country)) },
+                    singleLine = true,
+                    textStyle = AetherTheme.type.Data.copy(color = AetherTheme.colors.text),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("bridge-country-field"),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = AetherTheme.colors.ink1,
+                        unfocusedContainerColor = AetherTheme.colors.ink1,
+                    ),
+                )
+                bridgesMessage?.let { message ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        message.text,
+                        style = AetherTheme.type.Data,
+                        // Red is for a fault. Tor having no
+                        // recommendation for a country is Tor saying
+                        // the network needs no help, which is true of
+                        // most of the world.
+                        color = if (message.isError) {
+                            AetherTheme.colors.signalFailed
+                        } else {
+                            AetherTheme.colors.text2
+                        },
                     )
                 }
-                Column(
-                    Modifier.padding(11.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    // Best available first and always, even with nothing to
-                    // list beside it. It used to live inside the branch that
-                    // needed countries, so a phone whose cache was empty --
-                    // a fresh install, or a session where Psiphon reported
-                    // nothing -- was told in the error message to choose it
-                    // and then offered no way to. A country already chosen is
-                    // listed too, whether or not Psiphon has named it: it is
-                    // what the next attempt will ask for, and a setting the
-                    // screen hides is one the user cannot take back.
-                    val chosen = settings.psiphonRegion
-                    val unlisted = chosen.isNotEmpty() && chosen !in psiphonRegions
-                    val offered = listOf("") + psiphonRegions + if (unlisted) listOf(chosen) else emptyList()
-                    offered.forEach { region ->
-                        OptionRow(
-                            code = region.ifEmpty { "ANY" }.uppercase(),
-                            title = if (region.isEmpty()) {
-                                stringResource(R.string.psiphon_region_best)
-                            } else {
-                                countryName(region, uiLocale)
-                            },
-                            subtitle = when {
-                                region.isEmpty() -> stringResource(R.string.psiphon_region_best_detail)
-                                region == chosen && unlisted ->
-                                    stringResource(R.string.psiphon_region_unlisted_detail)
-                                else -> stringResource(R.string.psiphon_region_detail)
-                            },
-                            selected = chosen == region,
-                            onClick = {
-                                onSettingsChange(settings.copy(psiphonRegion = region))
-                            },
-                        )
-                    }
-                }
-            }
-        }
-
-        // Only under Tor, because it is the only carrier that has this choice:
-        // Psiphon picks its own protocols and gives no say in it, and offering
-        // a control that belongs to one carrier under all of them is how a
-        // screen stops meaning anything.
-        if (!settings.automaticCarrier && Carrier.TOR in settings.carrierPath) {
-            Spacer(Modifier.height(12.dp))
-            AetherCard {
-                CardHead(
-                    stringResource(R.string.tor_bridge),
-                    stringResource(R.string.tor_bridge_subtitle),
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = bridgeText,
+                    onValueChange = {
+                        bridgeText = it
+                        onSettingsChange(settings.copy(torBridges = it))
+                    },
+                    label = { Text(stringResource(R.string.tor_bridges_field)) },
+                    placeholder = { Text(stringResource(R.string.tor_bridges_hint)) },
+                    textStyle = AetherTheme.type.Data.copy(color = AetherTheme.colors.text),
+                    minLines = 3,
+                    maxLines = 8,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("tor-bridges-field"),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = AetherTheme.colors.ink1,
+                        unfocusedContainerColor = AetherTheme.colors.ink1,
+                    ),
                 )
-                Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    TorBridge.entries.forEach { bridge ->
-                        OptionRow(
-                            code = null,
-                            title = stringResource(bridge.label),
-                            subtitle = when (bridge) {
-                                TorBridge.NONE -> stringResource(R.string.tor_bridge_none_detail)
-                                TorBridge.OBFS4 -> stringResource(R.string.tor_bridge_obfs4_detail)
-                                TorBridge.SNOWFLAKE -> stringResource(R.string.tor_bridge_snowflake_detail)
-                                TorBridge.CUSTOM -> stringResource(R.string.tor_bridge_custom_detail)
-                            },
-                            selected = settings.torBridge == bridge,
-                            onClick = { onSettingsChange(settings.copy(torBridge = bridge)) },
-                        )
-                    }
-                }
-
-                if (settings.torBridge == TorBridge.CUSTOM) {
-                    Divider()
-                    Column(Modifier.padding(15.dp)) {
-                        // What the user has, before what they can do about it.
-                        // A button above a field they have not filled in reads
-                        // as the only way to fill it, and pasting is the way
-                        // that works when the fetch cannot reach anything.
-                        Text(
-                            TorBridges.summarise(settings.torBridges)
-                                ?.let { stringResource(R.string.tor_bridges_have, it) }
-                                ?: stringResource(R.string.tor_bridges_none_yet),
-                            style = AetherTheme.type.Data,
-                            color = AetherTheme.colors.text2,
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        PrimaryButton(
-                            text = if (bridgesFetching) {
-                                stringResource(R.string.tor_bridges_fetching)
-                            } else {
-                                stringResource(R.string.tor_bridges_fetch)
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("fetch-bridges-button"),
-                            enabled = !bridgesFetching,
-                            onClick = { onFetchBridges(bridgeCountry) },
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        // Shown so it can be corrected. The country comes from
-                        // the network operator, which is right for somebody at
-                        // home and wrong for somebody asking on behalf of a
-                        // place they are not -- and Tor answers per country, so
-                        // asking as the wrong one gets a correct answer to the
-                        // wrong question.
-                        OutlinedTextField(
-                            value = bridgeCountry,
-                            onValueChange = { bridgeCountry = it.take(2).uppercase() },
-                            label = { Text(stringResource(R.string.tor_bridges_country)) },
-                            singleLine = true,
-                            textStyle = AetherTheme.type.Data.copy(color = AetherTheme.colors.text),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("bridge-country-field"),
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = AetherTheme.colors.ink1,
-                                unfocusedContainerColor = AetherTheme.colors.ink1,
-                            ),
-                        )
-                        bridgesMessage?.let { message ->
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                message.text,
-                                style = AetherTheme.type.Data,
-                                // Red is for a fault. Tor having no
-                                // recommendation for a country is Tor saying
-                                // the network needs no help, which is true of
-                                // most of the world.
-                                color = if (message.isError) {
-                                    AetherTheme.colors.signalFailed
-                                } else {
-                                    AetherTheme.colors.text2
-                                },
-                            )
-                        }
-                        Spacer(Modifier.height(12.dp))
-                        OutlinedTextField(
-                            value = bridgeText,
-                            onValueChange = {
-                                bridgeText = it
-                                onSettingsChange(settings.copy(torBridges = it))
-                            },
-                            label = { Text(stringResource(R.string.tor_bridges_field)) },
-                            placeholder = { Text(stringResource(R.string.tor_bridges_hint)) },
-                            textStyle = AetherTheme.type.Data.copy(color = AetherTheme.colors.text),
-                            minLines = 3,
-                            maxLines = 8,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("tor-bridges-field"),
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = AetherTheme.colors.ink1,
-                                unfocusedContainerColor = AetherTheme.colors.ink1,
-                            ),
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Note(stringResource(R.string.tor_bridges_where))
-                    }
-                }
+                Spacer(Modifier.height(8.dp))
+                Note(stringResource(R.string.tor_bridges_where))
             }
         }
 
-        Spacer(Modifier.height(12.dp))
+    }
+}
+
+/**
+ * Settings > Advanced > Two hops: a second carrier after the one chosen on the
+ * connect screen. The first hop is shown, not offered again.
+ */
+@Composable
+fun TwoHopScreen(
+    settings: AppSettings,
+    onSettingsChange: (AppSettings) -> Unit,
+    onBack: (() -> Unit)? = null,
+) {
+    ScreenColumn {
+        CrumbBar(stringResource(R.string.advanced), onBack = onBack)
+        PageTitle(stringResource(R.string.home_multi_hop), stringResource(R.string.carrier_subtitle))
+        if (settings.automaticCarrier || settings.carrier.isStandalone) {
+            Note(stringResource(R.string.two_hop_needs_method), Modifier.testTag("two-hop-needs-method"))
+            return@ScreenColumn
+        }
+        AetherCard {
+            FactRow(stringResource(R.string.carrier_first), stringResource(settings.carrier.label))
+            Text(
+                stringResource(R.string.two_hop_first_hint),
+                style = AetherTheme.type.Small,
+                color = AetherTheme.colors.text2,
+                modifier = Modifier.padding(horizontal = 15.dp).padding(bottom = 11.dp),
+            )
+            Divider()
+            Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                SectionLabel(
+                    stringResource(R.string.carrier_then),
+                    Modifier.padding(start = 4.dp, bottom = 4.dp),
+                )
+                OptionRow(
+                    code = null,
+                    title = stringResource(R.string.carrier_second_none),
+                    subtitle = stringResource(R.string.carrier_second_none_detail),
+                    selected = settings.secondCarrier == null,
+                    onClick = { onSettingsChange(settings.copy(secondCarrier = null)) },
+                )
+                Carrier.entries.filter { it != settings.carrier && !it.isStandalone }.forEach { carrier ->
+                    OptionRow(
+                        code = carrier.wireName.take(3).uppercase(),
+                        title = stringResource(carrier.label),
+                        subtitle = carrierDetail(carrier),
+                        selected = settings.secondCarrier == carrier,
+                        tag = "carrier-second-${carrier.wireName}",
+                        onClick = { onSettingsChange(settings.copy(secondCarrier = carrier)) },
+                    )
+                }
+            }
+
+            // One tap, because trying the other order is the whole point of
+            // offering two. Behind two menus nobody tries it.
+            val second = settings.secondCarrier
+            if (second != null) {
+                OutlineButton(
+                    text = stringResource(R.string.carrier_swap),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 13.dp, vertical = 2.dp),
+                    icon = AetherIcons.Traffic,
+                    onClick = {
+                        onSettingsChange(
+                            settings.copy(carrier = second, secondCarrier = settings.carrier),
+                        )
+                    },
+                )
+            }
+
+            // Said here rather than left for the user to discover at connect
+            // time: Aether behind something else cannot use the transports
+            // that are datagrams, so the protocol on the Aether page is not
+            // what this session will run. Padded to the card's own inset;
+            // Note adds only 2dp of its own.
+            if (second?.usesEngine == true) {
+                Note(stringResource(R.string.carrier_chain_h2_note), Modifier.padding(horizontal = 13.dp))
+            }
+            if (second == Carrier.TOR && settings.torBridge == TorBridge.SNOWFLAKE) {
+                Note(
+                    stringResource(R.string.carrier_chain_snowflake_note),
+                    Modifier.padding(horizontal = 13.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Settings > Advanced > Aether: everything that shapes an Aether session.
+ * Under another carrier the page says so once instead of every card repeating it.
+ */
+@Composable
+fun ProtocolScreen(
+    settings: AppSettings,
+    onSettingsChange: (AppSettings) -> Unit,
+    onGoToEndpoint: () -> Unit,
+    onGoToStealth: () -> Unit,
+    endpointModifier: Modifier = Modifier,
+    stealthModifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
+) {
+    ScreenColumn {
+        CrumbBar(stringResource(R.string.advanced), onBack = onBack)
+        PageTitle(stringResource(R.string.carrier_aether), stringResource(R.string.advanced_aether_detail))
+        if (!settings.engineSettingsApply) {
+            Note(stringResource(R.string.carrier_not_engine_note), Modifier.testTag("protocol-not-in-use"))
+            Spacer(Modifier.height(8.dp))
+        }
         AetherCard {
             RowCard(
                 icon = AetherIcons.Pin,
@@ -1235,143 +1135,71 @@ fun RoutesScreen(
             )
             Divider()
             RowCard(
-                icon = AetherIcons.Globe,
-                title = stringResource(if (settings.carrier == Carrier.PROXY) R.string.carrier_proxy else R.string.exit_chain),
-                subtitle = settings.chainSummary(),
-                iconTint = AetherTheme.colors.brand,
-                modifier = chainModifier.testTag("routes-chain"),
-                onClick = onGoToChain,
-            )
-            Divider()
-            RowCard(
-                icon = AetherIcons.Globe,
-                title = stringResource(R.string.worker_setup_title),
-                subtitle = stringResource(R.string.worker_setup_summary),
+                icon = AetherIcons.Lock,
+                title = stringResource(R.string.advanced_stealth),
+                subtitle = stringResource(R.string.advanced_stealth_detail),
                 iconTint = AetherTheme.colors.cyan,
-                modifier = Modifier.testTag("routes-workers"),
-                onClick = { context.startActivity(Intent(context, WorkerSetupActivity::class.java)) },
+                modifier = stealthModifier.testTag("aether-stealth"),
+                onClick = onGoToStealth,
             )
-            if (settings.chain.enabled && !settings.chain.hasNodes) {
-                Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    Note(stringResource(R.string.empty_exit_chain_hint))
-                    OutlineButton(
-                        text = stringResource(R.string.use_carriers_only),
-                        modifier = Modifier.fillMaxWidth().testTag("use-carriers-only"),
-                        onClick = { onSettingsChange(settings.copy(chain = settings.chain.copy(enabled = false))) },
+        }
+        Spacer(Modifier.height(12.dp))
+        AetherCard {
+            CardHead(stringResource(R.string.protocol), stringResource(R.string.tried_first_on_every_connect_the_profile))
+            Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                TunnelProtocol.entries.forEach { transport ->
+                    OptionRow(
+                        code = transport.wireName.uppercase(),
+                        title = stringResource(transport.label),
+                        subtitle = when (transport) {
+                            TunnelProtocol.AUTO ->
+                                stringResource(R.string.finds_what_this_network_allows_and_remembers)
+                            TunnelProtocol.H3 -> stringResource(R.string.quic_faster_where_udp_gets_through)
+                            TunnelProtocol.H2 -> stringResource(R.string.tcp_survives_networks_that_block_udp)
+                            // Its own account and its own endpoints, so a
+                            // failed MASQUE retry never lands here and the
+                            // first connect has a scan of its own to do.
+                            TunnelProtocol.WIREGUARD -> stringResource(R.string.udp_with_an_obfuscation_sweep_separate_identity)
+                            // Two WARP tunnels, the inner handshaking
+                            // through the outer, so what an observer sees is
+                            // one session carrying opaque UDP.
+                            TunnelProtocol.WARP_IN_WARP -> stringResource(R.string.nested_tunnel_slower_harder_to_classify)
+                            // Two MASQUE hops rather than two WARP ones, so
+                            // it looks like ordinary HTTPS from outside
+                            // while a single MASQUE session no longer does.
+                            TunnelProtocol.MASQUE_IN_MASQUE -> stringResource(R.string.two_masque_hops_where_one_is_recognised)
+                            TunnelProtocol.WIREGUARD_OVER_MASQUE -> stringResource(R.string.warp_wireguard_carried_inside_masque)
+                        },
+                        selected = settings.transport == transport,
+                        onClick = { onSettingsChange(settings.copy(transport = transport)) },
                     )
                 }
             }
-            Divider()
-            RowCard(
-                icon = AetherIcons.Routes,
-                title = stringResource(R.string.routing_rules),
-                subtitle = settings.routingSummary(),
-                iconTint = AetherTheme.colors.cyan,
-                modifier = routingRulesModifier.testTag("routes-routing-rules"),
-                onClick = onGoToRoutingRules,
-            )
-        }
-
-        Spacer(Modifier.height(12.dp))
-        AetherCard {
-            AdvancedSection(
-                badge = stringResource(R.string.transport_discovery),
-                expanded = advanced,
-                onToggle = { advanced = !advanced },
-            ) {
-                CardHead(stringResource(R.string.profile), stringResource(R.string.describes_your_network_whiteaesther_picks_the_re))
-                Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ConnectionProfile.entries.chunked(2).forEach { pair ->
-                        // IntrinsicSize.Min makes both cards adopt the taller one's
-                        // height, so a card with a tag does not tower over its pair.
-                        Row(
-                            modifier = Modifier.height(IntrinsicSize.Min),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            pair.forEach { profile ->
-                                ChoiceCard(
-                                    icon = profile.icon,
-                                    name = stringResource(profile.label),
-                                    description = stringResource(profile.description),
-                                    tag = profile.tag?.let { stringResource(it) },
-                                    selected = profile == active,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxHeight(),
-                                    onClick = {
-                                        // Manual has no preset to apply -- it means
-                                        // "I will set these myself", so it opens the
-                                        // controls instead of silently doing nothing.
-                                        if (profile == ConnectionProfile.MANUAL) {
-                                            advanced = true
-                                        } else {
-                                            onSettingsChange(settings.applyProfile(profile))
-                                        }
-                                    },
-                                )
-                            }
-                            if (pair.size == 1) Spacer(Modifier.weight(1f))
-                        }
-                    }
-                }
-
-                Divider()
-                CardHead(stringResource(R.string.protocol), stringResource(R.string.tried_first_on_every_connect_the_profile))
-                Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    TunnelProtocol.entries.forEach { transport ->
-                        OptionRow(
-                            code = transport.wireName.uppercase(),
-                            title = stringResource(transport.label),
-                            subtitle = when (transport) {
-                                TunnelProtocol.AUTO ->
-                                    stringResource(R.string.finds_what_this_network_allows_and_remembers)
-                                TunnelProtocol.H3 -> stringResource(R.string.quic_faster_where_udp_gets_through)
-                                TunnelProtocol.H2 -> stringResource(R.string.tcp_survives_networks_that_block_udp)
-                                // Its own account and its own endpoints, so a
-                                // failed MASQUE retry never lands here and the
-                                // first connect has a scan of its own to do.
-                                TunnelProtocol.WIREGUARD -> stringResource(R.string.udp_with_an_obfuscation_sweep_separate_identity)
-                                // Two WARP tunnels, the inner handshaking
-                                // through the outer, so what an observer sees is
-                                // one session carrying opaque UDP.
-                                TunnelProtocol.WARP_IN_WARP -> stringResource(R.string.nested_tunnel_slower_harder_to_classify)
-                                // Two MASQUE hops rather than two WARP ones, so
-                                // it looks like ordinary HTTPS from outside
-                                // while a single MASQUE session no longer does.
-                                TunnelProtocol.MASQUE_IN_MASQUE -> stringResource(R.string.two_masque_hops_where_one_is_recognised)
-                                TunnelProtocol.WIREGUARD_OVER_MASQUE -> stringResource(R.string.warp_wireguard_carried_inside_masque)
-                            },
-                            selected = settings.transport == transport,
-                            onClick = { onSettingsChange(settings.copy(transport = transport)) },
-                        )
-                    }
-                }
-                // The family, not whether a retry can substitute it. Automatic
-                // cannot be substituted either, but it is not a UDP tunnel --
-                // saying so would warn about a limitation it does not have.
-                if (settings.transport.endpointFamily == EndpointFamily.WARP) {
-                    Note(
-                        stringResource(R.string.settings_transport_label_runs_over_udp_on, settings.transport.label),
+            // The family, not whether a retry can substitute it. Automatic
+            // cannot be substituted either, but it is not a UDP tunnel --
+            // saying so would warn about a limitation it does not have.
+            if (settings.transport.endpointFamily == EndpointFamily.WARP) {
+                Note(
+                    stringResource(R.string.settings_transport_label_runs_over_udp_on, settings.transport.label),
+                )
+            }
+            CardHead(stringResource(R.string.discovery_depth), stringResource(R.string.how_hard_to_search_for_a_route))
+            Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                ScanStrategy.entries.forEachIndexed { index, strategy ->
+                    OptionRow(
+                        code = (index + 1).toString(),
+                        title = stringResource(strategy.label),
+                        subtitle = when (strategy) {
+                            ScanStrategy.TURBO -> stringResource(R.string.fastest_fewest_endpoints_tested)
+                            ScanStrategy.BALANCED -> stringResource(R.string.default_a_good_result_in_a_few)
+                            ScanStrategy.THOROUGH -> stringResource(R.string.tests_more_endpoints_before_choosing)
+                            ScanStrategy.STEALTH -> stringResource(R.string.quieter_probing_on_watchful_networks)
+                            ScanStrategy.VERIFIED -> stringResource(R.string.scan_verified_description)
+                            ScanStrategy.IRONCLAD -> stringResource(R.string.slowest_and_most_stubborn)
+                        },
+                        selected = settings.scanStrategy == strategy,
+                        onClick = { onSettingsChange(settings.copy(scanStrategy = strategy)) },
                     )
-                }
-                CardHead(stringResource(R.string.discovery_depth), stringResource(R.string.how_hard_to_search_for_a_route))
-                Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    ScanStrategy.entries.forEachIndexed { index, strategy ->
-                        OptionRow(
-                            code = (index + 1).toString(),
-                            title = stringResource(strategy.label),
-                            subtitle = when (strategy) {
-                                ScanStrategy.TURBO -> stringResource(R.string.fastest_fewest_endpoints_tested)
-                                ScanStrategy.BALANCED -> stringResource(R.string.default_a_good_result_in_a_few)
-                                ScanStrategy.THOROUGH -> stringResource(R.string.tests_more_endpoints_before_choosing)
-                                ScanStrategy.STEALTH -> stringResource(R.string.quieter_probing_on_watchful_networks)
-                                ScanStrategy.VERIFIED -> stringResource(R.string.scan_verified_description)
-                                ScanStrategy.IRONCLAD -> stringResource(R.string.slowest_and_most_stubborn)
-                            },
-                            selected = settings.scanStrategy == strategy,
-                            onClick = { onSettingsChange(settings.copy(scanStrategy = strategy)) },
-                        )
-                    }
                 }
             }
         }
@@ -1666,27 +1494,15 @@ fun EndpointScreen(
     }
 }
 
-// --------------------------------------------------------------- traffic ----
+// ---------------------------------------------- advanced: network, stealth, safety ----
 
+/** Settings > Advanced > Network and device: how the tunnel meets this phone and this network. */
 @Composable
-fun TrafficScreen(
+fun NetworkScreen(
     settings: AppSettings,
-    status: EngineStatus,
     onSettingsChange: (AppSettings) -> Unit,
-    onGoToSplitTunnel: () -> Unit = {},
-    onGoToEndpoint: () -> Unit = {},
-    onGoToChain: () -> Unit = {},
-    onGoToRoutingRules: () -> Unit = {},
-    appsModifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
 ) {
-    var advanced by rememberSaveable { mutableStateOf(settings.showAdvanced) }
-    var previousAdvancedDefault by rememberSaveable { mutableStateOf(settings.showAdvanced) }
-    LaunchedEffect(settings.showAdvanced) {
-        if (previousAdvancedDefault != settings.showAdvanced) {
-            advanced = settings.showAdvanced
-            previousAdvancedDefault = settings.showAdvanced
-        }
-    }
     var portText by remember(settings.proxyPort) { mutableStateOf(settings.proxyPort.toString()) }
     // Keyed on the switch, not on the stored value. Saving is a round trip
     // through DataStore, so a field bound straight to settings is rewritten
@@ -1695,71 +1511,11 @@ fun TrafficScreen(
     var dnsText by remember(settings.dnsServers) { mutableStateOf(settings.dnsServers) }
     var lanUserText by remember(settings.lanSharing) { mutableStateOf(settings.lanUsername) }
     var lanPassText by remember(settings.lanSharing) { mutableStateOf(settings.lanPassword) }
-    val engineBusy = status.stage !in setOf(EngineStage.IDLE, EngineStage.ERROR)
     val colors = AetherTheme.colors
 
     ScreenColumn {
-        PageTitle(stringResource(R.string.home_tools_title), stringResource(R.string.home_tools_description))
-        AetherCard {
-            RowCard(AetherIcons.Radar, stringResource(R.string.home_scan_endpoints),
-                stringResource(R.string.home_scan_endpoints_summary),
-                modifier = Modifier.testTag("tools-endpoint"), onClick = onGoToEndpoint)
-            Divider()
-            RowCard(AetherIcons.Globe, stringResource(R.string.exit_chain), settings.chainSummary(),
-                modifier = Modifier.testTag("tools-chain"), onClick = onGoToChain)
-            Divider()
-            RowCard(AetherIcons.Routes, stringResource(R.string.routing_rules), settings.routingSummary(),
-                modifier = Modifier.testTag("tools-routing-rules"), onClick = onGoToRoutingRules)
-        }
-        Spacer(Modifier.height(12.dp))
-
-        if (settings.mode == EngineMode.TUN) {
-            AetherCard {
-                RowCard(
-                    icon = AetherIcons.Sliders,
-                    title = stringResource(R.string.apps),
-                    subtitle = settings.coverageSummary(),
-                    iconTint = AetherTheme.colors.cyan,
-                    modifier = appsModifier.testTag("traffic-apps"),
-                    onClick = onGoToSplitTunnel,
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-        }
-
-        AetherCard {
-            CardHead(stringResource(R.string.coverage), stringResource(R.string.android_asks_permission_the_first_time_you))
-            Row(
-                modifier = Modifier
-                    .padding(11.dp)
-                    .height(IntrinsicSize.Min),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                ChoiceCard(
-                    icon = AetherIcons.Shield,
-                    name = stringResource(R.string.whole_device),
-                    description = stringResource(R.string.every_app_is_covered_what_most_people),
-                    tag = stringResource(R.string.profile_recommended),
-                    selected = settings.mode == EngineMode.TUN,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
-                    onClick = { if (!engineBusy) onSettingsChange(settings.copy(mode = EngineMode.TUN)) },
-                )
-                ChoiceCard(
-                    icon = AetherIcons.Proxy,
-                    name = stringResource(R.string.proxy_only),
-                    description = stringResource(R.string.just_apps_you_point_at_the_local),
-                    selected = settings.mode == EngineMode.PROXY,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
-                    onClick = { if (!engineBusy) onSettingsChange(settings.copy(mode = EngineMode.PROXY)) },
-                )
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
+        CrumbBar(stringResource(R.string.advanced), onBack = onBack)
+        PageTitle(stringResource(R.string.advanced_network), stringResource(R.string.advanced_network_detail))
         AetherCard {
             CardHead(stringResource(R.string.addresses), stringResource(R.string.turn_off_ipv6_if_a_network_handles))
             Box(Modifier.padding(11.dp)) {
@@ -1785,313 +1541,280 @@ fun TrafficScreen(
 
         Spacer(Modifier.height(12.dp))
         AetherCard {
+            Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
+                val portInteraction = remember { MutableInteractionSource() }
+                Text(stringResource(R.string.local_proxy_port), style = AetherTheme.type.RowTitle, color = colors.text)
+                Text(
+                    stringResource(R.string.where_proxy_only_mode_listens_on_this),
+                    style = AetherTheme.type.Small,
+                    color = colors.text2,
+                )
+                Spacer(Modifier.height(9.dp))
+                OutlinedTextField(
+                    value = portText,
+                    onValueChange = { value ->
+                        if (value.length <= 5 && value.all(Char::isDigit)) {
+                            portText = value
+                            value.toIntOrNull()
+                                ?.takeIf { it in 1_024..65_535 }
+                                ?.let { onSettingsChange(settings.copy(proxyPort = it)) }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .tvTextFieldSupport(portInteraction)
+                        .testTag("proxy-port-field"),
+                    interactionSource = portInteraction,
+                    textStyle = AetherTheme.type.Data.copy(color = colors.text),
+                    supportingText = { Text(stringResource(R.string.between_1024_and_65535), style = AetherTheme.type.Small) },
+                    isError = portText.toIntOrNull() !in 1_024..65_535,
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = colors.ink1,
+                        unfocusedContainerColor = colors.ink1,
+                        errorContainerColor = colors.ink1,
+                    ),
+                )
+            }
+
+            Divider()
+            ToggleSettingRow(
+                title = stringResource(R.string.share_with_this_network),
+                subtitle = stringResource(R.string.lets_other_devices_on_the_same_wi),
+                checked = settings.lanSharing,
+                onCheckedChange = { onSettingsChange(settings.copy(lanSharing = it)) },
+                modifier = Modifier.testTag("lan-sharing-switch"),
+            )
+
+            if (settings.lanSharing) {
+                Column(
+                    Modifier.padding(start = 11.dp, end = 11.dp, bottom = 11.dp),
+                    verticalArrangement = Arrangement.spacedBy(9.dp),
+                ) {
+                    // The listener binds to every interface, so the address
+                    // a client needs is the phone's own -- and nobody can
+                    // guess it from a screen that only shows the port.
+                    val address = remember(settings.lanSharing) {
+                        LocalAddress.onLocalNetwork()
+                    }
+                    Text(
+                        text = if (address != null) {
+                            stringResource(R.string.point_devices_at, address, settings.proxyPort)
+                        } else {
+                            stringResource(R.string.join_a_wi_fi_network_to_get)
+                        },
+                        style = AetherTheme.type.Small,
+                        color = colors.text2,
+                        modifier = Modifier.testTag("lan-sharing-address"),
+                    )
+
+                    settings.lanSharingNotice()?.let { notice ->
+                        Text(
+                            text = stringResource(notice.text),
+                            style = AetherTheme.type.Small,
+                            color = when (notice.level) {
+                                // Amber, not red: this one is a choice the
+                                // user is allowed to keep, and the failure
+                                // colour read as a field left unfilled.
+                                LanNoticeLevel.CAUTION -> colors.signalWorking
+                                LanNoticeLevel.PROBLEM -> colors.signalFailed
+                            },
+                            modifier = Modifier.testTag("lan-sharing-notice"),
+                        )
+                    }
+
+                    Text(
+                        text = stringResource(R.string.a_password_is_optional_leave_both_boxes),
+                        style = AetherTheme.type.Small,
+                        color = colors.text2,
+                    )
+                    LanCredentialField(
+                        label = stringResource(R.string.username_optional),
+                        value = lanUserText,
+                        tag = "lan-username-field",
+                        onValueChange = { entered ->
+                            lanUserText = entered
+                            onSettingsChange(settings.copy(lanUsername = entered))
+                        },
+                    )
+                    LanCredentialField(
+                        label = stringResource(R.string.password_optional),
+                        value = lanPassText,
+                        tag = "lan-password-field",
+                        onValueChange = { entered ->
+                            lanPassText = entered
+                            onSettingsChange(settings.copy(lanPassword = entered))
+                        },
+                    )
+                }
+            }
+
+            Divider()
+            Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
+                Text(stringResource(R.string.dns_inside_the_tunnel), style = AetherTheme.type.RowTitle, color = colors.text)
+                Text(
+                    stringResource(R.string.comma_separated_leave_empty_for_the_engine),
+                    style = AetherTheme.type.Small,
+                    color = colors.text2,
+                )
+                Spacer(Modifier.height(9.dp))
+                PlainField(
+                    value = dnsText,
+                    tag = "dns-servers-field",
+                    onValueChange = { entered ->
+                        dnsText = entered
+                        onSettingsChange(settings.copy(dnsServers = entered))
+                    },
+                )
+            }
+
+            Divider()
+            Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
+                Text(stringResource(R.string.dial_out_through_a_proxy), style = AetherTheme.type.RowTitle, color = colors.text)
+                Text(
+                    stringResource(R.string.send_everything_the_tunnel_dials_through_a),
+                    style = AetherTheme.type.Small,
+                    color = colors.text2,
+                )
+                Spacer(Modifier.height(9.dp))
+                PlainField(
+                    value = upstreamText,
+                    tag = "upstream-proxy-field",
+                    onValueChange = { entered ->
+                        upstreamText = entered
+                        onSettingsChange(settings.copy(upstreamProxy = entered))
+                    },
+                )
+            }
+
+        }
+    }
+}
+
+/** Settings > Advanced > Traffic disguise: what makes the tunnel hard to recognise. */
+@Composable
+fun StealthScreen(
+    settings: AppSettings,
+    onSettingsChange: (AppSettings) -> Unit,
+    onBack: (() -> Unit)? = null,
+) {
+    val colors = AetherTheme.colors
+    // Raw TLS fields are for someone matching a known-good client, so they stay
+    // folded unless the global switch says to open everything.
+    var expert by rememberSaveable { mutableStateOf(settings.showAdvanced) }
+    // This page's state is saved across visits, so a switch flipped since the
+    // last one has to be applied here rather than by the initial value.
+    var previousAdvancedDefault by rememberSaveable { mutableStateOf(settings.showAdvanced) }
+    LaunchedEffect(settings.showAdvanced) {
+        if (previousAdvancedDefault != settings.showAdvanced) {
+            expert = settings.showAdvanced
+            previousAdvancedDefault = settings.showAdvanced
+        }
+    }
+
+    ScreenColumn {
+        CrumbBar(stringResource(R.string.advanced), onBack = onBack)
+        PageTitle(stringResource(R.string.advanced_stealth), stringResource(R.string.advanced_stealth_detail))
+        AetherCard {
+            CardHead(stringResource(R.string.obfuscation), stringResource(R.string.makes_tunnel_traffic_harder_to_fingerprint_costs))
+            EngineSettingsNotInUse(settings, Modifier.padding(horizontal = 11.dp))
+            Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                NOIZE_PROFILES.forEach { (value, title, subtitle) ->
+                    OptionRow(
+                        code = null,
+                        title = stringResource(title),
+                        subtitle = stringResource(subtitle),
+                        selected = settings.noizeProfile == value,
+                        onClick = { onSettingsChange(settings.copy(noizeProfile = value)) },
+                    )
+                }
+            }
+
+        }
+        Spacer(Modifier.height(12.dp))
+        AetherCard {
+            ToggleSettingRow(
+                title = stringResource(R.string.split_the_tls_handshake),
+                subtitle = stringResource(R.string.sends_the_first_packet_in_pieces_so),
+                checked = settings.fragmentTls,
+                onCheckedChange = { onSettingsChange(settings.copy(fragmentTls = it)) },
+                modifier = Modifier.testTag("fragment-tls-switch"),
+            )
+            if (settings.fragmentTls) {
+                Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    TlsFragmentMode.entries.forEach { mode ->
+                        CheckRow(stringResource(mode.label), "", settings.tlsOptions.fragmentMode == mode) {
+                            onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(fragmentMode = mode)))
+                        }
+                    }
+                    if (settings.tlsOptions.fragmentMode == TlsFragmentMode.CUSTOM) {
+                        var size by remember { mutableStateOf(settings.tlsOptions.fragmentSize) }
+                        var delay by remember { mutableStateOf(settings.tlsOptions.fragmentDelay) }
+                        Text(stringResource(R.string.tls_fragment_size), style = AetherTheme.type.Small, color = colors.text2)
+                        PlainField(size, "fragment-size-field") {
+                            size = it
+                            onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(fragmentSize = it)))
+                        }
+                        Text(stringResource(R.string.tls_fragment_delay), style = AetherTheme.type.Small, color = colors.text2)
+                        PlainField(delay, "fragment-delay-field") {
+                            delay = it
+                            onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(fragmentDelay = it)))
+                        }
+                        CheckRow(stringResource(R.string.tls_split_sni), "", settings.tlsOptions.splitSni) {
+                            onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(splitSni = !settings.tlsOptions.splitSni)))
+                        }
+                    }
+                    Note(stringResource(R.string.tls_fragment_scope))
+                }
+            }
+
+            Divider()
+            ToggleSettingRow(
+                title = stringResource(R.string.encrypted_client_hello),
+                subtitle = stringResource(R.string.hides_which_site_is_being_reached_only),
+                checked = settings.encryptedHello,
+                onCheckedChange = { onSettingsChange(settings.copy(encryptedHello = it)) },
+                modifier = Modifier.testTag("ech-switch"),
+            )
+            if (settings.encryptedHello) {
+                Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    CheckRow(stringResource(R.string.protocol_automatic), "", !settings.tlsOptions.customEch) {
+                        onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(customEch = false)))
+                    }
+                    CheckRow(stringResource(R.string.tls_custom), "", settings.tlsOptions.customEch) {
+                        onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(customEch = true)))
+                    }
+                    if (settings.tlsOptions.customEch) {
+                        var ech by remember { mutableStateOf(settings.tlsOptions.echConfigList) }
+                        Text(stringResource(R.string.tls_ech_config), style = AetherTheme.type.Small, color = colors.text2)
+                        PlainField(ech, "ech-config-field") {
+                            ech = it
+                            onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(echConfigList = it)))
+                        }
+                    }
+                    Text(stringResource(R.string.tls_ech_dns), style = AetherTheme.type.Small, color = colors.text2)
+                    SettingsPlainField(settings.tlsOptions.echDns, "ech-dns-field") {
+                        onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(echDns = it)))
+                    }
+                    Text(stringResource(R.string.tls_ech_domain), style = AetherTheme.type.Small, color = colors.text2)
+                    SettingsPlainField(settings.tlsOptions.echDomain, "ech-domain-field") {
+                        onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(echDomain = it)))
+                    }
+                    Note(stringResource(R.string.tls_ech_scope))
+                }
+            }
+
+        }
+        Spacer(Modifier.height(12.dp))
+        AetherCard {
             AdvancedSection(
-                badge = stringResource(R.string.obfuscation_blocking_port),
-                expanded = advanced,
-                onToggle = { advanced = !advanced },
+                badge = stringResource(R.string.tls_expert),
+                expanded = expert,
+                onToggle = { expert = !expert },
+                tag = "tls-expert-toggle",
             ) {
-                CardHead(stringResource(R.string.obfuscation), stringResource(R.string.makes_tunnel_traffic_harder_to_fingerprint_costs))
-                EngineSettingsNotInUse(settings, Modifier.padding(horizontal = 11.dp))
-                Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    NOIZE_PROFILES.forEach { (value, title, subtitle) ->
-                        OptionRow(
-                            code = null,
-                            title = stringResource(title),
-                            subtitle = stringResource(subtitle),
-                            selected = settings.noizeProfile == value,
-                            onClick = { onSettingsChange(settings.copy(noizeProfile = value)) },
-                        )
-                    }
-                }
-
-                Divider()
-                Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                    val portInteraction = remember { MutableInteractionSource() }
-                    Text(stringResource(R.string.local_proxy_port), style = AetherTheme.type.RowTitle, color = colors.text)
-                    Text(
-                        stringResource(R.string.where_proxy_only_mode_listens_on_this),
-                        style = AetherTheme.type.Small,
-                        color = colors.text2,
-                    )
-                    Spacer(Modifier.height(9.dp))
-                    OutlinedTextField(
-                        value = portText,
-                        onValueChange = { value ->
-                            if (value.length <= 5 && value.all(Char::isDigit)) {
-                                portText = value
-                                value.toIntOrNull()
-                                    ?.takeIf { it in 1_024..65_535 }
-                                    ?.let { onSettingsChange(settings.copy(proxyPort = it)) }
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .tvTextFieldSupport(portInteraction)
-                            .testTag("proxy-port-field"),
-                        interactionSource = portInteraction,
-                        textStyle = AetherTheme.type.Data.copy(color = colors.text),
-                        supportingText = { Text(stringResource(R.string.between_1024_and_65535), style = AetherTheme.type.Small) },
-                        isError = portText.toIntOrNull() !in 1_024..65_535,
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = colors.ink1,
-                            unfocusedContainerColor = colors.ink1,
-                            errorContainerColor = colors.ink1,
-                        ),
-                    )
-                }
-
-                Divider()
-                ToggleSettingRow(
-                    title = stringResource(R.string.share_with_this_network),
-                    subtitle = stringResource(R.string.lets_other_devices_on_the_same_wi),
-                    checked = settings.lanSharing,
-                    onCheckedChange = { onSettingsChange(settings.copy(lanSharing = it)) },
-                    modifier = Modifier.testTag("lan-sharing-switch"),
-                )
-
-                if (settings.lanSharing) {
-                    Column(
-                        Modifier.padding(start = 11.dp, end = 11.dp, bottom = 11.dp),
-                        verticalArrangement = Arrangement.spacedBy(9.dp),
-                    ) {
-                        // The listener binds to every interface, so the address
-                        // a client needs is the phone's own -- and nobody can
-                        // guess it from a screen that only shows the port.
-                        val address = remember(settings.lanSharing) {
-                            LocalAddress.onLocalNetwork()
-                        }
-                        Text(
-                            text = if (address != null) {
-                                stringResource(R.string.point_devices_at, address, settings.proxyPort)
-                            } else {
-                                stringResource(R.string.join_a_wi_fi_network_to_get)
-                            },
-                            style = AetherTheme.type.Small,
-                            color = colors.text2,
-                            modifier = Modifier.testTag("lan-sharing-address"),
-                        )
-
-                        settings.lanSharingNotice()?.let { notice ->
-                            Text(
-                                text = stringResource(notice.text),
-                                style = AetherTheme.type.Small,
-                                color = when (notice.level) {
-                                    // Amber, not red: this one is a choice the
-                                    // user is allowed to keep, and the failure
-                                    // colour read as a field left unfilled.
-                                    LanNoticeLevel.CAUTION -> colors.signalWorking
-                                    LanNoticeLevel.PROBLEM -> colors.signalFailed
-                                },
-                                modifier = Modifier.testTag("lan-sharing-notice"),
-                            )
-                        }
-
-                        Text(
-                            text = stringResource(R.string.a_password_is_optional_leave_both_boxes),
-                            style = AetherTheme.type.Small,
-                            color = colors.text2,
-                        )
-                        LanCredentialField(
-                            label = stringResource(R.string.username_optional),
-                            value = lanUserText,
-                            tag = "lan-username-field",
-                            onValueChange = { entered ->
-                                lanUserText = entered
-                                onSettingsChange(settings.copy(lanUsername = entered))
-                            },
-                        )
-                        LanCredentialField(
-                            label = stringResource(R.string.password_optional),
-                            value = lanPassText,
-                            tag = "lan-password-field",
-                            onValueChange = { entered ->
-                                lanPassText = entered
-                                onSettingsChange(settings.copy(lanPassword = entered))
-                            },
-                        )
-                    }
-                }
-
-                Divider()
-                Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                    Text(stringResource(R.string.dns_inside_the_tunnel), style = AetherTheme.type.RowTitle, color = colors.text)
-                    Text(
-                        stringResource(R.string.comma_separated_leave_empty_for_the_engine),
-                        style = AetherTheme.type.Small,
-                        color = colors.text2,
-                    )
-                    Spacer(Modifier.height(9.dp))
-                    PlainField(
-                        value = dnsText,
-                        tag = "dns-servers-field",
-                        onValueChange = { entered ->
-                            dnsText = entered
-                            onSettingsChange(settings.copy(dnsServers = entered))
-                        },
-                    )
-                }
-
-                Divider()
-                Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                    Text(stringResource(R.string.dial_out_through_a_proxy), style = AetherTheme.type.RowTitle, color = colors.text)
-                    Text(
-                        stringResource(R.string.send_everything_the_tunnel_dials_through_a),
-                        style = AetherTheme.type.Small,
-                        color = colors.text2,
-                    )
-                    Spacer(Modifier.height(9.dp))
-                    PlainField(
-                        value = upstreamText,
-                        tag = "upstream-proxy-field",
-                        onValueChange = { entered ->
-                            upstreamText = entered
-                            onSettingsChange(settings.copy(upstreamProxy = entered))
-                        },
-                    )
-                }
-
-                Divider()
-                Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                    Text(stringResource(R.string.wireguard_keepalive), style = AetherTheme.type.RowTitle, color = colors.text)
-                    Text(
-                        stringResource(R.string.seconds_between_the_packets_that_hold_the),
-                        style = AetherTheme.type.Small,
-                        color = colors.text2,
-                    )
-                    Spacer(Modifier.height(9.dp))
-                    SegGroup(
-                        options = listOf(5, 15, 25),
-                        selected = settings.wgKeepalive,
-                        label = { stringResource(R.string.it_s, it) },
-                        onSelect = { onSettingsChange(settings.copy(wgKeepalive = it)) },
-                    )
-                }
-
-                Divider()
-                ToggleSettingRow(
-                    title = stringResource(R.string.block_traffic_if_the_tunnel_fails),
-                    subtitle = stringResource(R.string.when_every_retry_is_spent_hold_a),
-                    checked = settings.killSwitch,
-                    onCheckedChange = { onSettingsChange(settings.copy(killSwitch = it)) },
-                    modifier = Modifier.testTag("kill-switch"),
-                )
-
-                if (settings.killSwitch) {
-                    Divider()
-                    ToggleSettingRow(
-                        title = stringResource(R.string.keep_blocking_after_you_disconnect),
-                        subtitle = stringResource(R.string.nothing_reaches_the_internet_between_sessions_un),
-                        checked = settings.strictKillSwitch,
-                        onCheckedChange = {
-                            onSettingsChange(settings.copy(strictKillSwitch = it))
-                        },
-                        modifier = Modifier.testTag("strict-kill-switch"),
-                    )
-                }
-
-                Divider()
-                ToggleSettingRow(
-                    title = stringResource(R.string.match_rules_on_domain_names),
-                    subtitle = stringResource(R.string.reads_the_name_from_a_connection_s),
-                    checked = settings.routeSniff,
-                    onCheckedChange = { onSettingsChange(settings.copy(routeSniff = it)) },
-                    modifier = Modifier.testTag("route-sniff-switch"),
-                )
-
-                Divider()
-                ToggleSettingRow(
-                    title = stringResource(R.string.replace_a_refused_identity),
-                    subtitle = stringResource(R.string.if_cloudflare_stops_accepting_the_saved_identity),
-                    checked = settings.autoReprovision,
-                    onCheckedChange = { onSettingsChange(settings.copy(autoReprovision = it)) },
-                    modifier = Modifier.testTag("auto-reprovision-switch"),
-                )
-
-                Divider()
-                ToggleSettingRow(
-                    title = stringResource(R.string.check_the_connection_works),
-                    subtitle = stringResource(R.string.sends_one_test_request_after_connecting_leave),
-                    checked = settings.validationEnabled,
-                    onCheckedChange = { onSettingsChange(settings.copy(validationEnabled = it)) },
-                    modifier = Modifier.testTag("validation-switch"),
-                )
-
-                Divider()
-                ToggleSettingRow(
-                    title = stringResource(R.string.split_the_tls_handshake),
-                    subtitle = stringResource(R.string.sends_the_first_packet_in_pieces_so),
-                    checked = settings.fragmentTls,
-                    onCheckedChange = { onSettingsChange(settings.copy(fragmentTls = it)) },
-                    modifier = Modifier.testTag("fragment-tls-switch"),
-                )
-                if (settings.fragmentTls) {
-                    Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                        TlsFragmentMode.entries.forEach { mode ->
-                            CheckRow(stringResource(mode.label), "", settings.tlsOptions.fragmentMode == mode) {
-                                onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(fragmentMode = mode)))
-                            }
-                        }
-                        if (settings.tlsOptions.fragmentMode == TlsFragmentMode.CUSTOM) {
-                            var size by remember { mutableStateOf(settings.tlsOptions.fragmentSize) }
-                            var delay by remember { mutableStateOf(settings.tlsOptions.fragmentDelay) }
-                            Text(stringResource(R.string.tls_fragment_size), style = AetherTheme.type.Small, color = colors.text2)
-                            PlainField(size, "fragment-size-field") {
-                                size = it
-                                onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(fragmentSize = it)))
-                            }
-                            Text(stringResource(R.string.tls_fragment_delay), style = AetherTheme.type.Small, color = colors.text2)
-                            PlainField(delay, "fragment-delay-field") {
-                                delay = it
-                                onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(fragmentDelay = it)))
-                            }
-                            CheckRow(stringResource(R.string.tls_split_sni), "", settings.tlsOptions.splitSni) {
-                                onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(splitSni = !settings.tlsOptions.splitSni)))
-                            }
-                        }
-                        Note(stringResource(R.string.tls_fragment_scope))
-                    }
-                }
-
-                Divider()
-                ToggleSettingRow(
-                    title = stringResource(R.string.encrypted_client_hello),
-                    subtitle = stringResource(R.string.hides_which_site_is_being_reached_only),
-                    checked = settings.encryptedHello,
-                    onCheckedChange = { onSettingsChange(settings.copy(encryptedHello = it)) },
-                    modifier = Modifier.testTag("ech-switch"),
-                )
-                if (settings.encryptedHello) {
-                    Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                        CheckRow(stringResource(R.string.protocol_automatic), "", !settings.tlsOptions.customEch) {
-                            onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(customEch = false)))
-                        }
-                        CheckRow(stringResource(R.string.tls_custom), "", settings.tlsOptions.customEch) {
-                            onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(customEch = true)))
-                        }
-                        if (settings.tlsOptions.customEch) {
-                            var ech by remember { mutableStateOf(settings.tlsOptions.echConfigList) }
-                            Text(stringResource(R.string.tls_ech_config), style = AetherTheme.type.Small, color = colors.text2)
-                            PlainField(ech, "ech-config-field") {
-                                ech = it
-                                onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(echConfigList = it)))
-                            }
-                        }
-                        Text(stringResource(R.string.tls_ech_dns), style = AetherTheme.type.Small, color = colors.text2)
-                        SettingsPlainField(settings.tlsOptions.echDns, "ech-dns-field") {
-                            onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(echDns = it)))
-                        }
-                        Text(stringResource(R.string.tls_ech_domain), style = AetherTheme.type.Small, color = colors.text2)
-                        SettingsPlainField(settings.tlsOptions.echDomain, "ech-domain-field") {
-                            onSettingsChange(settings.copy(tlsOptions = settings.tlsOptions.copy(echDomain = it)))
-                        }
-                        Note(stringResource(R.string.tls_ech_scope))
-                    }
-                }
-
-                Divider()
                 Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     Text(stringResource(R.string.tls_ciphers), style = AetherTheme.type.Small, color = colors.text2)
                     SettingsPlainField(settings.tlsOptions.tlsCiphers, "tls-ciphers-field") {
@@ -2130,22 +1853,98 @@ fun TrafficScreen(
                     }
                     Note(stringResource(R.string.tls_fingerprint_scope))
                 }
-                settings.tlsOptions.validationError(settings.fragmentTls, settings.encryptedHello)?.let {
-                    Note(stringResource(it))
-                }
-
-                Divider()
-                // Read-only on purpose: the resolvers are fixed inside the engine
-                // and there is no config key to change them.
-                SettingRow(
-                    title = stringResource(R.string.dns_resolvers),
-                    subtitle = stringResource(R.string.fixed_in_the_engine_not_configurable_yet),
-                ) {
-                    Text("1.1.1.1", style = AetherTheme.type.Data, color = colors.text2)
-                }
             }
         }
+        // Outside the folded section: it also covers the split and ECH fields above.
+        settings.tlsOptions.validationError(settings.fragmentTls, settings.encryptedHello)?.let {
+            Note(stringResource(it))
+        }
+        Spacer(Modifier.height(12.dp))
+        AetherCard {
+            Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
+                Text(stringResource(R.string.wireguard_keepalive), style = AetherTheme.type.RowTitle, color = colors.text)
+                Text(
+                    stringResource(R.string.seconds_between_the_packets_that_hold_the),
+                    style = AetherTheme.type.Small,
+                    color = colors.text2,
+                )
+                Spacer(Modifier.height(9.dp))
+                SegGroup(
+                    options = listOf(5, 15, 25),
+                    selected = settings.wgKeepalive,
+                    label = { stringResource(R.string.it_s, it) },
+                    onSelect = { onSettingsChange(settings.copy(wgKeepalive = it)) },
+                )
+            }
+
+        }
     }
+}
+
+/** Settings > Advanced > Connection safety: what happens when a connection fails. */
+@Composable
+fun SafetyScreen(
+    settings: AppSettings,
+    onSettingsChange: (AppSettings) -> Unit,
+    onBack: (() -> Unit)? = null,
+) {
+    ScreenColumn {
+        CrumbBar(stringResource(R.string.advanced), onBack = onBack)
+        PageTitle(stringResource(R.string.advanced_safety), stringResource(R.string.advanced_safety_detail))
+        AetherCard {
+            ToggleSettingRow(
+                title = stringResource(R.string.block_traffic_if_the_tunnel_fails),
+                subtitle = stringResource(R.string.when_every_retry_is_spent_hold_a),
+                checked = settings.killSwitch,
+                onCheckedChange = { onSettingsChange(settings.copy(killSwitch = it)) },
+                modifier = Modifier.testTag("kill-switch"),
+            )
+
+            if (settings.killSwitch) {
+                Divider()
+                ToggleSettingRow(
+                    title = stringResource(R.string.keep_blocking_after_you_disconnect),
+                    subtitle = stringResource(R.string.nothing_reaches_the_internet_between_sessions_un),
+                    checked = settings.strictKillSwitch,
+                    onCheckedChange = {
+                        onSettingsChange(settings.copy(strictKillSwitch = it))
+                    },
+                    modifier = Modifier.testTag("strict-kill-switch"),
+                )
+            }
+
+            Divider()
+            ToggleSettingRow(
+                title = stringResource(R.string.replace_a_refused_identity),
+                subtitle = stringResource(R.string.if_cloudflare_stops_accepting_the_saved_identity),
+                checked = settings.autoReprovision,
+                onCheckedChange = { onSettingsChange(settings.copy(autoReprovision = it)) },
+                modifier = Modifier.testTag("auto-reprovision-switch"),
+            )
+
+            Divider()
+            ToggleSettingRow(
+                title = stringResource(R.string.check_the_connection_works),
+                subtitle = stringResource(R.string.sends_one_test_request_after_connecting_leave),
+                checked = settings.validationEnabled,
+                onCheckedChange = { onSettingsChange(settings.copy(validationEnabled = it)) },
+                modifier = Modifier.testTag("validation-switch"),
+            )
+
+        }
+    }
+}
+
+/** Shared with [RoutingRulesScreen]; it decides whether domain rules can match at all. */
+@Composable
+private fun RouteSniffRow(settings: AppSettings, onSettingsChange: (AppSettings) -> Unit) {
+    ToggleSettingRow(
+        title = stringResource(R.string.match_rules_on_domain_names),
+        subtitle = stringResource(R.string.reads_the_name_from_a_connection_s),
+        checked = settings.routeSniff,
+        onCheckedChange = { onSettingsChange(settings.copy(routeSniff = it)) },
+        modifier = Modifier.testTag("route-sniff-switch"),
+    )
 }
 
 /** The three the engine's `from_profile` actually distinguishes. */
@@ -2338,6 +2137,8 @@ fun RoutingRulesScreen(
                     modifier = Modifier.testTag("routing-preset-${preset.name}"),
                 )
             }
+            Divider()
+            RouteSniffRow(settings, onSettingsChange)
         }
         Spacer(Modifier.height(12.dp))
         ImportedRuleLists(settings, onSettingsChange)
@@ -2480,18 +2281,18 @@ fun SettingsScreen(
     onOpenAppSettings: () -> Unit,
     onAddTile: () -> Unit,
     onAddWidget: () -> Unit,
+    onGoToAdvanced: () -> Unit,
     onGoToDiagnostics: () -> Unit,
     onGoToAbout: () -> Unit,
-    onGoToIdentity: () -> Unit,
     isTelevision: Boolean = false,
-    identityModifier: Modifier = Modifier,
+    advancedModifier: Modifier = Modifier,
     diagnosticsModifier: Modifier = Modifier,
     aboutModifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
 ) {
     ScreenColumn {
-        CrumbBar(stringResource(R.string.settings), onBack = onBack)
-        PageTitle(stringResource(R.string.settings), stringResource(R.string.the_app_itself_nothing_here_changes_how))
+        if (onBack != null) CrumbBar(stringResource(R.string.settings), onBack = onBack)
+        PageTitle(stringResource(R.string.settings))
 
         AetherCard {
             CardHead(stringResource(R.string.appearance), stringResource(R.string.system_follows_your_phone_s_light_or))
@@ -2613,16 +2414,8 @@ fun SettingsScreen(
         Spacer(Modifier.height(12.dp))
         AetherCard {
             RowCard(
-                icon = AetherIcons.Key,
-                title = stringResource(R.string.identity_access),
-                subtitle = stringResource(R.string.the_device_identity_this_app_was_issued),
-                modifier = identityModifier.testTag("settings-identity"),
-                onClick = onGoToIdentity,
-            )
-            Divider()
-            RowCard(
                 icon = AetherIcons.Pulse,
-                title = stringResource(R.string.diagnostics_logs),
+                title = stringResource(R.string.settings_help),
                 subtitle = stringResource(R.string.see_what_happened_and_send_a_report),
                 modifier = diagnosticsModifier.testTag("settings-diagnostics"),
                 onClick = onGoToDiagnostics,
@@ -2634,6 +2427,17 @@ fun SettingsScreen(
                 subtitle = stringResource(R.string.version_engine_build_and_licences),
                 modifier = aboutModifier.testTag("settings-about"),
                 onClick = onGoToAbout,
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+        AetherCard {
+            RowCard(
+                icon = AetherIcons.Sliders,
+                title = stringResource(R.string.advanced),
+                subtitle = stringResource(R.string.settings_advanced_summary),
+                modifier = advancedModifier.testTag("settings-advanced"),
+                onClick = onGoToAdvanced,
             )
         }
 

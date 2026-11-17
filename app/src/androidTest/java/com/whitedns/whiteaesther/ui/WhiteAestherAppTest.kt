@@ -87,11 +87,11 @@ class WhiteAestherAppTest {
     }
 
     @Test
-    fun endpointLivesUnderRoutesAndAcceptsAnAddress() {
+    fun endpointLivesUnderProtocolAndAcceptsAnAddress() {
         setApp(AppSettings(endpointMode = EndpointMode.CUSTOM_FIRST))
 
-        compose.onNodeWithTag("tab-routes").performClick()
-        compose.onNodeWithText("Endpoint").performScrollTo().performClick()
+        compose.openAdvanced("aether")
+        compose.onNodeWithTag("routes-endpoint").performScrollTo().performClick()
         compose.onNodeWithTag("custom-endpoint-field").performScrollTo().performTextInput("162.159.197.3:443")
         compose.onNodeWithTag("custom-endpoint-field").assertTextContains("162.159.197.3:443")
         // The field reports its own validation, which is the point of typing a valid one.
@@ -103,8 +103,8 @@ class WhiteAestherAppTest {
         var scanRequested = false
         setApp(onScan = { scanRequested = true })
 
-        compose.onNodeWithTag("tab-routes").performClick()
-        compose.onNodeWithText("Endpoint").performScrollTo().performClick()
+        compose.openAdvanced("aether")
+        compose.onNodeWithTag("routes-endpoint").performScrollTo().performClick()
         compose.onNodeWithTag("scan-endpoints-button").performScrollTo().performClick()
         compose.runOnIdle { assertTrue(scanRequested) }
     }
@@ -120,8 +120,8 @@ class WhiteAestherAppTest {
             onReset = { resetRequested = true },
         )
 
-        compose.onNodeWithTag("tab-routes").performClick()
-        compose.onNodeWithText("Endpoint").performScrollTo().performClick()
+        compose.openAdvanced("aether")
+        compose.onNodeWithTag("routes-endpoint").performScrollTo().performClick()
         compose.onNodeWithTag("custom-endpoint-field").assertTextContains("162.159.197.3:443")
         compose.onNodeWithTag("reset-endpoint-button").performScrollTo().performClick()
         compose.runOnIdle { assertTrue(resetRequested) }
@@ -135,7 +135,7 @@ class WhiteAestherAppTest {
         var saved: AppSettings? = null
         setApp(onSettings = { saved = it })
 
-        compose.onNodeWithTag("tab-routes").performClick()
+        compose.onNodeWithTag("home-method").performClick()
         compose.onNodeWithTag("option-psiphon").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(Carrier.PSIPHON, saved?.carrier) }
     }
@@ -148,11 +148,8 @@ class WhiteAestherAppTest {
         // controls that quietly do nothing is worse than a sentence saying so.
         setApp(initial = AppSettings(carrier = Carrier.PSIPHON, automaticCarrier = false))
 
-        compose.onNodeWithTag("tab-routes").performClick()
-        compose.onNodeWithText(
-            "Endpoint, protocol and discovery depth below apply to Aether only. " +
-                "This carrier finds its own way out.",
-        ).performScrollTo().assertExists()
+        compose.openAdvanced("aether")
+        compose.onNodeWithTag("protocol-not-in-use").assertExists()
     }
 
     @Test
@@ -163,19 +160,20 @@ class WhiteAestherAppTest {
         assertEquals(Carrier.AETHER, AppSettings().carrier)
 
         setApp()
-        compose.onNodeWithTag("tab-routes").performClick()
+        compose.onNodeWithTag("home-method").performClick()
         compose.onNodeWithTag("option-aether").performScrollTo().assertExists()
     }
 
     @Test
-    fun advancedTrafficControlsAreBehindTheDisclosure() {
+    fun advancedTrafficControlsLiveUnderSettingsAdvanced() {
         setApp()
 
-        compose.onNodeWithTag("tab-traffic").performClick()
         compose.onNodeWithTag("proxy-port-field").assertDoesNotExist()
-        compose.onNodeWithTag("advanced-toggle").performScrollTo().performClick()
+        compose.openAdvanced("network")
+        compose.onNodeWithTag("proxy-port-field").performScrollTo().assertExists()
+        pressBack()
+        compose.onNodeWithTag("advanced-safety").performScrollTo().performClick()
         compose.onNodeWithTag("validation-switch").performScrollTo().assertIsOn()
-        compose.onNodeWithTag("proxy-port-field").assertExists()
     }
 
     @Test
@@ -183,9 +181,9 @@ class WhiteAestherAppTest {
         var saved: AppSettings? = null
         setApp(onSettings = { saved = it })
 
-        compose.onNodeWithTag("tab-routes").performClick()
-        compose.onNodeWithTag("advanced-toggle").performScrollTo().performClick()
-        compose.onNodeWithTag("choice-strict-network").performScrollTo().performClick()
+        compose.onNodeWithTag("home-method").performClick()
+        compose.onNodeWithTag("option-aether").performScrollTo().performClick()
+        compose.onNodeWithTag("aether-profile-STRICT").performScrollTo().performClick()
         compose.runOnIdle {
             assertEquals(com.whitedns.whiteaesther.data.ScanStrategy.STEALTH, saved?.scanStrategy)
             assertEquals(com.whitedns.whiteaesther.data.TunnelProtocol.H2, saved?.transport)
@@ -235,12 +233,12 @@ class WhiteAestherAppTest {
             .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
             .assertIsFocused()
             .performKeyInput { pressKey(Key.DirectionDown) }
-        compose.onNodeWithTag("tab-routes")
+        compose.onNodeWithTag("tab-apps")
             .assertIsFocused()
             .performKeyInput { pressKey(Key.DirectionCenter) }
 
-        compose.onNodeWithTag("tab-routes").assertIsFocused()
-        compose.onNodeWithText("Connection methods").assertExists()
+        compose.onNodeWithTag("tab-apps").assertIsFocused()
+        compose.onNodeWithTag("split-app-list").assertExists()
 
         compose.onNodeWithTag("tab-home")
             .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
@@ -253,14 +251,16 @@ class WhiteAestherAppTest {
     fun tvProfileAndCompositeSwitchActivateFromOneRemoteTarget() {
         var writes = 0
         setApp(television = true, onSettings = { writes++ })
-        compose.onNodeWithTag("tab-routes").performClick()
-        compose.onNodeWithTag("advanced-toggle").performScrollTo().performClick()
+        compose.onNodeWithTag("home-method").performScrollTo().performClick()
 
-        compose.onNodeWithTag("choice-strict-network")
-            .performScrollTo()
-            .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
-            .assertIsFocused()
-            .performKeyInput { pressKey(Key.DirectionCenter) }
+        // Choosing Aether is one write, its profile chip another.
+        listOf("option-aether", "aether-profile-STRICT").forEach { tag ->
+            compose.onNodeWithTag(tag)
+                .performScrollTo()
+                .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
+                .assertIsFocused()
+                .performKeyInput { pressKey(Key.DirectionCenter) }
+        }
 
         compose.onNodeWithTag("tab-settings").performClick()
         compose.onNodeWithTag("show-advanced-switch")
@@ -269,14 +269,14 @@ class WhiteAestherAppTest {
             .assertIsFocused()
             .performKeyInput { pressKey(Key.DirectionCenter) }
 
-        compose.runOnIdle { assertEquals(2, writes) }
+        compose.runOnIdle { assertEquals(3, writes) }
         compose.onNodeWithTag("show-advanced-switch").assertIsOn()
     }
 
     @Test
     fun tvBackReturnsToTheOriginatingDetailRow() {
         setApp(television = true)
-        compose.onNodeWithTag("tab-routes").performClick()
+        compose.openAdvanced("aether")
         compose.onNodeWithTag("routes-endpoint")
             .performScrollTo()
             .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
@@ -291,7 +291,8 @@ class WhiteAestherAppTest {
     @Test
     fun tvFocusBringsLongSettingsContentIntoViewAndHidesTileSetup() {
         setApp(initial = AppSettings(showAdvanced = true), television = true)
-        compose.onNodeWithTag("tab-traffic").performClick()
+        compose.openAdvanced("aether")
+        compose.onNodeWithTag("aether-stealth").performScrollTo().performClick()
 
         compose.onNodeWithTag("fragment-tls-switch")
             .performScrollTo()
@@ -318,9 +319,15 @@ class WhiteAestherAppTest {
             .performKeyInput { pressKey(Key.ButtonA) }
         compose.runOnIdle { assertEquals(1, requests) }
 
-        compose.onNodeWithTag("tab-routes")
+        compose.onNodeWithTag("tab-settings")
             .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
             .performKeyInput { pressKey(Key.ButtonA) }
+        listOf("settings-advanced", "advanced-aether").forEach { tag ->
+            compose.onNodeWithTag(tag)
+                .performScrollTo()
+                .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
+                .performKeyInput { pressKey(Key.ButtonA) }
+        }
         compose.onNodeWithTag("routes-endpoint")
             .performScrollTo()
             .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
@@ -334,11 +341,33 @@ class WhiteAestherAppTest {
     }
 
     @Test
+    fun tvChoosesTheMethodOnAPageInsteadOfASheet() {
+        var saved: AppSettings? = null
+        setApp(television = true, onSettings = { saved = it })
+
+        compose.onNodeWithTag("home-method").performScrollTo().performClick()
+        compose.onNodeWithTag("option-aether")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
+            .performKeyInput { pressKey(Key.DirectionCenter) }
+
+        compose.runOnIdle {
+            assertEquals(Carrier.AETHER, saved?.carrier)
+            assertEquals(false, saved?.automaticCarrier)
+        }
+        compose.onNodeWithTag("aether-profiles").assertExists()
+        compose.onNodeWithTag("method-done")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
+            .performKeyInput { pressKey(Key.DirectionCenter) }
+        compose.onNodeWithTag("connect-orb").assertExists()
+    }
+
+    @Test
     fun tvRoutingRuleFieldCanMoveDownWithoutTouch() {
         setApp(television = true)
 
-        compose.onNodeWithTag("tab-routes").performClick()
-        compose.onNodeWithTag("routes-routing-rules").performScrollTo().performClick()
+        compose.openAdvanced("routing")
         compose.onNodeWithTag("route-block-field")
             .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
             .assertIsFocused()
