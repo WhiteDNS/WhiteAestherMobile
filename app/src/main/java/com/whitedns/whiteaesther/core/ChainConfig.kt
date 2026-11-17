@@ -95,7 +95,11 @@ object ChainConfig {
             ""
         }
 
-        val names = appendProviders(settings, through)
+        // The route mihomo fetches a subscription over. Left unset the fetch goes
+        // through the rules, hits MATCH,exit while the exit group is still empty
+        // (this very fetch fills it), and is refused: no subscription ever loads.
+        val fetch = if (socksPort != null) proxyName else "DIRECT"
+        val names = appendProviders(settings, through, fetch)
 
         // A group with nothing in it is a config mihomo rejects, and the reason
         // it gives names YAML rather than the empty subscription behind it.
@@ -326,6 +330,7 @@ object ChainConfig {
     private fun StringBuilder.appendProviders(
         settings: ChainSettings,
         through: String,
+        fetch: String,
     ): List<String> {
         val names = mutableListOf<String>()
         val sources = settings.sources.filter { it.enabled && it.url.isNotBlank() }
@@ -340,6 +345,7 @@ object ChainConfig {
             append("    type: http\n")
             append("    url: ${quote(source.url)}\n")
             append("    interval: 3600\n")
+            append("    proxy: $fetch\n")
             append("    path: ./providers/$key.yaml$through\n")
             append(healthCheck())
         }

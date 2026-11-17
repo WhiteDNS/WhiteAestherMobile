@@ -54,6 +54,21 @@ class ChainConfigTest {
     }
 
     @Test
+    fun subscriptionIsFetchedOutsideTheExitItFills() {
+        // Unset, the fetch went through MATCH,exit while the exit group was
+        // still empty and was refused (`exit[REJECT]`), so no subscription loaded.
+        val tunnel = ChainConfig.render(settings, socksPort = 1819)
+        assertTrue(tunnel.contains("    proxy: ${ChainConfig.TUNNEL_PROXY}\n"))
+        assertTrue(tunnel.contains("dialer-proxy: ${ChainConfig.TUNNEL_PROXY}"))
+
+        val direct = ChainConfig.render(settings.copy(manual = "vless://pasted"), socksPort = null)
+        assertTrue(direct.contains("    proxy: DIRECT\n"))
+        // The pasted block is a file: nothing to fetch, so no route.
+        val manual = direct.substringAfter("  ${ChainConfig.MANUAL_PROVIDER}:").substringBefore("health-check")
+        assertFalse(manual.contains("proxy:"))
+    }
+
+    @Test
     fun managedWorkerIsASeparateFileProviderAndSurvivesStorage() {
         val worker = ChainSettings(enabled = true, worker = "{\"proxies\":[]}")
         assertTrue(worker.hasNodes)
