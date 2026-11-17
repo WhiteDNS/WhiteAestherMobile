@@ -45,8 +45,7 @@ class ChainScreenTest {
                 ChainNode("vless-fixture", "Vless", null), ChainNode("trojan-fixture", "Trojan", null),
             )),
         )
-        compose.onNodeWithTag("tab-routes").performClick()
-        compose.onNodeWithTag("routes-chain").performScrollTo().performClick()
+        compose.openAdvanced("nodes")
         compose.onNodeWithTag("proxy-protocol-Trojan").performSemanticsAction(SemanticsActions.OnClick)
         compose.onNodeWithTag("chain-node-vless-fixture").assertDoesNotExist()
         compose.onNodeWithTag("chain-node-trojan-fixture").performSemanticsAction(SemanticsActions.OnClick)
@@ -88,8 +87,7 @@ class ChainScreenTest {
     }
 
     private fun openChain() {
-        compose.onNodeWithTag("tab-routes").performClick()
-        compose.onNodeWithText("Exit chain").performScrollTo().performClick()
+        compose.openAdvanced("nodes")
     }
 
     @Test
@@ -275,7 +273,8 @@ class ChainScreenTest {
                 ),
             ),
         )
-        compose.onNodeWithTag("tab-routes").performClick()
+        compose.onNodeWithTag("tab-settings").performClick()
+        compose.onNodeWithTag("settings-advanced").performScrollTo().performClick()
 
         compose.onNodeWithText("On, nodes dialled directly").performScrollTo().assertExists()
     }

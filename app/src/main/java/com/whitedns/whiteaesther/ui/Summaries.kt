@@ -38,3 +38,15 @@ fun AppSettings.routingSummary(): String {
         else -> stringResource(R.string.routing_both, counts.blocked, counts.direct)
     }
 }
+
+/**
+ * The flag emoji for a two-letter country code, or null for anything else.
+ *
+ * Cloudflare also answers with codes of its own (`XX` unknown, `T1` Tor), which
+ * have no flag and must not turn into a pair of stray regional letters.
+ */
+internal fun countryFlag(code: String?): String? {
+    val letters = code?.trim()?.uppercase() ?: return null
+    if (letters.length != 2 || letters == "XX" || !letters.all { it in 'A'..'Z' }) return null
+    return letters.map { String(Character.toChars(0x1F1E6 + (it - 'A'))) }.joinToString("")
+}

@@ -48,6 +48,7 @@ class IdentityBackupTest {
             }
         }
         compose.onNodeWithTag("tab-settings").performClick()
+        compose.onNodeWithTag("settings-advanced").performScrollTo().performClick()
         compose.onNodeWithText("Identity & access").performScrollTo().performClick()
     }
 

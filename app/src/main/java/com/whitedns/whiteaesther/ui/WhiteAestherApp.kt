@@ -63,6 +63,7 @@ import com.whitedns.whiteaesther.EndpointScannerState
 import com.whitedns.whiteaesther.IdentityMessage
 import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.data.AppSettings
+import com.whitedns.whiteaesther.data.AdvancedGroup
 import com.whitedns.whiteaesther.data.UpdateChecker
 import com.whitedns.whiteaesther.data.UpdateDownload
 import com.whitedns.whiteaesther.service.EngineStage
@@ -72,26 +73,32 @@ import com.whitedns.whiteaesther.service.TrafficSample
 import com.whitedns.whiteaesther.ui.theme.AetherTheme
 import java.io.File
 
+// Three tabs a first-time user can read at a glance. Everything technical lives
+// under Settings > Advanced, so nothing here needs explaining.
 private enum class Tab(@StringRes val label: Int, val icon: ImageVector) {
     HOME(R.string.home_tab_connect, AetherIcons.Power),
-    ROUTES(R.string.home_tab_methods, AetherIcons.Routes),
-    TRAFFIC(R.string.home_tab_tools, AetherIcons.Sliders),
-    LOGS(R.string.home_tab_logs, AetherIcons.Pulse),
+    APPS(R.string.apps, AetherIcons.Sliders),
+    SETTINGS(R.string.settings, AetherIcons.Settings),
 }
 
 /** Sub-screens keep their parent tab selected. */
-private enum class Destination(val tab: Tab?) {
+private enum class Destination(val tab: Tab) {
     HOME(Tab.HOME),
-    ROUTES(Tab.ROUTES),
-    ENDPOINT(Tab.ROUTES),
-    CHAIN(Tab.ROUTES),
-    ROUTING_RULES(Tab.ROUTES),
-    TRAFFIC(Tab.TRAFFIC),
-    SPLIT_TUNNEL(Tab.TRAFFIC),
-    SETTINGS(null),
-    DIAGNOSTICS(Tab.LOGS),
-    IDENTITY(null),
-    ABOUT(null),
+    METHOD(Tab.HOME),
+    APPS(Tab.APPS),
+    SETTINGS(Tab.SETTINGS),
+    ADVANCED(Tab.SETTINGS),
+    PROTOCOL(Tab.SETTINGS),
+    TWO_HOP(Tab.SETTINGS),
+    ENDPOINT(Tab.SETTINGS),
+    STEALTH(Tab.SETTINGS),
+    CHAIN(Tab.SETTINGS),
+    ROUTING_RULES(Tab.SETTINGS),
+    NETWORK(Tab.SETTINGS),
+    SAFETY(Tab.SETTINGS),
+    DIAGNOSTICS(Tab.SETTINGS),
+    IDENTITY(Tab.SETTINGS),
+    ABOUT(Tab.SETTINGS),
 }
 
 @Composable
@@ -147,28 +154,22 @@ fun WhiteAestherApp(
     var navigation by rememberSaveable(
         stateSaver = listSaver<List<Destination>, String>(
             save = { stack -> stack.map { it.name } },
-            restore = { names -> names.map { Destination.valueOf(it) } },
+            // A stack saved by an older build can name screens that no longer
+            // exist; drop them rather than crash on restore.
+            restore = { names ->
+                names.mapNotNull { name -> Destination.entries.firstOrNull { it.name == name } }
+                    .ifEmpty { listOf(Destination.HOME) }
+            },
         ),
     ) { mutableStateOf(listOf(Destination.HOME)) }
     val destination = navigation.last()
-    val activeTab = navigation.asReversed().firstNotNullOfOrNull {
-        when (it) {
-            Destination.HOME, Destination.ROUTES, Destination.TRAFFIC, Destination.DIAGNOSTICS -> it.tab
-            else -> null
-        }
-    }
+    val activeTab = destination.tab
     val screenState = rememberSaveableStateHolder()
-    val settingsFocus = remember { FocusRequester() }
     val isTelevision = television ?: TvUiPolicy.isTelevision(LocalConfiguration.current.uiMode)
     val inputModeManager = LocalInputModeManager.current
     val connectFocus = remember { FocusRequester() }
-    val endpointFocus = remember { FocusRequester() }
-    val chainFocus = remember { FocusRequester() }
-    val rulesFocus = remember { FocusRequester() }
-    val appsFocus = remember { FocusRequester() }
-    val identityFocus = remember { FocusRequester() }
-    val diagnosticsFocus = remember { FocusRequester() }
-    val aboutFocus = remember { FocusRequester() }
+    // The row that opened each screen, so Back on a controller lands on it again.
+    val rowFocus = remember { Destination.entries.associateWith { FocusRequester() } }
     var returnDestination by remember { mutableStateOf<Destination?>(null) }
     var returnFocus by remember { mutableStateOf<FocusRequester?>(null) }
 
@@ -177,6 +178,19 @@ fun WhiteAestherApp(
         returnDestination = destination
         returnFocus = requester
         navigation = navigation + detail
+    }
+
+    /** Opens [detail] from a row that carries `rowFocus[detail]`. */
+    fun openFromRow(detail: Destination) = openDetail(detail, rowFocus.getValue(detail))
+
+    fun openTab(tab: Tab) {
+        returnDestination = null
+        returnFocus = null
+        navigation = listOf(when (tab) {
+            Tab.HOME -> Destination.HOME
+            Tab.APPS -> Destination.APPS
+            Tab.SETTINGS -> Destination.SETTINGS
+        })
     }
 
     fun goBack(): Boolean {
@@ -208,26 +222,22 @@ fun WhiteAestherApp(
 
     BackHandler(enabled = navigation.size > 1 || destination != Destination.HOME) { goBack() }
 
+    val methodSupport = MethodSheetSupport(
+        psiphonRegions = psiphonRegions,
+        onFetchBridges = onFetchBridges,
+        bridgesFetching = bridgesFetching,
+        bridgesMessage = bridgesMessage,
+        detectedCountry = detectedCountry,
+        onOpenNodes = { openDetail(Destination.CHAIN) },
+        onOpenAether = { openDetail(Destination.PROTOCOL) },
+    )
+
     CompositionLocalProvider(LocalTvMode provides isTelevision) {
         AetherAppShell(
             selected = activeTab,
             isTelevision = isTelevision,
             onControllerBack = ::goBack,
-            onOpenSettings = {
-                if (destination == Destination.SETTINGS) goBack()
-                else openDetail(Destination.SETTINGS, settingsFocus)
-            },
-            settingsModifier = Modifier.focusRequester(settingsFocus),
-            onSelect = { tab ->
-                returnDestination = null
-                returnFocus = null
-                navigation = listOf(when (tab) {
-                    Tab.HOME -> Destination.HOME
-                    Tab.ROUTES -> Destination.ROUTES
-                    Tab.TRAFFIC -> Destination.TRAFFIC
-                    Tab.LOGS -> Destination.DIAGNOSTICS
-                })
-            },
+            onSelect = ::openTab,
         ) {
             screenState.SaveableStateProvider(destination.name) {
                 when (destination) {
@@ -258,36 +268,68 @@ fun WhiteAestherApp(
                                 else -> onStop()
                             }
                         },
-                        onGoToRoutes = { openDetail(Destination.ROUTES) },
+                        onGoToRoutes = { openDetail(Destination.METHOD) },
+                        onGoToAdvanced = { openDetail(Destination.ADVANCED) },
+                        methodSupport = methodSupport,
                         onGoToChain = { openDetail(Destination.CHAIN) },
-                        onGoToEndpoint = {
-                            openDetail(Destination.ENDPOINT)
-                        },
-                        onGoToTraffic = { openDetail(Destination.TRAFFIC) },
+                        onGoToEndpoint = { openDetail(Destination.ENDPOINT) },
+                        onGoToTraffic = { openTab(Tab.APPS) },
                         onSettingsChange = onSettingsChange,
-                        onGoToApps = { openDetail(Destination.SPLIT_TUNNEL) },
+                        onGoToApps = { openTab(Tab.APPS) },
                         onGoToDiagnostics = { openDetail(Destination.DIAGNOSTICS) },
                         connectModifier = Modifier.focusRequester(connectFocus),
                         compact = isTelevision,
                     )
-                    Destination.ROUTES -> RoutesScreen(
+                    Destination.APPS -> SplitTunnelScreen(
                         settings = settings,
                         onSettingsChange = onSettingsChange,
-                        onGoToEndpoint = {
-                            openDetail(Destination.ENDPOINT, endpointFocus)
-                        },
-                        onGoToChain = { openDetail(Destination.CHAIN, chainFocus) },
-                        onGoToRoutingRules = {
-                            openDetail(Destination.ROUTING_RULES, rulesFocus)
-                        },
-                        onFetchBridges = onFetchBridges,
-                        bridgesFetching = bridgesFetching,
-                        bridgesMessage = bridgesMessage,
-                        detectedCountry = detectedCountry,
-                        psiphonRegions = psiphonRegions,
-                        endpointModifier = Modifier.focusRequester(endpointFocus),
-                        chainModifier = Modifier.focusRequester(chainFocus),
-                        routingRulesModifier = Modifier.focusRequester(rulesFocus),
+                    )
+                    Destination.SETTINGS -> SettingsScreen(
+                        settings = settings,
+                        onSettingsChange = onSettingsChange,
+                        batteryExempt = batteryExempt,
+                        onRequestBatteryExemption = onRequestBatteryExemption,
+                        onOpenAppSettings = onOpenAppSettings,
+                        onAddTile = onAddTile,
+                        onAddWidget = onAddWidget,
+                        onGoToAdvanced = { openFromRow(Destination.ADVANCED) },
+                        onGoToDiagnostics = { openFromRow(Destination.DIAGNOSTICS) },
+                        onGoToAbout = { openFromRow(Destination.ABOUT) },
+                        isTelevision = isTelevision,
+                        advancedModifier = Modifier.focusRequester(rowFocus.getValue(Destination.ADVANCED)),
+                        diagnosticsModifier = Modifier.focusRequester(rowFocus.getValue(Destination.DIAGNOSTICS)),
+                        aboutModifier = Modifier.focusRequester(rowFocus.getValue(Destination.ABOUT)),
+                    )
+                    Destination.ADVANCED -> AdvancedScreen(
+                        settings = settings,
+                        status = engineStatus,
+                        onSettingsChange = onSettingsChange,
+                        onOpen = { openFromRow(it.destination) },
+                        onOpenIdentity = { openFromRow(Destination.IDENTITY) },
+                        rowModifier = { Modifier.focusRequester(rowFocus.getValue(it.destination)) },
+                        identityModifier = Modifier.focusRequester(rowFocus.getValue(Destination.IDENTITY)),
+                        onBack = ::goBack,
+                    )
+                    Destination.METHOD -> MethodScreen(
+                        settings = settings,
+                        support = methodSupport,
+                        onSettingsChange = onSettingsChange,
+                        onGoToAdvanced = { openDetail(Destination.ADVANCED) },
+                        onBack = { goBack() },
+                    )
+                    Destination.PROTOCOL -> ProtocolScreen(
+                        settings = settings,
+                        onSettingsChange = onSettingsChange,
+                        onGoToEndpoint = { openFromRow(Destination.ENDPOINT) },
+                        onGoToStealth = { openFromRow(Destination.STEALTH) },
+                        endpointModifier = Modifier.focusRequester(rowFocus.getValue(Destination.ENDPOINT)),
+                        stealthModifier = Modifier.focusRequester(rowFocus.getValue(Destination.STEALTH)),
+                        onBack = ::goBack,
+                    )
+                    Destination.TWO_HOP -> TwoHopScreen(
+                        settings = settings,
+                        onSettingsChange = onSettingsChange,
+                        onBack = ::goBack,
                     )
                     Destination.CHAIN -> ChainScreen(
                         settings = settings,
@@ -312,19 +354,17 @@ fun WhiteAestherApp(
                         onCancelEndpointScan = onCancelEndpointScan,
                         onBack = ::goBack,
                     )
-                    Destination.TRAFFIC -> TrafficScreen(
+                    Destination.STEALTH -> StealthScreen(
                         settings = settings,
-                        status = engineStatus,
                         onSettingsChange = onSettingsChange,
-                        onGoToSplitTunnel = {
-                            openDetail(Destination.SPLIT_TUNNEL, appsFocus)
-                        },
-                        onGoToEndpoint = { openDetail(Destination.ENDPOINT) },
-                        onGoToChain = { openDetail(Destination.CHAIN) },
-                        onGoToRoutingRules = { openDetail(Destination.ROUTING_RULES) },
-                        appsModifier = Modifier.focusRequester(appsFocus),
+                        onBack = ::goBack,
                     )
-                    Destination.SPLIT_TUNNEL -> SplitTunnelScreen(
+                    Destination.NETWORK -> NetworkScreen(
+                        settings = settings,
+                        onSettingsChange = onSettingsChange,
+                        onBack = ::goBack,
+                    )
+                    Destination.SAFETY -> SafetyScreen(
                         settings = settings,
                         onSettingsChange = onSettingsChange,
                         onBack = ::goBack,
@@ -334,35 +374,12 @@ fun WhiteAestherApp(
                         onSettingsChange = onSettingsChange,
                         onBack = ::goBack,
                     )
-                    Destination.SETTINGS -> SettingsScreen(
-                        settings = settings,
-                        onSettingsChange = onSettingsChange,
-                        batteryExempt = batteryExempt,
-                        onRequestBatteryExemption = onRequestBatteryExemption,
-                        onOpenAppSettings = onOpenAppSettings,
-                        onAddTile = onAddTile,
-                        onAddWidget = onAddWidget,
-                        onGoToDiagnostics = {
-                            openDetail(Destination.DIAGNOSTICS, diagnosticsFocus)
-                        },
-                        onGoToAbout = {
-                            openDetail(Destination.ABOUT, aboutFocus)
-                        },
-                        onGoToIdentity = {
-                            openDetail(Destination.IDENTITY, identityFocus)
-                        },
-                        isTelevision = isTelevision,
-                        identityModifier = Modifier.focusRequester(identityFocus),
-                        diagnosticsModifier = Modifier.focusRequester(diagnosticsFocus),
-                        aboutModifier = Modifier.focusRequester(aboutFocus),
-                        onBack = ::goBack,
-                    )
                     Destination.DIAGNOSTICS -> DiagnosticsScreen(
                         settings = settings,
                         status = engineStatus,
                         nativeVersion = nativeVersion,
                         entries = logEntries,
-                        onBack = if (navigation.size > 1) ({ goBack() }) else null,
+                        onBack = ::goBack,
                         onShare = onShareReport,
                         onCopy = onCopyReport,
                         onClear = onClearLog,
@@ -385,14 +402,23 @@ fun WhiteAestherApp(
     }
 }
 
+/** Where each Advanced hub row leads. */
+private val AdvancedGroup.destination: Destination get() = when (this) {
+    AdvancedGroup.AETHER -> Destination.PROTOCOL
+    AdvancedGroup.NODES -> Destination.CHAIN
+    AdvancedGroup.TWO_HOP -> Destination.TWO_HOP
+    AdvancedGroup.ROUTING -> Destination.ROUTING_RULES
+    AdvancedGroup.NETWORK -> Destination.NETWORK
+    AdvancedGroup.SAFETY -> Destination.SAFETY
+    AdvancedGroup.DIAGNOSTICS -> Destination.DIAGNOSTICS
+}
+
 @Composable
 private fun AetherAppShell(
     selected: Tab?,
     isTelevision: Boolean,
     onSelect: (Tab) -> Unit,
     onControllerBack: () -> Boolean,
-    onOpenSettings: () -> Unit,
-    settingsModifier: Modifier,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val colors = AetherTheme.colors
@@ -410,7 +436,7 @@ private fun AetherAppShell(
             Modifier.weight(1f).fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            FamilyHeader(onOpenSettings, settingsModifier)
+            FamilyHeader()
             Box(
                 Modifier.weight(1f).fillMaxWidth(),
                 contentAlignment = Alignment.TopCenter,
@@ -423,10 +449,8 @@ private fun AetherAppShell(
 }
 
 @Composable
-private fun FamilyHeader(onOpenSettings: () -> Unit, settingsModifier: Modifier) {
+private fun FamilyHeader() {
     val colors = AetherTheme.colors
-    val interaction = remember { MutableInteractionSource() }
-    val shape = RoundedCornerShape(8.dp)
     Row(
         Modifier.widthIn(max = 520.dp).fillMaxWidth().heightIn(min = 56.dp)
             .padding(horizontal = 16.dp),
@@ -439,15 +463,8 @@ private fun FamilyHeader(onOpenSettings: () -> Unit, settingsModifier: Modifier)
             color = colors.text, modifier = Modifier.weight(1f),
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         )
-        Box(
-            settingsModifier.size(48.dp).clip(shape)
-                .tvControllerActivation(onClick = onOpenSettings)
-                .clickable(interaction, LocalIndication.current, role = Role.Button, onClick = onOpenSettings)
-                .controllerFocus(interaction, shape).testTag("tab-settings"),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(AetherIcons.Settings, stringResource(R.string.settings), Modifier.size(22.dp), colors.text2)
-        }
+        // Balances the logo, so the name stays centred.
+        Spacer(Modifier.size(40.dp))
     }
 }
 

@@ -21,6 +21,16 @@ import java.net.URL
  * is not. Adding a third party here would mean handing this device's real
  * address to someone who had no part in carrying its traffic.
  */
+/**
+ * What the trace endpoint said about the far end of the tunnel.
+ *
+ * [country] is Cloudflare's `loc`: two letters, or one of its own codes such as
+ * `T1` for Tor, or null when the answer had none. [latencyMs] is the time the
+ * whole request took through the tunnel, connection and TLS included -- a real
+ * page load's delay, which is what "ping" means to someone using the app.
+ */
+data class TunnelExit(val ip: String, val country: String?, val latencyMs: Long)
+
 object AddressReporter {
     /**
      * The host the trace endpoint lives on, for the request made by hand
@@ -89,7 +99,7 @@ object AddressReporter {
      * says whether a tunnel is up, so this cannot check for itself.
      */
     suspend fun captureRealAddress(context: Context, ipv4Only: Boolean = false): String? {
-        val address = fetch(ipv4Only) ?: return null
+        val address = fetch(ipv4Only)?.ip ?: return null
         context.addressStore.edit { preferences -> preferences[REAL_ADDRESS] = address }
         return address
     }
@@ -100,7 +110,10 @@ object AddressReporter {
      * Not stored. It belongs to one session, and showing the previous session's
      * exit while a new one is negotiating would be a confident lie.
      */
-    suspend fun tunnelAddress(ipv4Only: Boolean = false): String? = fetch(ipv4Only)
+    suspend fun tunnelAddress(ipv4Only: Boolean = false): String? = tunnelExit(ipv4Only)?.ip
+
+    /** [tunnelAddress] with the exit's country and the request's delay. */
+    suspend fun tunnelExit(ipv4Only: Boolean = false): TunnelExit? = fetch(ipv4Only)
 
     /**
      * The address seen from beyond a carrier, asked through the carrier itself.
@@ -122,19 +135,29 @@ object AddressReporter {
      * carrier is worth having -- see [CarriedSocket], which is also where the
      * certificate gets checked against the name.
      */
-    suspend fun carrierAddress(socksPort: Int): String? = withContext(Dispatchers.IO) {
+    suspend fun carrierAddress(socksPort: Int): String? = carrierExit(socksPort)?.ip
+
+    /** [carrierAddress] with the exit's country and the request's delay. */
+    suspend fun carrierExit(socksPort: Int): TunnelExit? = withContext(Dispatchers.IO) {
         runCatching {
+            val started = System.nanoTime()
             val answer = CarriedSocket.request(
                 host = TRACE_HOST,
                 path = TRACE_PATH,
                 socksPort = socksPort,
                 timeoutMs = CARRIER_TIMEOUT_MS,
             )
-            answer.body.lineSequence()
-                .firstOrNull { it.startsWith("ip=") }
-                ?.removePrefix("ip=")
-                ?.trim()
-        }.getOrNull()?.takeUnless { it.isNullOrBlank() }
+            parseTrace(answer.body, (System.nanoTime() - started) / 1_000_000)
+        }.getOrNull()
+    }
+
+    /** Reads `ip=` and `loc=` from a trace answer; null without an address. */
+    internal fun parseTrace(body: String, latencyMs: Long): TunnelExit? {
+        val fields = body.lineSequence().mapNotNull { line ->
+            line.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0].trim() to it[1].trim() }
+        }.toMap()
+        val ip = fields["ip"]?.takeUnless(String::isBlank) ?: return null
+        return TunnelExit(ip, fields["loc"]?.takeUnless(String::isBlank), latencyMs)
     }
 
     /**
@@ -145,7 +168,7 @@ object AddressReporter {
      * where the user has switched IPv6 off reads as the setting being ignored,
      * which is worse than an empty field.
      */
-    private suspend fun fetch(ipv4Only: Boolean): String? {
+    private suspend fun fetch(ipv4Only: Boolean): TunnelExit? {
         // IPv4 first, always. The two rows exist to be compared, and they
         // cannot be when one is IPv6 and the other IPv4 -- which is what a
         // dual-stack phone produced, because the resolver prefers IPv6 for the
@@ -156,8 +179,9 @@ object AddressReporter {
         return if (ipv4Only) null else request(TRACE_URL)
     }
 
-    private suspend fun request(url: String): String? = withContext(Dispatchers.IO) {
+    private suspend fun request(url: String): TunnelExit? = withContext(Dispatchers.IO) {
         runCatching {
+            val started = System.nanoTime()
             val connection = (URL(url).openConnection() as HttpURLConnection).apply {
                 connectTimeout = TIMEOUT_MS
                 readTimeout = TIMEOUT_MS
@@ -168,12 +192,11 @@ object AddressReporter {
             }
             try {
                 if (connection.responseCode != HttpURLConnection.HTTP_OK) return@runCatching null
-                connection.inputStream.bufferedReader().useLines { lines ->
-                    lines.firstOrNull { it.startsWith("ip=") }?.removePrefix("ip=")?.trim()
-                }
+                val body = connection.inputStream.bufferedReader().readText()
+                parseTrace(body, (System.nanoTime() - started) / 1_000_000)
             } finally {
                 connection.disconnect()
             }
-        }.getOrNull()?.takeUnless { it.isNullOrBlank() }
+        }.getOrNull()
     }
 }

@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import com.whitedns.whiteaesther.R
 import com.whitedns.whiteaesther.data.AppSettings
+import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.data.InstalledApp
 import com.whitedns.whiteaesther.data.InstalledApps
 import com.whitedns.whiteaesther.data.SplitTunnelMode
@@ -70,7 +71,7 @@ import kotlinx.coroutines.withContext
 fun SplitTunnelScreen(
     settings: AppSettings,
     onSettingsChange: (AppSettings) -> Unit,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)? = null,
 ) {
     val colors = AetherTheme.colors
     val context = LocalContext.current
@@ -100,11 +101,16 @@ fun SplitTunnelScreen(
         contentPadding = PaddingValues(horizontal = 18.dp),
     ) {
         item(key = "header") {
-            CrumbBar(stringResource(R.string.traffic_apps), onBack = onBack)
+            if (onBack != null) CrumbBar(stringResource(R.string.traffic_apps), onBack = onBack)
             PageTitle(
                 stringResource(R.string.which_apps_go_through),
                 stringResource(R.string.leave_this_on_all_apps_unless_something),
             )
+            // Proxy-only mode reaches only the apps pointed at it, so a choice
+            // made here would silently do nothing.
+            if (settings.mode == EngineMode.PROXY) {
+                Note(stringResource(R.string.apps_need_whole_device), Modifier.testTag("apps-proxy-note"))
+            }
 
             AetherCard {
                 Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {

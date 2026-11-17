@@ -72,11 +72,10 @@ class LanSharingTest {
                 )
             }
         }
-        compose.onNodeWithTag("tab-traffic").performClick()
+        compose.openAdvanced("network")
     }
 
     private fun openSharing() {
-        compose.onNodeWithTag("advanced-toggle").performScrollTo().performClick()
         compose.onNodeWithTag("lan-sharing-switch").performScrollTo().performClick()
         compose.waitUntil(timeoutMillis = 1_000) {
             compose.onAllNodesWithTag("lan-sharing-notice").fetchSemanticsNodes().isNotEmpty()

@@ -65,8 +65,7 @@ class SplitTunnelScreenTest {
                 )
             }
         }
-        compose.onNodeWithTag("tab-traffic").performClick()
-        compose.onNodeWithText("Apps").performScrollTo().performClick()
+        compose.onNodeWithTag("tab-apps").performClick()
     }
 
     @Test

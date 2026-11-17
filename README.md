@@ -45,15 +45,17 @@ sideloaded APK.
 ## First run
 
 **1. Leave the mode on VPN on the Connect screen.** This protects the whole
-device by default. The **Apps** row opens per-app routing. **Proxy** only starts
+device by default. The **Apps** tab opens per-app routing. **Proxy** only starts
 the local SOCKS5 listener; apps must be pointed at 127.0.0.1:1819 to use it.
 
-**2. Leave Connection method on Automatic.** Select it directly on Connect, or
-open **Methods** to choose Aether, Psiphon or Tor. Automatic finds a working
+**2. Leave the connection method on Automatic.** Tap the method card on Connect
+to choose Fast (Aether), Hard to block (Psiphon), Anonymous (Tor), or your own
+server. A method with something to set opens it inside its own card: Aether's
+network profile, Psiphon's exit country, Tor's bridges. Automatic finds a working
 method for the network and remembers what succeeded.
 
-Network presets remain available under **Methods → Advanced**. Adaptive is the
-default; these presets tune the Aether transport and discovery settings:
+Aether's network profiles open inside its card. Adaptive is the default; these
+presets tune the Aether transport and discovery settings:
 
 | Profile | For |
 | --- | --- |
@@ -62,20 +64,20 @@ default; these presets tune the Aether transport and discovery settings:
 | **Strict network** | Office or campus Wi-Fi that blocks a lot — quieter probing, slower |
 | **Manual** | You set the transport and search depth yourself |
 
-**3. Allow background running when asked.** Open **Settings** from the header gear. A card appears if
+**3. Allow background running when asked.** Open the **Settings** tab. A card appears if
 Android is still allowed to suspend the app. Without the exemption the tunnel
 drops when the screen goes off — some manufacturers are far more aggressive about
 this than others.
 
 **4. Expect the first connect to take a moment.** The engine tests real network
 paths before accepting one. If a path fails it backs off and retries, and the
-retry events are available under Connection details and Logs.
+retry events are available under Connection details and **Settings → Help and problem report**.
 
 ## When it will not connect
 
 The Connect screen shows a short status and a useful action when an attempt
-fails. Open **Connection details** for the engine's original message, or **Logs**
-for the full diagnostic history.
+fails. Open **Connection details** for the engine's original message, or
+**Settings → Help and problem report** for the full diagnostic history.
 
 | What you see | What it means |
 | --- | --- |
@@ -86,13 +88,13 @@ for the full diagnostic history.
 | `custom endpoint ... failed MASQUE validation` | The address you pinned is not reachable. Switch **Endpoint** back to Automatic. |
 | `Connected to a different endpoint` | Your pinned address failed and fallback substituted a working one. |
 
-Worth trying, in order: choose **Strict network** under **Methods → Advanced**; set
-**Addresses** to *IPv4 only* under **Tools** if the network handles IPv6 badly,
+Worth trying, in order: choose **Strict network** in Aether's card; set
+**Addresses** to *IPv4 only* under **Settings → Advanced → Network and device** if the network handles IPv6 badly,
 or to *IPv6 only* if its IPv6 is the cleaner path (this picks which Cloudflare
 addresses the engine dials, not what apps see in the tunnel); turn
-**Obfuscation** up to *Aggressive*.
+**Obfuscation** up to *Aggressive* under **Settings → Advanced → Aether → Traffic disguise**.
 
-Under **Logs** you can raise the detail level, reproduce the
+Under **Settings → Help and problem report** you can raise the detail level, reproduce the
 problem, and send a report. It shows you the exact text before anything is sent,
 and replaces IP addresses with placeholders unless you turn that off.
 
@@ -103,7 +105,7 @@ handshake against them, and only accepts a route once real traffic returns
 through it. The app then either raises an Android `VpnService` tunnel that
 captures IPv4, IPv6 and DNS, or exposes a loopback SOCKS5 proxy.
 
-- **Carrier** — Automatic by default. Under **Methods**, Aether, Psiphon or Tor can carry
+- **Carrier** — Automatic by default. From the method card, Aether, Psiphon or Tor can carry
   the tunnel instead: each finds its own way out and the app routes the whole
   device into it. Both are slower, and one of them is someone else's network, so
   they are there for the networks Aether cannot get out of rather than as equal
