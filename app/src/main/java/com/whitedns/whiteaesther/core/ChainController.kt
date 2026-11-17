@@ -49,6 +49,7 @@ class ChainController(private val context: Context) {
             // while on a slow tunnel. It answers with an empty string when the
             // config was accepted and the reason when it was not.
             applyConfig()?.let { return it }
+            awaitProviders()
             selectNode(settings.node)
             startLogging()
 
@@ -381,6 +382,69 @@ class ChainController(private val context: Context) {
     }
 
     /**
+     * Waits until every proxy provider has nodes, or [PROVIDER_WAIT_MS] passes.
+     *
+     * This core loads providers on goroutines and setupConfig returns first. Any
+     * read of the groups before then -- selectNode's getProxies, or the first
+     * packet off the tun -- makes the url-test group pick from an empty list.
+     * It picks REJECT and mihomo keeps that pick for ten seconds, so the exit
+     * check failed every attempt and the connect went into retries.
+     */
+    private fun awaitProviders() {
+        val deadline = System.currentTimeMillis() + PROVIDER_WAIT_MS
+        while (System.currentTimeMillis() < deadline) {
+            val providers = NativeChainBridge.invoke("getExternalProviders").data as? org.json.JSONArray ?: return
+            val pending = (0 until providers.length())
+                .map { providers.getJSONObject(it) }
+                .any { it.optString("type") == "Proxy" && it.optInt("count") == 0 }
+            if (!pending) return
+            Thread.sleep(PROVIDER_POLL_MS)
+        }
+    }
+
+    /**
+     * Downloads each enabled subscription that has no cached copy yet, into the
+     * file mihomo's provider reads, so the node list exists before a connect.
+     *
+     * Only for proxy profiles: their nodes are dialled directly anyway, and on
+     * connect mihomo would fetch the same URL directly. A chain behind the
+     * tunnel must not do this -- its fetch belongs inside the tunnel.
+     *
+     * @param force fetch again even when a copy is cached.
+     * @return why a fetch failed, or null when every one worked.
+     */
+    fun fetchSubscriptions(settings: ChainSettings, force: Boolean = false): String? {
+        File(home, "providers").mkdirs()
+        var failure: String? = null
+        for (source in settings.sources.filter { it.enabled && it.url.isNotBlank() }) {
+            val file = File(home, "providers/${ChainConfig.providerKey(source.url)}.yaml")
+            if (!force && file.isFile && file.length() > 0) continue
+            runCatching {
+                val connection = java.net.URL(source.url.trim()).openConnection() as java.net.HttpURLConnection
+                try {
+                    connection.connectTimeout = FETCH_TIMEOUT_MS
+                    connection.readTimeout = FETCH_TIMEOUT_MS
+                    // The agent mihomo sends, so a panel answers both fetches alike.
+                    connection.setRequestProperty("User-Agent", "clash.meta")
+                    check(connection.responseCode in 200..299) { "HTTP ${connection.responseCode}" }
+                    val body = connection.inputStream.use { it.readBytes() }
+                    check(body.size in 1..MAX_SUBSCRIPTION_BYTES) { "empty or too large" }
+                    val text = String(body, Charsets.UTF_8)
+                    // Checked before it is cached: mihomo would trust the file as
+                    // the subscription for an hour.
+                    check(NativeChainBridge.invoke("previewProxies", text).data is org.json.JSONArray) {
+                        "no valid proxy profiles"
+                    }
+                    file.writeText(text)
+                } finally {
+                    connection.disconnect()
+                }
+            }.onFailure { failure = "${source.name}: ${it.message ?: it.javaClass.simpleName}" }
+        }
+        return failure
+    }
+
+    /**
      * Restores the node the user last chose.
      *
      * Failure is not fatal and is deliberately not propagated: a subscription
@@ -396,6 +460,10 @@ class ChainController(private val context: Context) {
 
     private companion object {
         const val DELAY_TEST_TIMEOUT_MS = 5_000L
+        const val PROVIDER_WAIT_MS = 20_000L
+        const val PROVIDER_POLL_MS = 200L
+        const val FETCH_TIMEOUT_MS = 20_000
+        const val MAX_SUBSCRIPTION_BYTES = 2_000_000
 
         /**
          * What the running engine was configured from.

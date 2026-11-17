@@ -629,8 +629,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (settings.carrier == Carrier.PROXY && !settings.automaticCarrier &&
                 EngineStatusStore.status.value.stage in setOf(EngineStage.IDLE, EngineStage.ERROR)) {
                 try {
-                    val preview = withContext(Dispatchers.IO) { chain.previewNodes(settings.chainForService()) }
-                    mutableChainState.value = ChainState(available = chain.isAvailable, nodes = preview.nodes, selected = preview.selected)
+                    val (preview, fetchError) = withContext(Dispatchers.IO) {
+                        val chainSettings = settings.chainForService()
+                        val fetchError = chain.fetchSubscriptions(chainSettings)
+                        chain.previewNodes(chainSettings) to fetchError
+                    }
+                    mutableChainState.value = ChainState(
+                        available = chain.isAvailable,
+                        nodes = preview.nodes,
+                        selected = preview.selected,
+                        error = fetchError,
+                    )
                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
                     throw cancelled
                 } catch (failure: Exception) {
