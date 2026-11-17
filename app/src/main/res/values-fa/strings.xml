@@ -258,8 +258,6 @@
     <string name="adds_a_second_hop_after_the_tunnel">یک پرش دوم بعد از تونل اضافه می‌کند، تا سایت‌ها به‌جای آدرس کلادفلر، آدرس نود شما را ببینند.</string>
     <string name="not_available_in_this_build">در این بیلد موجود نیست</string>
     <string name="this_copy_of_whiteaesther_does_not_include">این نسخه از WhiteAesther زنجیرهٔ خروج را ندارد. بقیهٔ چیزها مثل همیشه کار می‌کنند.</string>
-    <string name="coverage_has_to_be_whole_device">پوشش باید کل دستگاه باشد</string>
-    <string name="the_chain_routes_the_whole_phone_under">زنجیره کل گوشی را مسیردهی می‌کند. در بخش ترافیک، پوشش را به «کل دستگاه» برگردانید، یا زنجیره را خاموش کنید.</string>
     <string name="traffic_leaves_from_your_node">ترافیک از نود شما بیرون می‌رود.</string>
     <string name="traffic_leaves_from_cloudflare_as_normal">ترافیک مثل حالت عادی از کلادفلر بیرون می‌رود.</string>
     <string name="with_this_off_whiteaesther_works_exactly_as">با خاموش بودن این، WhiteAesther دقیقاً مثل امروز کار می‌کند. اگر اشتراک یا نود خودتان را دارید و می‌خواهید سایت‌ها آن آدرس را ببینند نه آدرس کلادفلر را، روشنش کنید.</string>
@@ -449,7 +447,6 @@
     <string name="err_route_closed_early">مسیر رمزگذاری‌شده پیش از راه‌افتادن زنجیرهٔ خروج بسته شد</string>
     <string name="err_chain_timeout">زنجیرهٔ خروج در انتظار مسیر، زمانش تمام شد</string>
     <string name="err_chain_unavailable">زنجیرهٔ خروج در این بیلد موجود نیست</string>
-    <string name="err_chain_needs_tun">زنجیرهٔ خروج به پوشش کل دستگاه نیاز دارد</string>
     <string name="err_no_battery_settings">تنظیمات باتری روی این دستگاه در دسترس نیست.</string>
     <string name="err_no_browser">هیچ برنامه‌ای روی این دستگاه نمی‌تواند صفحهٔ دانلود را باز کند.</string>
     <string name="err_no_tile_setup">این دستگاه نتوانست تنظیم کلید را باز کند.</string>
@@ -659,6 +656,8 @@
     <string name="warp_api_sni">نام سرور TLS برای API وارپ (اختیاری)</string>
     <string name="chain_automatic">گره خودکار</string>
     <string name="chain_automatic_summary">استفاده از گره با کمترین تأخیر؛ بررسی دوباره هر پنج دقیقه.</string>
+    <string name="chain_automatic_using">روشن. الان از %1$s استفاده می‌شود که سریع‌ترین است. هر پنج دقیقه دوباره بررسی می‌شود.</string>
+    <string name="chain_manual_summary">خاموش. نودی که پایین تیک می‌زنید ترافیک را می‌برد.</string>
     <string name="routing_presets">قانون‌های آمادهٔ مسیریابی</string>
     <string name="routing_presets_summary">قانون‌های اختیاری در کنار قانون‌های شخصی شما. تغییرات بلافاصله روی اتصال اعمال می‌شوند.</string>
     <string name="preset_iran">عبور مستقیم سایت‌های ‎.ir</string>
@@ -705,7 +704,6 @@
     <string name="advanced_methods_hint">روش اتصال، کشور سایفون و پل‌های تور در صفحهٔ اتصال تنظیم می‌شوند. این‌جا تنظیمات تخصصی است.</string>
     <string name="advanced_section_general">عمومی</string>
     <string name="advanced_aether_detail">پروتکل، نقطهٔ پایانی و پنهان‌سازی ترافیک</string>
-    <string name="advanced_nodes">نودهای پروکسی</string>
     <string name="advanced_off">خاموش</string>
     <string name="two_hop_needs_method">دو هاپ از اتر، سایفون یا تور شروع می‌شود. اول یکی از آن‌ها را در صفحهٔ اتصال انتخاب کنید.</string>
     <string name="two_hop_first_hint">همان روشی که در صفحهٔ اتصال انتخاب کرده‌اید.</string>

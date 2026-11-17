@@ -9,7 +9,9 @@
     <string name="worker_add_deployment">Set up a new Worker or Pages deployment</string>
     <string name="worker_exit_managed">Traffic exits through the selected Worker. Choose another connection method to configure an exit node.</string>
     <string name="proxy_profiles_summary">Import a subscription or profiles such as VLESS, VMess, Trojan and Shadowsocks. Filter by protocol and select an imported or cached node before connecting.</string>
-    <string name="proxy_preview_empty">Add a subscription or paste a proxy profile to choose a node here.</string>
+    <string name="proxy_preview_empty">No nodes yet. Tap Update subscriptions to load them, or paste a proxy profile.</string>
+    <string name="update_subscriptions">Update subscriptions</string>
+    <string name="update_fetches_outside_tunnel">While disconnected, Update and the ping tests reach the subscription and the nodes from this device, outside the tunnel. When connected they go through the tunnel.</string>
     <string name="proxy_protocol">Protocol</string>
     <string name="proxy_all_protocols">All protocols</string>
     <string name="carrier_worker">Cloudflare Worker</string>

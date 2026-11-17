@@ -85,7 +85,7 @@ fun AdvancedScreen(
         AetherCard {
             Group(AdvancedGroup.AETHER, current = manual && Carrier.AETHER in settings.carrierPath)
             Divider()
-            Group(AdvancedGroup.NODES, current = manual && settings.carrier == Carrier.PROXY)
+            Group(AdvancedGroup.NODES, current = manual && (settings.carrier == Carrier.PROXY || settings.chain.enabled))
             // An exit chain with nothing in it carries nothing, and this is
             // where the user looks for it.
             if (settings.chain.enabled && !settings.chain.hasNodes) {
@@ -162,7 +162,12 @@ fun AdvancedScreen(
 private fun AdvancedGroup.presentation(settings: AppSettings): Triple<ImageVector, String, String> = when (this) {
     AdvancedGroup.AETHER -> Triple(Carrier.AETHER.simpleIcon,
         stringResource(R.string.carrier_aether), stringResource(R.string.advanced_aether_detail))
-    AdvancedGroup.NODES -> Triple(AetherIcons.Globe, stringResource(R.string.advanced_nodes), settings.chainSummary())
+    // Named for what it is now: an exit chain behind Aether is not "proxy nodes".
+    AdvancedGroup.NODES -> Triple(
+        AetherIcons.Globe,
+        stringResource(if (!settings.automaticCarrier && settings.carrier == Carrier.PROXY) R.string.carrier_proxy else R.string.routes_exit_chain),
+        settings.chainSummary(),
+    )
     AdvancedGroup.TWO_HOP -> Triple(AetherIcons.Routes, stringResource(R.string.home_multi_hop),
         if (settings.secondCarrier != null && !settings.automaticCarrier) settings.methodSummary()
         else stringResource(R.string.advanced_off))

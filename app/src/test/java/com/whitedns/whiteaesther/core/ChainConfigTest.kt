@@ -69,6 +69,29 @@ class ChainConfigTest {
     }
 
     @Test
+    fun probeListenerIsLoopbackOnlyAndAuthenticated() {
+        val auth = SocksAuth("u0", "p0")
+        val config = ChainConfig.render(settings, socksPort = 1819, probe = 4321 to auth)
+        assertTrue(
+            config.contains(
+                "  - {name: ${ChainConfig.PROBE_LISTENER}, type: socks, listen: 127.0.0.1, port: 4321, " +
+                    "udp: false, users: [{username: u0, password: p0}]}\n",
+            ),
+        )
+        assertFalse(ChainConfig.render(settings, socksPort = 1819).contains("listeners:"))
+    }
+
+    @Test
+    fun proxyCoverageHandsTheUserPortToTheChain() {
+        val local = ChainConfig.render(settings, socksPort = 4000, inbound = ChainConfig.ProxyInbound(1819, false, "", ""))
+        assertTrue(local.contains("  - {name: ${ChainConfig.PROXY_LISTENER}, type: mixed, listen: 127.0.0.1, port: 1819, udp: true}\n"))
+
+        val shared = ChainConfig.render(settings, socksPort = 4000, inbound = ChainConfig.ProxyInbound(1819, true, "me", "p\"w"))
+        assertTrue(shared.contains("listen: 0.0.0.0, port: 1819, udp: true, users: [{username: \"me\", password: \"p\\\"w\"}]}"))
+        assertEquals(1, shared.lines().count { it == "listeners:" })
+    }
+
+    @Test
     fun managedWorkerIsASeparateFileProviderAndSurvivesStorage() {
         val worker = ChainSettings(enabled = true, worker = "{\"proxies\":[]}")
         assertTrue(worker.hasNodes)

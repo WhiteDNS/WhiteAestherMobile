@@ -87,6 +87,8 @@ internal fun HomeConnectionControls(
     onOpenMethodPage: () -> Unit,
     onGoToAdvanced: () -> Unit,
     onGoToChain: () -> Unit,
+    chainSelection: String? = null,
+    chainAutomaticPick: String? = null,
 ) {
     val colors = AetherTheme.colors
     val editable = status.stage == EngineStage.IDLE || status.stage == EngineStage.ERROR
@@ -150,15 +152,21 @@ internal fun HomeConnectionControls(
             HomeSelectionRow(stringResource(R.string.worker_setup_title), summary, "home-worker-settings", editable) {
                 context.startActivity(Intent(context, WorkerSetupActivity::class.java))
             }
-        } else if ((profiles || settings.chain.enabled) && settings.mode == EngineMode.TUN) {
+        } else if (profiles || settings.chain.enabled) {
             Divider()
-            val node = when {
-                settings.chain.node == ChainConfig.AUTOMATIC_GROUP -> stringResource(R.string.chain_automatic)
-                settings.chain.node != null -> settings.chain.node
-                else -> stringResource(R.string.home_choose_node)
+            // The running chain's answer while connected, the saved choice otherwise.
+            // Nothing saved is automatic, which is what a connect then uses.
+            val connected = status.stage == EngineStage.CONNECTED
+            val chosen = chainSelection.takeIf { connected } ?: settings.chain.node
+            val node = if (chosen == null || chosen == ChainConfig.AUTOMATIC_GROUP) {
+                val automatic = stringResource(R.string.chain_automatic)
+                chainAutomaticPick?.takeIf { connected }?.let { "$automatic · $it" } ?: automatic
+            } else {
+                chosen
             }
             HomeSelectionRow(stringResource(if (profiles) R.string.carrier_proxy else R.string.home_exit_node),
-                node, "home-exit-node", editable, onClick = onGoToChain)
+                // Open while connected too: picking, testing and updating nodes work live.
+                node, "home-exit-node", onClick = onGoToChain)
         }
     }
     if (!editable) {

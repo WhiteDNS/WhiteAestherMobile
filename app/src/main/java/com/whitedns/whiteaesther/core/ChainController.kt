@@ -37,12 +37,17 @@ class ChainController(private val context: Context) {
      *   happens inside this call travels through it.
      * @return null on success, or why it failed.
      */
-    internal fun start(settings: ChainSettings, socksPort: Int?, tun: TunnelHandoff): String? = tun.use {
+    internal fun start(
+        settings: ChainSettings,
+        socksPort: Int?,
+        tun: TunnelHandoff?,
+        inbound: ChainConfig.ProxyInbound? = null,
+    ): String? = tun.use {
         if (!isAvailable) return "The exit chain is not available in this build"
         settings.startupError()?.let { return it }
 
         return runCatching {
-            prepareHome(settings, socksPort)
+            prepareHome(settings, socksPort, inbound = inbound)
 
             initialise()?.let { return it }
             // Fetches every provider, so it reaches the network and can take a
@@ -50,15 +55,19 @@ class ChainController(private val context: Context) {
             // config was accepted and the reason when it was not.
             applyConfig()?.let { return it }
             awaitProviders()
+            NativeChainBridge.invoke("startListener")
             selectNode(settings.node)
             startLogging()
 
-            val failure = NativeChainBridge.startTun(
-                fd = tun.take(),
-                stack = ChainConfig.TUN_STACK,
-                address = "${ChainConfig.TUN_IPV4},${ChainConfig.TUN_IPV6}",
-                dns = ChainConfig.TUN_DNS,
-            ).failureText()
+            // No interface under proxy coverage: the inbound listener is the way in.
+            val failure = tun?.let {
+                NativeChainBridge.startTun(
+                    fd = it.take(),
+                    stack = ChainConfig.TUN_STACK,
+                    address = "${ChainConfig.TUN_IPV4},${ChainConfig.TUN_IPV6}",
+                    dns = ChainConfig.TUN_DNS,
+                ).failureText()
+            }
             if (failure == null) {
                 applied = settings.fingerprint()
             }
@@ -115,7 +124,11 @@ class ChainController(private val context: Context) {
 
             initialise()?.let { return it }
             applyConfig()?.let { return it }
-            if (settings.enabled) selectNode(settings.node)
+            if (settings.enabled) {
+                awaitProviders()
+                NativeChainBridge.invoke("startListener")
+                selectNode(settings.node)
+            }
             startLogging()
 
             val failure = NativeChainBridge.startTun(
@@ -149,8 +162,12 @@ class ChainController(private val context: Context) {
     fun isRunningConfigCurrent(settings: ChainSettings): Boolean =
         applied != null && applied == settings.fingerprint()
 
+    /** The authenticated loopback SOCKS5 into the running chain, or null. */
+    val probe: Pair<Int, SocksAuth>? get() = probeListener
+
     fun stop() {
         applied = null
+        probeListener = null
         if (!isAvailable) return
         // Drained first: the lines explaining why a session ended are written
         // during teardown, and shutdown discards anything still buffered.
@@ -224,7 +241,11 @@ class ChainController(private val context: Context) {
                 )
             }
         }
-        return ChainNodes(nodes, group.optString("now").takeIf { it.isNotBlank() })
+        return ChainNodes(
+            nodes,
+            group.optString("now").takeIf { it.isNotBlank() },
+            proxies.optJSONObject(ChainConfig.AUTOMATIC_GROUP)?.optString("now")?.takeIf { it.isNotBlank() },
+        )
     }
 
     /**
@@ -326,13 +347,19 @@ class ChainController(private val context: Context) {
         socksPort: Int?,
         proxyName: String = ChainConfig.TUNNEL_PROXY,
         auth: SocksAuth? = null,
+        inbound: ChainConfig.ProxyInbound? = null,
     ) {
         home.mkdirs()
         val providers = File(home, "providers")
         providers.mkdirs()
+        // shortcut: the port is free when picked and could be taken before mihomo
+        // binds it; then only the exit readout under the button stays empty.
+        val port = java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress()).use { it.localPort }
+        val probe = port to SocksAuth.random()
         File(home, "config.yaml").writeText(
-            ChainConfig.render(RuleListStore.of(context).withImported(settings), socksPort, proxyName, auth),
+            ChainConfig.render(RuleListStore.of(context).withImported(settings), socksPort, proxyName, auth, probe, inbound),
         )
+        probeListener = probe
 
         // Cached node lists for subscriptions the user has since removed. They
         // are not merely clutter: mihomo keys its own state by provider name, so
@@ -400,6 +427,45 @@ class ChainController(private val context: Context) {
             if (!pending) return
             Thread.sleep(PROVIDER_POLL_MS)
         }
+    }
+
+    /**
+     * Starts mihomo with no interface and no listener, only so nodes can be
+     * measured before a connect. Nodes are dialled directly from this device.
+     * The caller stops it with [stop] when the run ends.
+     *
+     * @return why it could not start, or null.
+     */
+    fun startForTesting(settings: ChainSettings): String? {
+        if (!isAvailable) return "The exit chain is not available in this build"
+        settings.startupError()?.let { return it }
+        return runCatching {
+            prepareHome(settings.copy(enabled = true), socksPort = null)
+            initialise()?.let { return it }
+            applyConfig()?.let { return it }
+            awaitProviders()
+            null
+        }.getOrElse { error -> error.message ?: "The exit chain did not start" }
+    }
+
+    /**
+     * Fetches every subscription again inside the running chain, over the route
+     * each provider was configured with (the tunnel, or DIRECT).
+     *
+     * @return why an update failed, or null when every one worked.
+     */
+    fun updateProviders(): String? {
+        if (!isAvailable) return "The exit chain is not available in this build"
+        val providers = NativeChainBridge.invoke("getExternalProviders").data as? org.json.JSONArray
+            ?: return "The chain is not running"
+        var failure: String? = null
+        for (index in 0 until providers.length()) {
+            val provider = providers.getJSONObject(index)
+            if (provider.optString("type") != "Proxy" || provider.optString("vehicle-type") != "HTTP") continue
+            val answer = NativeChainBridge.invoke("updateExternalProvider", provider.optString("name"))
+            answer.failureText()?.let { failure = it }
+        }
+        return failure
     }
 
     /**
@@ -474,6 +540,9 @@ class ChainController(private val context: Context) {
          */
         @Volatile
         var applied: String? = null
+
+        @Volatile
+        var probeListener: Pair<Int, SocksAuth>? = null
     }
 }
 
@@ -482,10 +551,16 @@ data class ChainNodes(
     val nodes: List<ChainNode> = emptyList(),
     /** The one carrying traffic, which is not always the one the user picked. */
     val selected: String? = null,
+    /** The node the automatic group is using now. */
+    val automaticPick: String? = null,
 ) {
-    internal fun restoredSelection(saved: String?): String? =
-        if (saved == ChainConfig.AUTOMATIC_GROUP || nodes.any { it.name == saved }) saved
-        else nodes.firstOrNull()?.name
+    // Nothing chosen, or a node the subscription dropped: automatic, not
+    // whichever node happens to be listed first.
+    internal fun restoredSelection(saved: String?): String? = when {
+        nodes.isEmpty() -> null
+        saved != null && nodes.any { it.name == saved } -> saved
+        else -> ChainConfig.AUTOMATIC_GROUP
+    }
 }
 
 data class ChainNode(

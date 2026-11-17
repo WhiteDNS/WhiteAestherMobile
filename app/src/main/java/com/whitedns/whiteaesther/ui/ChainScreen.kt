@@ -27,6 +27,8 @@ import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
@@ -50,7 +52,6 @@ import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.core.ChainConfig
 import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.ChainSource
-import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.service.EngineStage
 import com.whitedns.whiteaesther.service.EngineStatus
 import com.whitedns.whiteaesther.ui.theme.AetherTheme
@@ -89,7 +90,7 @@ fun ChainScreen(
     status: EngineStatus,
     chainState: ChainState,
     onSettingsChange: (AppSettings) -> Unit,
-    onRefreshNodes: () -> Unit,
+    onRefreshNodes: (Boolean) -> Unit,
     onSelectNode: (String) -> Unit,
     onTestNodes: () -> Unit,
     onTestSelected: (List<String>) -> Unit,
@@ -100,8 +101,9 @@ fun ChainScreen(
     val directProfiles = settings.carrier == Carrier.PROXY && !settings.automaticCarrier
     val chain = if (directProfiles) settings.chainForService() else settings.chain
     val connected = status.stage == EngineStage.CONNECTED
-    val preview = settings.carrier == Carrier.PROXY && !settings.automaticCarrier &&
-        status.stage in setOf(EngineStage.IDLE, EngineStage.ERROR)
+    // Any chain, not only proxy profiles: the list is read from the cached
+    // subscription, which Update can fill before the first connect.
+    val preview = status.stage in setOf(EngineStage.IDLE, EngineStage.ERROR)
 
     // Keyed on the sources too, so editing one re-asks rather than leaving the
     // previous subscription's nodes on screen.
@@ -110,7 +112,7 @@ fun ChainScreen(
     // every keystroke in a rule box restarted a full node load, and each of
     // those is a JNI call plus a read of every cached subscription.
     LaunchedEffect(connected, preview, chain.enabled, chain.nodeSourceFingerprint()) {
-        if ((connected || preview) && chain.enabled) onRefreshNodes()
+        if ((connected || preview) && chain.enabled) onRefreshNodes(false)
     }
 
     ScreenColumn {
@@ -135,15 +137,6 @@ fun ChainScreen(
                 body = stringResource(R.string.this_copy_of_whiteaesther_does_not_include),
             )
             return@ScreenColumn
-        }
-
-        if (chain.enabled && settings.mode != EngineMode.TUN) {
-            AttentionCard(
-                tone = colors.signalFailed,
-                title = stringResource(R.string.coverage_has_to_be_whole_device),
-                body = stringResource(R.string.the_chain_routes_the_whole_phone_under),
-            )
-            Spacer(Modifier.height(12.dp))
         }
 
         if (!directProfiles) AetherCard {
@@ -390,7 +383,7 @@ private fun NodesCard(
     chainState: ChainState,
     connected: Boolean,
     preview: Boolean,
-    onRefreshNodes: () -> Unit,
+    onRefreshNodes: (Boolean) -> Unit,
     onSelectNode: (String) -> Unit,
     onTestNodes: () -> Unit,
     onTestSelected: (List<String>) -> Unit,
@@ -454,14 +447,24 @@ private fun NodesCard(
                 // The engine's own answer, not the saved preference: a node that
                 // was dropped from the subscription leaves the two disagreeing,
                 // and what is actually carrying traffic is the true one.
-                val live = chainState.selected ?: settings.chain.node
-                OptionRow(
-                    code = null,
+                // Nothing saved means automatic: that is what a connect uses.
+                val live = chainState.selected ?: settings.chain.node ?: ChainConfig.AUTOMATIC_GROUP
+                val automatic = live == ChainConfig.AUTOMATIC_GROUP
+                // Turning automatic off keeps the node it was using, so traffic does not jump.
+                val manualStart = chainState.automaticPick ?: chainState.nodes.firstOrNull { it.supported }?.name
+                ToggleSettingRow(
                     title = stringResource(R.string.chain_automatic),
-                    subtitle = stringResource(R.string.chain_automatic_summary),
-                    selected = live == ChainConfig.AUTOMATIC_GROUP,
-                    tag = "chain-node-automatic",
-                    onClick = { onSelectNode(ChainConfig.AUTOMATIC_GROUP) },
+                    subtitle = when {
+                        !automatic -> stringResource(R.string.chain_manual_summary)
+                        chainState.automaticPick != null ->
+                            stringResource(R.string.chain_automatic_using, chainState.automaticPick)
+                        else -> stringResource(R.string.chain_automatic_summary)
+                    },
+                    checked = automatic,
+                    onCheckedChange = { on ->
+                        if (on) onSelectNode(ChainConfig.AUTOMATIC_GROUP) else manualStart?.let(onSelectNode)
+                    },
+                    modifier = Modifier.testTag("chain-node-automatic"),
                 )
                 // Fastest first, then the untested, then the ones this build
                 // cannot dial. A subscription arrives in whatever order it was
@@ -477,7 +480,7 @@ private fun NodesCard(
                             modifier = Modifier.padding(end = 6.dp).testTag("proxy-protocol-${kind ?: "all"}"))
                     }
                 }
-                if (connected) NodeActions(
+                if (connected || preview) NodeActions(
                     picked = picked,
                     busy = chainState.busy,
                     progress = chainState.testProgress,
@@ -552,18 +555,31 @@ private fun NodesCard(
             Note(chainState.error, modifier = Modifier.padding(horizontal = 15.dp))
         }
 
-        if (connected) {
+        if (connected || preview) {
             Divider()
             Row(
                 Modifier.fillMaxWidth().padding(15.dp),
                 horizontalArrangement = Arrangement.spacedBy(9.dp),
             ) {
-                OutlineButton(
-                    text = stringResource(R.string.refresh),
-                    modifier = Modifier.weight(1f),
-                    enabled = !chainState.busy,
-                    onClick = onRefreshNodes,
-                )
+                if (settings.chain.sources.any { it.enabled }) {
+                    OutlineButton(
+                        text = stringResource(R.string.update_subscriptions),
+                        modifier = Modifier.weight(1f).testTag("chain-update-subscriptions"),
+                        enabled = !chainState.busy,
+                        onClick = { onRefreshNodes(true) },
+                    )
+                }
+                if (connected) {
+                    OutlineButton(
+                        text = stringResource(R.string.refresh),
+                        modifier = Modifier.weight(1f),
+                        enabled = !chainState.busy,
+                        onClick = { onRefreshNodes(false) },
+                    )
+                }
+            }
+            if (preview && settings.chain.throughTunnel && settings.carrier.usesEngine && !settings.automaticCarrier) {
+                Note(stringResource(R.string.update_fetches_outside_tunnel), modifier = Modifier.padding(horizontal = 15.dp))
             }
         }
     }
@@ -710,33 +726,15 @@ private fun NodeRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // The tick picks the row for an action; tapping the rest of the row is
-        // still what switches the live node. Two different questions, so two
-        // different targets rather than one control that means both.
-        val pickInteraction = remember { MutableInteractionSource() }
-        Checkbox(
-            checked = picked,
-            onCheckedChange = { onPickedChange(name) },
-            // The same treatment every other control in this app has. A raw
-            // Material checkbox takes D-pad centre but not a gamepad's A
-            // button, and shows no focus ring -- on a television that is a
-            // control the remote can land on with nothing to say it has.
-            modifier = Modifier
-                .testTag("chain-pick-$name")
-                .tvControllerActivation { onPickedChange(name) }
-                .controllerFocus(pickInteraction, RoundedCornerShape(8.dp)),
-            interactionSource = pickInteraction,
-            colors = CheckboxDefaults.colors(
-                checkedColor = colors.brand,
-                uncheckedColor = colors.text3,
-                checkmarkColor = colors.onBrand,
-            ),
-        )
-        Icon(
-            if (selected) AetherIcons.Check else AetherIcons.Globe,
-            null,
-            Modifier.size(18.dp),
-            if (selected) colors.brand else colors.text3,
+        // A radio first: this is the node carrying traffic, and a tap here or on
+        // the row chooses it. The tick at the end only picks rows to test or
+        // hide -- in front it read as "choose", and choosing did nothing.
+        RadioButton(
+            selected = selected,
+            onClick = onClick,
+            enabled = supported,
+            modifier = Modifier.testTag("chain-select-$name"),
+            colors = RadioButtonDefaults.colors(selectedColor = colors.brand, unselectedColor = colors.text3),
         )
         Column(Modifier.weight(1f)) {
             Text(
@@ -778,6 +776,25 @@ private fun NodeRow(
                 delay < 1_200 -> colors.cyan
                 else -> colors.signalFailed
             },
+        )
+        val pickInteraction = remember { MutableInteractionSource() }
+        Checkbox(
+            checked = picked,
+            onCheckedChange = { onPickedChange(name) },
+            // The same treatment every other control in this app has. A raw
+            // Material checkbox takes D-pad centre but not a gamepad's A
+            // button, and shows no focus ring -- on a television that is a
+            // control the remote can land on with nothing to say it has.
+            modifier = Modifier
+                .testTag("chain-pick-$name")
+                .tvControllerActivation { onPickedChange(name) }
+                .controllerFocus(pickInteraction, RoundedCornerShape(8.dp)),
+            interactionSource = pickInteraction,
+            colors = CheckboxDefaults.colors(
+                checkedColor = colors.brand,
+                uncheckedColor = colors.text3,
+                checkmarkColor = colors.onBrand,
+            ),
         )
     }
 }

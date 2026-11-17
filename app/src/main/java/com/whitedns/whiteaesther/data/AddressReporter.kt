@@ -138,7 +138,10 @@ object AddressReporter {
     suspend fun carrierAddress(socksPort: Int): String? = carrierExit(socksPort)?.ip
 
     /** [carrierAddress] with the exit's country and the request's delay. */
-    suspend fun carrierExit(socksPort: Int): TunnelExit? = withContext(Dispatchers.IO) {
+    suspend fun carrierExit(
+        socksPort: Int,
+        auth: com.whitedns.whiteaesther.core.SocksAuth? = null,
+    ): TunnelExit? = withContext(Dispatchers.IO) {
         runCatching {
             val started = System.nanoTime()
             val answer = CarriedSocket.request(
@@ -146,6 +149,7 @@ object AddressReporter {
                 path = TRACE_PATH,
                 socksPort = socksPort,
                 timeoutMs = CARRIER_TIMEOUT_MS,
+                auth = auth,
             )
             parseTrace(answer.body, (System.nanoTime() - started) / 1_000_000)
         }.getOrNull()

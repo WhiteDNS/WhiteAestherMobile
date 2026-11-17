@@ -262,8 +262,6 @@
     <string name="adds_a_second_hop_after_the_tunnel">Adds a second hop after the tunnel, so sites see your node\'s address instead of Cloudflare\'s.</string>
     <string name="not_available_in_this_build">Not available in this build</string>
     <string name="this_copy_of_whiteaesther_does_not_include">This copy of WhiteAesther does not include the exit chain. Everything else works as normal.</string>
-    <string name="coverage_has_to_be_whole_device">Coverage has to be whole device</string>
-    <string name="the_chain_routes_the_whole_phone_under">The chain routes the whole phone. Under Traffic, set Coverage back to Whole device, or turn the chain off.</string>
     <string name="traffic_leaves_from_your_node">Traffic leaves from your node.</string>
     <string name="traffic_leaves_from_cloudflare_as_normal">Traffic leaves from Cloudflare, as normal.</string>
     <string name="with_this_off_whiteaesther_works_exactly_as">With this off, WhiteAesther works exactly as it does today. Turn it on if you have a subscription or a node of your own, and want sites to see that address rather than Cloudflare\'s.</string>
@@ -455,7 +453,6 @@
     <string name="err_route_closed_early">The encrypted route closed before the exit chain started</string>
     <string name="err_chain_timeout">The exit chain timed out waiting for a route</string>
     <string name="err_chain_unavailable">The exit chain is not available in this build</string>
-    <string name="err_chain_needs_tun">The exit chain needs whole-device coverage</string>
     <string name="err_no_battery_settings">Battery settings are not available on this device.</string>
     <string name="err_no_browser">No app on this device can open the download page.</string>
     <string name="err_no_tile_setup">This device could not open the tile setup.</string>
@@ -665,6 +662,8 @@
     <string name="warp_api_sni">WARP API server name (optional)</string>
     <string name="chain_automatic">Automatic node</string>
     <string name="chain_automatic_summary">Use the node with the lowest latency. Recheck every five minutes.</string>
+    <string name="chain_automatic_using">On. Now using %1$s, the fastest. Rechecked every five minutes.</string>
+    <string name="chain_manual_summary">Off. The node you tick below carries your traffic.</string>
     <string name="routing_presets">Routing presets</string>
     <string name="routing_presets_summary">Optional rules added to your custom rules. Changes apply to the connection immediately.</string>
     <string name="preset_iran">Bypass .ir sites</string>
@@ -711,7 +710,6 @@
     <string name="advanced_methods_hint">The method, the Psiphon country and the Tor bridges are set on the connect screen. These are the expert settings.</string>
     <string name="advanced_section_general">General</string>
     <string name="advanced_aether_detail">Protocol, endpoint and traffic disguise</string>
-    <string name="advanced_nodes">Proxy nodes</string>
     <string name="advanced_off">Off</string>
     <string name="two_hop_needs_method">Two hops start from Aether, Psiphon or Tor. Choose one of them on the connect screen first.</string>
     <string name="two_hop_first_hint">The method chosen on the connect screen.</string>

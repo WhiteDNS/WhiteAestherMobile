@@ -273,6 +273,7 @@ fun HomeScreen(
     addresses: AddressPair,
     traffic: TrafficSample,
     chainSelection: String?,
+    chainAutomaticPick: String? = null,
     update: UpdateChecker.Available?,
     updateDownload: UpdateDownload,
     canInstallUpdate: Boolean,
@@ -411,6 +412,7 @@ fun HomeScreen(
             chooseMethod = chooseMethod, onChooseMethod = { chooseMethod = it },
             onSettingsChange = onSettingsChange, support = methodSupport, onOpenMethodPage = onGoToRoutes,
             onGoToAdvanced = onGoToAdvanced, onGoToChain = onGoToChain,
+            chainSelection = chainSelection, chainAutomaticPick = chainAutomaticPick,
         )
 
         val attention = homeAttention(settings, status)
@@ -500,17 +502,14 @@ fun HomeScreen(
                         mono = addresses.real != null,
                     )
                     Divider()
-                    val viaChain = settings.chainForService().enabled && settings.mode == EngineMode.TUN
+                    val viaChain = settings.chainForService().enabled
                     FactRow(
                         stringResource(R.string.seen_by_websites),
                         when {
                             status.stage != EngineStage.CONNECTED -> stringResource(R.string.not_connected_3)
-                            // The chain's exit cannot be measured from here: this
-                            // process is kept off its own interface while mihomo
-                            // runs, so a probe leaves by the physical network and
-                            // would report the address the tunnel hides.
-                            viaChain -> chainSelection ?: stringResource(R.string.your_exit_chain_node)
+                            // Measured through mihomo's probe listener when a chain runs.
                             addresses.tunnel != null -> addresses.tunnel
+                            viaChain -> chainSelection ?: stringResource(R.string.your_exit_chain_node)
                             else -> stringResource(R.string.fact_checking)
                         },
                         mono = !viaChain && addresses.tunnel != null,
