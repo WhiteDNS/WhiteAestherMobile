@@ -112,8 +112,7 @@ fun AdvancedScreen(
         }
         Spacer(Modifier.height(12.dp))
         AetherCard {
-            Group(AdvancedGroup.DIAGNOSTICS)
-            Divider()
+            // Diagnostics is not repeated here: Settings has it as "Help and problem report".
             AdvancedRow(
                 icon = AetherIcons.Key,
                 title = stringResource(R.string.identity_access),

@@ -42,7 +42,7 @@
     <string name="seen_by_websites">Seen by websites</string>
     <string name="not_connected_3">Not connected</string>
     <string name="your_exit_chain_node">Your exit chain node</string>
-    <string name="traffic_leaves_through_your_exit_chain_so">Traffic leaves through your exit chain, so the address is your node\'s. The app cannot read it from here without routing its own traffic back into the chain.</string>
+    <string name="traffic_leaves_through_your_exit_chain_so">Traffic leaves through your exit chain, so this is your node\'s address, not Cloudflare\'s.</string>
     <string name="this_session">This session</string>
     <string name="this_phone_does_not_keep_per_app">This phone does not keep per-app byte counters, so there is nothing to measure.</string>
     <string name="download">Download</string>
@@ -164,7 +164,6 @@
     <string name="default_padding_tuned_for_ordinary_filtering">Default. Padding tuned for ordinary filtering.</string>
     <string name="heavier_padding_for_networks_that_inspect_closel">Heavier padding for networks that inspect closely.</string>
     <string name="no_obfuscation_faster_but_easier_to_block">No obfuscation. Faster where nothing inspects the tunnel; on a filtered network it is the setting most likely to stop the connection working.</string>
-    <string name="routes_rules">Routing rules</string>
     <string name="everything_not_named_here_goes_through_the">Everything not named here goes through the tunnel.</string>
     <string name="domain_rules_will_not_match">Domain rules will not match</string>
     <string name="this_app_is_always_a_tun_front">This app is always a tun front end, so a connection arrives as a bare address. Turn on &quot;Match rules on domain names&quot; under Traffic, or only the address rules below will do anything.</string>
@@ -181,8 +180,6 @@
     <string name="settings">Settings</string>
     <string name="appearance">Appearance</string>
     <string name="system_follows_your_phone_s_light_or">System follows your phone\'s light or dark setting.</string>
-    <string name="show_advanced_controls">Show advanced controls</string>
-    <string name="opens_every_advanced_section_by_default_across">Opens every Advanced section by default across the app.</string>
     <string name="add_a_quick_settings_tile">Add a quick settings tile</string>
     <string name="connect_and_disconnect_from_the_notification_sha">Connect and disconnect from the notification shade.</string>
     <string name="add">Add</string>
@@ -204,7 +201,6 @@
     <string name="t_me_whitedns">t.me/whitedns</string>
     <string name="news_releases_and_help">News, releases and help</string>
     <string name="whiteaesther_com_whitedns_whiteaesther_buildconf">WhiteAesther %1$s</string>
-    <string name="settings_identity">Settings · Identity</string>
     <string name="whiteaesther_issues_this_device_its_own_identity">WhiteAesther issues this device its own identity. There is no account to create.</string>
     <string name="generated_on_first_connect">Generated on first connect</string>
     <string name="private_key">Private key</string>
@@ -409,7 +405,6 @@
     <string name="fact_checking">Checking</string>
     <string name="fact_gateway">Gateway</string>
     <string name="fact_negotiating">Negotiating</string>
-    <string name="fact_coverage">Coverage</string>
     <string name="fact_addresses">Addresses</string>
     <string name="fact_identity">Identity</string>
     <string name="fact_engine">Engine</string>
@@ -707,7 +702,7 @@
     <string name="cancel">Cancel</string>
     <string name="tls_expert">Manual TLS values</string>
     <string name="settings_help">Help and problem report</string>
-    <string name="settings_advanced_summary">Connection methods, protocols, routing and more</string>
+    <string name="settings_advanced_summary">Exit chain, two-hop connection, protocol, routing and more</string>
     <string name="method_current">In use</string>
     <string name="advanced_methods_hint">The method, the Psiphon country and the Tor bridges are set on the connect screen. These are the expert settings.</string>
     <string name="advanced_section_general">General</string>

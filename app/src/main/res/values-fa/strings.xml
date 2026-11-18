@@ -40,7 +40,7 @@
     <string name="seen_by_websites">آنچه سایت‌ها می‌بینند</string>
     <string name="not_connected_3">متصل نیست</string>
     <string name="your_exit_chain_node">نود زنجیرهٔ خروج شما</string>
-    <string name="traffic_leaves_through_your_exit_chain_so">ترافیک از زنجیرهٔ خروج شما بیرون می‌رود، پس آدرس همان نود شماست. برنامه نمی‌تواند آن را از اینجا بخواند مگر ترافیک خودش را دوباره به زنجیره بفرستد.</string>
+    <string name="traffic_leaves_through_your_exit_chain_so">ترافیک از زنجیرهٔ خروج شما بیرون می‌رود، پس این آدرس نود شماست، نه کلودفلر.</string>
     <string name="this_session">این نشست</string>
     <string name="this_phone_does_not_keep_per_app">این گوشی شمارندهٔ بایت جداگانه برای هر برنامه نگه نمی‌دارد، پس چیزی برای اندازه‌گیری نیست.</string>
     <string name="download">دانلود</string>
@@ -162,7 +162,6 @@
     <string name="default_padding_tuned_for_ordinary_filtering">پیش‌فرض. لایه‌گذاری تنظیم‌شده برای فیلترینگ معمولی.</string>
     <string name="heavier_padding_for_networks_that_inspect_closel">لایه‌گذاری سنگین‌تر، برای شبکه‌هایی که دقیق بازرسی می‌کنند.</string>
     <string name="no_obfuscation_faster_but_easier_to_block">بدون مبهم‌سازی. جایی که کسی تونل را بررسی نمی‌کند سریع‌تر است؛ روی شبکهٔ فیلترشده بیشترین احتمال را دارد که اتصال را از کار بیندازد.</string>
-    <string name="routes_rules">قواعد مسیریابی</string>
     <string name="everything_not_named_here_goes_through_the">هر چه اینجا نامش نیامده از تونل عبور می‌کند.</string>
     <string name="domain_rules_will_not_match">قواعد دامنه تطبیق نخواهند یافت</string>
     <string name="this_app_is_always_a_tun_front">این برنامه همیشه یک رابط tun است، پس هر اتصال به‌صورت آدرس خالی می‌رسد. از بخش ترافیک گزینهٔ «تطبیق قواعد بر اساس نام دامنه» را روشن کنید، وگرنه فقط قواعد آدرسِ پایین کار خواهند کرد.</string>
@@ -177,8 +176,6 @@
     <string name="settings">تنظیمات</string>
     <string name="appearance">ظاهر</string>
     <string name="system_follows_your_phone_s_light_or">«سیستم» از تنظیم روشن یا تاریک گوشی شما پیروی می‌کند.</string>
-    <string name="show_advanced_controls">نمایش تنظیمات پیشرفته</string>
-    <string name="opens_every_advanced_section_by_default_across">همهٔ بخش‌های پیشرفته را در سراسر برنامه به‌طور پیش‌فرض باز می‌کند.</string>
     <string name="add_a_quick_settings_tile">افزودن کلید به تنظیمات سریع</string>
     <string name="connect_and_disconnect_from_the_notification_sha">اتصال و قطع اتصال از کشوی اعلان‌ها.</string>
     <string name="add">افزودن</string>
@@ -200,7 +197,6 @@
     <string name="t_me_whitedns">t.me/whitedns</string>
     <string name="news_releases_and_help">اخبار، انتشارها و راهنما</string>
     <string name="whiteaesther_com_whitedns_whiteaesther_buildconf">WhiteAesther %1$s</string>
-    <string name="settings_identity">تنظیمات · هویت</string>
     <string name="whiteaesther_issues_this_device_its_own_identity">‏WhiteAesther به این دستگاه هویت مخصوص خودش را می‌دهد. حسابی برای ساختن وجود ندارد.</string>
     <string name="generated_on_first_connect">در نخستین اتصال ساخته می‌شود</string>
     <string name="private_key">کلید خصوصی</string>
@@ -403,7 +399,6 @@
     <string name="fact_checking">در حال بررسی</string>
     <string name="fact_gateway">دروازه</string>
     <string name="fact_negotiating">در حال مذاکره</string>
-    <string name="fact_coverage">پوشش</string>
     <string name="fact_addresses">آدرس‌ها</string>
     <string name="fact_identity">هویت</string>
     <string name="fact_engine">هسته</string>
@@ -701,7 +696,7 @@
     <string name="cancel">لغو</string>
     <string name="tls_expert">مقادیر دستی TLS</string>
     <string name="settings_help">کمک و گزارش مشکل</string>
-    <string name="settings_advanced_summary">روش‌های اتصال، پروتکل‌ها، مسیریابی و بیشتر</string>
+    <string name="settings_advanced_summary">زنجیرهٔ خروج، اتصال ترکیبی، پروتکل، مسیریابی و بیشتر</string>
     <string name="method_current">در حال استفاده</string>
     <string name="advanced_methods_hint">روش اتصال، کشور سایفون و پل‌های تور در صفحهٔ اتصال تنظیم می‌شوند. این‌جا تنظیمات تخصصی است.</string>
     <string name="advanced_section_general">عمومی</string>

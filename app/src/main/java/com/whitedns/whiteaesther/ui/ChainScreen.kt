@@ -116,7 +116,7 @@ fun ChainScreen(
     }
 
     ScreenColumn {
-        CrumbBar(stringResource(if (directProfiles) R.string.carrier_proxy else R.string.routes_exit_chain), onBack = onBack)
+        CrumbBar(stringResource(R.string.advanced), onBack = onBack)
         if (!settings.automaticCarrier && settings.carrier == Carrier.WORKER) {
             Note(stringResource(R.string.worker_exit_managed))
             return@ScreenColumn
@@ -561,7 +561,8 @@ private fun NodesCard(
                 Modifier.fillMaxWidth().padding(15.dp),
                 horizontalArrangement = Arrangement.spacedBy(9.dp),
             ) {
-                if (settings.chain.sources.any { it.enabled }) {
+                val subscribed = settings.chain.sources.any { it.enabled }
+                if (subscribed) {
                     OutlineButton(
                         text = stringResource(R.string.update_subscriptions),
                         modifier = Modifier.weight(1f).testTag("chain-update-subscriptions"),
@@ -569,7 +570,8 @@ private fun NodesCard(
                         onClick = { onRefreshNodes(true) },
                     )
                 }
-                if (connected) {
+                // Update re-reads the list too; Refresh is only for pasted nodes.
+                if (connected && !subscribed) {
                     OutlineButton(
                         text = stringResource(R.string.refresh),
                         modifier = Modifier.weight(1f),

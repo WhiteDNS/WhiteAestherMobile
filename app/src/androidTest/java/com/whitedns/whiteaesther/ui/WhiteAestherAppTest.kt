@@ -248,7 +248,7 @@ class WhiteAestherAppTest {
     }
 
     @Test
-    fun tvProfileAndCompositeSwitchActivateFromOneRemoteTarget() {
+    fun tvProfileChoicesActivateFromOneRemoteTarget() {
         var writes = 0
         setApp(television = true, onSettings = { writes++ })
         compose.onNodeWithTag("home-method").performScrollTo().performClick()
@@ -262,15 +262,7 @@ class WhiteAestherAppTest {
                 .performKeyInput { pressKey(Key.DirectionCenter) }
         }
 
-        compose.onNodeWithTag("tab-settings").performClick()
-        compose.onNodeWithTag("show-advanced-switch")
-            .performScrollTo()
-            .performSemanticsAction(SemanticsActions.RequestFocus) { it.invoke() }
-            .assertIsFocused()
-            .performKeyInput { pressKey(Key.DirectionCenter) }
-
-        compose.runOnIdle { assertEquals(3, writes) }
-        compose.onNodeWithTag("show-advanced-switch").assertIsOn()
+        compose.runOnIdle { assertEquals(2, writes) }
     }
 
     @Test
