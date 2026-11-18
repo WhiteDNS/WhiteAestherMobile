@@ -141,7 +141,7 @@
     <string name="dns_inside_the_tunnel">سرویس نام (DNS) داخل تونل</string>
     <string name="comma_separated_leave_empty_for_the_engine">با ویرگول جدا کنید. خالی بگذارید تا از سرورهای خود هسته استفاده شود (1.1.1.1 و 1.0.0.1). ورودی‌هایی که آدرس نباشند نادیده گرفته می‌شوند.</string>
     <string name="dial_out_through_a_proxy">خروج از طریق یک پروکسی</string>
-    <string name="send_everything_the_tunnel_dials_through_a">هر چه تونل شماره‌گیری می‌کند را از پروکسی‌ای که همین حالا روی این گوشی اجرا می‌شود بفرست: socks5://127.0.0.1:1080 یا یک آدرس http://.</string>
+    <string name="send_everything_the_tunnel_dials_through_a">هر اتصالی که تونل برقرار می‌کند را از پروکسی‌ای که همین حالا روی این گوشی اجرا می‌شود بفرست: socks5://127.0.0.1:1080 یا یک آدرس http://.</string>
     <string name="wireguard_keepalive">زنده‌نگه‌داری WireGuard</string>
     <string name="seconds_between_the_packets_that_hold_the">فاصلهٔ ثانیه‌ای بین بسته‌هایی که اتصال را باز نگه می‌دارند. عدد ۲۵ استاندارد است؛ کمتر، در شبکه‌ای که زودتر فراموش می‌کند دوام می‌آورد و باتری بیشتری می‌برد.</string>
     <string name="it_s">%1$s ثانیه</string>
@@ -167,7 +167,7 @@
     <string name="domain_rules_will_not_match">قواعد دامنه تطبیق نخواهند یافت</string>
     <string name="this_app_is_always_a_tun_front">این برنامه همیشه یک رابط tun است، پس هر اتصال به‌صورت آدرس خالی می‌رسد. از بخش ترافیک گزینهٔ «تطبیق قواعد بر اساس نام دامنه» را روشن کنید، وگرنه فقط قواعد آدرسِ پایین کار خواهند کرد.</string>
     <string name="never_connect">هرگز وصل نشو</string>
-    <string name="refused_before_anything_is_dialled_one_rule">پیش از هر شماره‌گیری رد می‌شود. هر خط یک قاعده.</string>
+    <string name="refused_before_anything_is_dialled_one_rule">پیش از برقراری هر اتصالی رد می‌شود. هر خط یک قاعده.</string>
     <string name="skip_the_tunnel">تونل را رد کن</string>
     <string name="reached_with_this_device_s_real_address">با آدرس واقعی این دستگاه وصل می‌شود. برای بانک یا سرویس داخلی‌ای که آدرس خارجی را نمی‌پذیرد.</string>
     <string name="a_plain_name_matches_it_and_everything">یک نام ساده، خودش و هر چه زیرش است را در بر می‌گیرد. پیشوندها محدودش می‌کنند: ‏full: دقیقاً همان، ‏keyword: هر جای نام، ‏regexp: یک الگو، ‏cidr: یک بازهٔ آدرس، ‏port: یک عدد یا بازه، ‏private: شبکهٔ محلی. خطی که با # شروع شود یادداشت است.</string>
@@ -251,8 +251,8 @@
     <string name="reports_are_only_used_to_fix_problems">گزارش‌ها فقط برای رفع مشکل استفاده می‌شوند. ارسال، برگهٔ اشتراک‌گذاری خودتان را باز می‌کند، پس مقصد را خودتان انتخاب می‌کنید.</string>
     <string name="off_traffic_leaves_from_cloudflare">خاموش. ترافیک از کلادفلر بیرون می‌رود</string>
     <string name="on_but_no_nodes_yet">روشن، ولی هنوز نودی نیست</string>
-    <string name="on_dialled_through_the_tunnel">روشن، شماره‌گیری از داخل تونل</string>
-    <string name="on_nodes_dialled_directly">روشن، نودها مستقیم شماره‌گیری می‌شوند</string>
+    <string name="on_dialled_through_the_tunnel">روشن، اتصال به نودها از داخل تونل</string>
+    <string name="on_nodes_dialled_directly">روشن، اتصال مستقیم به نودها</string>
     <string name="routes_exit_chain">زنجیرهٔ خروج</string>
     <string name="where_your_traffic_comes_out">ترافیک شما از کجا بیرون می‌آید</string>
     <string name="adds_a_second_hop_after_the_tunnel">یک پرش دوم بعد از تونل اضافه می‌کند، تا سایت‌ها به‌جای آدرس کلادفلر، آدرس نود شما را ببینند.</string>
@@ -261,10 +261,10 @@
     <string name="traffic_leaves_from_your_node">ترافیک از نود شما بیرون می‌رود.</string>
     <string name="traffic_leaves_from_cloudflare_as_normal">ترافیک مثل حالت عادی از کلادفلر بیرون می‌رود.</string>
     <string name="with_this_off_whiteaesther_works_exactly_as">با خاموش بودن این، WhiteAesther دقیقاً مثل امروز کار می‌کند. اگر اشتراک یا نود خودتان را دارید و می‌خواهید سایت‌ها آن آدرس را ببینند نه آدرس کلادفلر را، روشنش کنید.</string>
-    <string name="dial_nodes_through_the_tunnel">شماره‌گیری نودها از داخل تونل</string>
+    <string name="dial_nodes_through_the_tunnel">اتصال به نودها از داخل تونل</string>
     <string name="your_network_never_learns_the_node_s">شبکهٔ شما هرگز آدرس نود را نمی‌فهمد، و نود هم هرگز آدرس شما را.</string>
     <string name="nodes_are_reached_directly_use_this_only">نودها مستقیم وصل می‌شوند. فقط جایی از این استفاده کنید که خود تونل مسدود است.</string>
-    <string name="dialling_directly_skips_the_tunnel_entirely_whit">شماره‌گیری مستقیم کلاً تونل را رد می‌کند — WhiteAesther به یک کلاینت ساده برای نود شما تبدیل می‌شود. در شبکه‌ای که تونل را کاملاً می‌بندد این انتخاب درست است، و همه جای دیگر انتخاب غلط.</string>
+    <string name="dialling_directly_skips_the_tunnel_entirely_whit">اتصال مستقیم کلاً تونل را دور می‌زند — WhiteAesther به یک کلاینت ساده برای نود شما تبدیل می‌شود. در شبکه‌ای که تونل را کاملاً می‌بندد این انتخاب درست است، و همه جای دیگر انتخاب غلط.</string>
     <string name="where_your_nodes_come_from">نودهای شما از کجا می‌آیند</string>
     <string name="a_subscription_link_or_nodes_pasted_by">یک لینک اشتراک، یا نودهایی که دستی جای‌گذاری می‌کنید.</string>
     <string name="remove">حذف</string>
@@ -334,7 +334,7 @@
     <string name="status_validating_route">در حال بررسی مسیر رمزگذاری‌شده</string>
     <string name="status_starting_chain">در حال راه‌اندازی زنجیرهٔ خروج</string>
     <string name="status_chain_carries">ترافیک از زنجیرهٔ خروج بیرون می‌رود</string>
-    <string name="status_chain_direct">ترافیک از زنجیرهٔ خروج بیرون می‌رود، با شماره‌گیری مستقیم</string>
+    <string name="status_chain_direct">ترافیک از زنجیرهٔ خروج بیرون می‌رود، با اتصال مستقیم به نود</string>
     <string name="err_chain_no_answer">پروفایل پروکسی انتخاب‌شده به درخواست آزمایشی پاسخ نداد. پروفایل یا شبکهٔ دیگری را امتحان کنید.</string>
     <string name="status_searching_wg">در حال جست‌وجوی نقطهٔ پایانی WireGuard. ممکن است چند دقیقه طول بکشد.</string>
     <string name="status_preparing_identity">در حال آماده‌سازی هویت و دروازه</string>
@@ -560,8 +560,8 @@
     <string name="psiphon_region_unknown">سایفون هنوز فهرست کشورهایش را نداده است. این فهرست پس از نخستین اجرا می‌آید و تا آن زمان تنها گزینه، «بهترین گزینهٔ موجود» است.</string>
     <string name="psiphon_region_unlisted_detail">سایفون این کشور را فهرست نکرده است. باز هم همین کشور خواسته می‌شود و اگر در دسترس نباشد، نشست شکست می‌خورد و از جای دیگری خارج نمی‌شود.</string>
     <string name="off_traffic_leaves_from_carrier">خاموش. ترافیک از %1$s خارج می‌شود</string>
-    <string name="on_dialled_through_carrier">روشن، از داخل %1$s شماره‌گیری می‌شود</string>
-    <string name="nodes_dialled_through_carrier">نودهای شما از داخل %1$s شماره‌گیری می‌شوند. یک راه خروج دارد و نودها از همان می‌روند، پس اینجا چیزی برای انتخاب نیست.</string>
+    <string name="on_dialled_through_carrier">روشن، اتصال به نودها از داخل %1$s</string>
+    <string name="nodes_dialled_through_carrier">اتصال به نودهای شما از داخل %1$s برقرار می‌شود. یک راه خروج دارد و نودها از همان می‌روند، پس اینجا چیزی برای انتخاب نیست.</string>
     <string name="tor_bridges_country">به‌عنوان این کشور بپرس</string>
     <string name="download_and_install">دانلود و نصب</string>
     <string name="downloading_update">%1$s از %2$s دانلود شد</string>
@@ -633,6 +633,8 @@
     <string name="home_method_pair">%1$s ← %2$s</string>
     <string name="home_disconnect_to_edit">برای تغییر این گزینه‌ها، ابتدا اتصال را قطع کنید.</string>
     <string name="home_method_settings">تنظیمات بیشتر اتصال</string>
+    <string name="method_all_advanced">همهٔ تنظیمات پیشرفته</string>
+    <string name="method_all_advanced_detail">پروتکل، نقطهٔ پایانی، قواعد مسیریابی، شبکه و موارد دیگر</string>
     <string name="home_state_idle">متصل نیست</string>
     <string name="home_state_preparing">در حال آماده‌سازی</string>
     <string name="home_state_connecting">در حال اتصال</string>
@@ -654,8 +656,8 @@
     <string name="masque_sni">نام سرور MASQUE (اختیاری)</string>
     <string name="warp_api_host">نام میزبان API وارپ (اختیاری)</string>
     <string name="warp_api_sni">نام سرور TLS برای API وارپ (اختیاری)</string>
-    <string name="chain_automatic">گره خودکار</string>
-    <string name="chain_automatic_summary">استفاده از گره با کمترین تأخیر؛ بررسی دوباره هر پنج دقیقه.</string>
+    <string name="chain_automatic">نود خودکار</string>
+    <string name="chain_automatic_summary">استفاده از نود با کمترین تأخیر؛ بررسی دوباره هر پنج دقیقه.</string>
     <string name="chain_automatic_using">روشن. الان از %1$s استفاده می‌شود که سریع‌ترین است. هر پنج دقیقه دوباره بررسی می‌شود.</string>
     <string name="chain_manual_summary">خاموش. نودی که پایین تیک می‌زنید ترافیک را می‌برد.</string>
     <string name="routing_presets">قانون‌های آمادهٔ مسیریابی</string>

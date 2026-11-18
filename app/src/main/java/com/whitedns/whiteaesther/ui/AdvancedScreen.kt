@@ -159,7 +159,7 @@ fun AdvancedScreen(
 }
 
 @Composable
-private fun AdvancedGroup.presentation(settings: AppSettings): Triple<ImageVector, String, String> = when (this) {
+internal fun AdvancedGroup.presentation(settings: AppSettings): Triple<ImageVector, String, String> = when (this) {
     AdvancedGroup.AETHER -> Triple(Carrier.AETHER.simpleIcon,
         stringResource(R.string.carrier_aether), stringResource(R.string.advanced_aether_detail))
     // Named for what it is now: an exit chain behind Aether is not "proxy nodes".

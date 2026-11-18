@@ -291,6 +291,7 @@ fun HomeScreen(
     methodSupport: MethodSheetSupport = MethodSheetSupport(),
     onGoToTraffic: () -> Unit,
     onGoToChain: () -> Unit = {},
+    onOpenAdvancedGroup: (com.whitedns.whiteaesther.data.AdvancedGroup) -> Unit = {},
     onSettingsChange: (AppSettings) -> Unit = {},
     onGoToApps: () -> Unit = {},
     onGoToDiagnostics: () -> Unit = {},
@@ -413,6 +414,7 @@ fun HomeScreen(
             onSettingsChange = onSettingsChange, support = methodSupport, onOpenMethodPage = onGoToRoutes,
             onGoToAdvanced = onGoToAdvanced, onGoToChain = onGoToChain,
             chainSelection = chainSelection, chainAutomaticPick = chainAutomaticPick,
+            onOpenAdvancedGroup = onOpenAdvancedGroup,
         )
 
         val attention = homeAttention(settings, status)

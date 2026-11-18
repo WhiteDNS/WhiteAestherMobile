@@ -639,6 +639,8 @@
     <string name="home_method_pair">%1$s → %2$s</string>
     <string name="home_disconnect_to_edit">Disconnect to change these options.</string>
     <string name="home_method_settings">More connection settings</string>
+    <string name="method_all_advanced">All advanced settings</string>
+    <string name="method_all_advanced_detail">Protocol, endpoint, routing rules, network and more</string>
     <string name="home_state_idle">Not connected</string>
     <string name="home_state_preparing">Preparing</string>
     <string name="home_state_connecting">Connecting</string>

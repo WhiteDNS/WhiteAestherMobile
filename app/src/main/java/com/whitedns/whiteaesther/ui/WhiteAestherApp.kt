@@ -273,6 +273,7 @@ fun WhiteAestherApp(
                         onGoToAdvanced = { openDetail(Destination.ADVANCED) },
                         methodSupport = methodSupport,
                         onGoToChain = { openDetail(Destination.CHAIN) },
+                        onOpenAdvancedGroup = { openDetail(it.destination) },
                         onGoToEndpoint = { openDetail(Destination.ENDPOINT) },
                         onGoToTraffic = { openTab(Tab.APPS) },
                         onSettingsChange = onSettingsChange,
@@ -317,6 +318,7 @@ fun WhiteAestherApp(
                         onSettingsChange = onSettingsChange,
                         onGoToAdvanced = { openDetail(Destination.ADVANCED) },
                         onBack = { goBack() },
+                        onOpenAdvancedGroup = { openDetail(it.destination) },
                     )
                     Destination.PROTOCOL -> ProtocolScreen(
                         settings = settings,
