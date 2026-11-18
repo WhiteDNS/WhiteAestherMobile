@@ -170,6 +170,15 @@ pub(crate) fn reload_routes() {
     *ROUTES.write().unwrap_or_else(|e| e.into_inner()) = Some(std::sync::Arc::new(RuleSet::from_env()));
 }
 
+/// A SOCKS5 name that is really an address, as Java and many apps send one,
+/// is an address: otherwise address rules never match it and no name is sniffed.
+fn target_of_name(name: String) -> Target {
+    match name.trim_start_matches('[').trim_end_matches(']').parse::<IpAddr>() {
+        Ok(ip) => Target::Ip(ip),
+        Err(_) => Target::Domain(name),
+    }
+}
+
 fn host_of(target: &Target) -> Host<'_> {
     match target {
         Target::Domain(name) => Host::Domain(name.as_str()),
@@ -704,7 +713,7 @@ async fn read_target(sock: &mut TcpStream, atyp: u8) -> Result<(Target, u16)> {
             sock.read_exact(&mut len).await?;
             let mut name = vec![0u8; len[0] as usize];
             sock.read_exact(&mut name).await?;
-            Target::Domain(String::from_utf8_lossy(&name).to_string())
+            target_of_name(String::from_utf8_lossy(&name).to_string())
         }
         _ => return Err(AetherError::Other("bad atyp".into())),
     };
@@ -1869,7 +1878,7 @@ fn parse_udp_request(buf: &[u8]) -> Option<(Target, (u16, Vec<u8>))> {
             }
             let name = String::from_utf8_lossy(&buf[pos..pos + len]).to_string();
             pos += len;
-            Target::Domain(name)
+            target_of_name(name)
         }
         _ => return None,
     };
@@ -3399,6 +3408,9 @@ mod sniff_route_tests {
     #[test]
     fn a_domain_target_is_decided_on_its_own_name() {
         let set = RuleSet::parse("ads.example", "");
+        assert!(matches!(target_of_name("52.77.159.47".into()), Target::Ip(_)));
+        assert!(matches!(target_of_name("[2001:db8::1]".into()), Target::Ip(_)));
+        assert!(matches!(target_of_name("ads.example".into()), Target::Domain(_)));
         let target = Target::Domain("ads.example".to_string());
         assert_eq!(decide_route(&set, &target, None, 443), Action::Block);
     }
