@@ -102,6 +102,8 @@ data class ChainState(
     val error: String? = null,
     /** The engine is running a configuration the settings no longer describe. */
     val stale: Boolean = false,
+    /** The node automatic selection is using right now, while connected. */
+    val automaticPick: String? = null,
 )
 
 /**
@@ -366,7 +368,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private suspend fun chainCarriesTraffic(): Boolean {
         val current = repository.settings.first()
-        return current.chain.enabled && current.mode == EngineMode.TUN
+        // chainForService, not chain: proxy profiles turn the chain on there.
+        return current.chainForService().enabled
     }
 
     /** Stops asking about this version. */
@@ -449,6 +452,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             mutableAddresses.value = mutableAddresses.value.copy(
                                 tunnel = null, tunnelCountry = null, tunnelLatencyMs = null,
                             )
+                            // The connect screen names the live node without the list being opened.
+                            if (chainCarriesTraffic()) {
+                                val live = withContext(Dispatchers.IO) { chain.nodes() }
+                                mutableChainState.value = mutableChainState.value.copy(
+                                    available = chain.isAvailable,
+                                    nodes = live.nodes,
+                                    selected = live.selected,
+                                    automaticPick = live.automaticPick,
+                                )
+                            }
                             // With the exit chain running this process is kept
                             // off its own interface -- deliberately, or the
                             // engine's and mihomo's own sockets would be
@@ -459,9 +472,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             // user's real IP.
                             val carrierPort = EngineStatusStore.status.value.carrierSocksPort
                             val exit = when {
-                                // The chain's node is the exit, and nothing
-                                // reachable from this process can measure it.
-                                chainCarriesTraffic() -> null
+                                // The chain's node is the exit, asked through
+                                // mihomo's own authenticated loopback listener.
+                                chainCarriesTraffic() -> chain.probe?.let { (port, auth) ->
+                                    AddressReporter.carrierExit(port, auth)
+                                }
                                 // A carrier, asked through its own listener.
                                 // Measuring it the ordinary way reports this
                                 // phone's address under a heading that says the
@@ -622,15 +637,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * the tunnel exists -- would send the request over the local network in the
      * clear, which is the one thing dialling through the tunnel exists to avoid.
      */
-    fun refreshChainNodes(settings: AppSettings) {
+    fun refreshChainNodes(settings: AppSettings, update: Boolean = false) {
         if (chainJob?.isCompleted == false) return
         chainJob = viewModelScope.launch {
             mutableChainState.value = mutableChainState.value.copy(busy = true, error = null)
-            if (settings.carrier == Carrier.PROXY && !settings.automaticCarrier &&
-                EngineStatusStore.status.value.stage in setOf(EngineStage.IDLE, EngineStage.ERROR)) {
+            val chainSettings = settings.chainForService()
+            if (EngineStatusStore.status.value.stage in setOf(EngineStage.IDLE, EngineStage.ERROR)) {
                 try {
-                    val preview = withContext(Dispatchers.IO) { chain.previewNodes(settings.chainForService()) }
-                    mutableChainState.value = ChainState(available = chain.isAvailable, nodes = preview.nodes, selected = preview.selected)
+                    val (preview, fetchError) = withContext(Dispatchers.IO) {
+                        // Unasked, only what a connect would fetch directly anyway.
+                        // Update is the user asking for it now, from this device.
+                        val fetchError = if (update || dialsNodesDirectly(settings)) {
+                            chain.fetchSubscriptions(chainSettings, force = update)
+                        } else {
+                            null
+                        }
+                        chain.previewNodes(chainSettings) to fetchError
+                    }
+                    mutableChainState.value = ChainState(
+                        available = chain.isAvailable,
+                        nodes = preview.nodes,
+                        selected = preview.selected,
+                        error = fetchError,
+                    )
                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
                     throw cancelled
                 } catch (failure: Exception) {
@@ -642,18 +671,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // already running, so the engine would answer with the previous
             // one's nodes. Reporting them as the new subscription's is what
             // reads as "deleting it did nothing".
-            if (!chain.isRunningConfigCurrent(settings.chainForService())) {
+            if (!chain.isRunningConfigCurrent(chainSettings)) {
                 mutableChainState.value = ChainState(available = chain.isAvailable, stale = true)
                 return@launch
             }
+            val updateError = if (update) withContext(Dispatchers.IO) { chain.updateProviders() } else null
             val reported = withContext(Dispatchers.IO) { chain.nodes() }
             mutableChainState.value = ChainState(
                 available = chain.isAvailable,
                 nodes = reported.nodes,
                 selected = reported.selected,
+                automaticPick = reported.automaticPick,
+                error = updateError,
             )
         }
     }
+
+    /** True when a connect would dial the nodes, and fetch their list, off the tunnel. */
+    private fun dialsNodesDirectly(settings: AppSettings): Boolean =
+        !settings.automaticCarrier &&
+            (settings.carrier == Carrier.PROXY || settings.carrier.usesEngine && !settings.chain.throughTunnel)
 
     /**
      * Stops a delay run and keeps whatever it measured.
@@ -665,24 +702,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         chainJob?.cancel()
         chainJob = null
         mutableChainState.value = mutableChainState.value.copy(busy = false, testProgress = null)
+        // Disconnected, the test-only engine is being stopped: keep what was measured.
+        if (EngineStatusStore.status.value.stage != EngineStage.CONNECTED) return
         viewModelScope.launch {
             val reported = withContext(Dispatchers.IO) { chain.nodes() }
             mutableChainState.value = mutableChainState.value.copy(
                 nodes = reported.nodes,
                 selected = reported.selected,
+                automaticPick = reported.automaticPick,
             )
         }
     }
 
     /** Switches the live chain, and remembers the choice for the next connect. */
     fun selectChainNode(settings: AppSettings, node: String) {
-        if (chainJob?.isCompleted == false) return
+        // Not dropped while a test runs: a tap that does nothing reads as "cannot choose".
         // Moved before anything blocking. Saving, telling mihomo and reading the
         // list back are three round trips, and until they finished the row the
         // user had just tapped looked unchanged -- which reads as a tap that
         // did not register, so people tap again.
         mutableChainState.value = mutableChainState.value.copy(selected = node)
-        chainJob = viewModelScope.launch {
+        viewModelScope.launch {
             // Saved first. If the engine refuses the switch the preference is
             // still what the user asked for, and the next connect honours it --
             // better than a screen that silently reverts.
@@ -690,10 +730,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (EngineStatusStore.status.value.stage != EngineStage.CONNECTED) return@launch
             val failure = withContext(Dispatchers.IO) { chain.select(node) }
             val reported = withContext(Dispatchers.IO) { chain.nodes() }
-            mutableChainState.value = ChainState(
-                available = chain.isAvailable,
+            // A copy, so a test run in progress keeps its progress and busy state.
+            mutableChainState.value = mutableChainState.value.copy(
                 nodes = reported.nodes,
                 selected = reported.selected,
+                automaticPick = reported.automaticPick,
                 error = failure,
             )
         }
@@ -744,12 +785,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun runDelayTests(names: List<String>) {
         chainJob = viewModelScope.launch {
-            var done = 0
             mutableChainState.value = mutableChainState.value.copy(
                 busy = true,
                 error = null,
                 testProgress = 0 to names.size,
             )
+            // Disconnected: bring mihomo up just for this run, and down after it.
+            val testOnly = EngineStatusStore.status.value.stage in setOf(EngineStage.IDLE, EngineStage.ERROR)
+            if (testOnly) {
+                val failure = withContext(Dispatchers.IO) {
+                    chain.startForTesting(repository.settings.first().chainForService())
+                }
+                if (failure != null) {
+                    mutableChainState.value = mutableChainState.value.copy(busy = false, testProgress = null, error = failure)
+                    return@launch
+                }
+            }
+            try {
+                measure(names, testOnly)
+            } finally {
+                // Not if a connect started meanwhile: the session owns mihomo now.
+                if (testOnly && EngineStatusStore.status.value.stage in setOf(EngineStage.IDLE, EngineStage.ERROR)) {
+                    withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { chain.stop() }
+                }
+            }
+        }
+    }
+
+    private suspend fun measure(names: List<String>, testOnly: Boolean) {
+        var done = 0
+        run {
             for (batch in names.chunked(DELAY_TEST_BATCH)) {
                 withContext(Dispatchers.IO) { chain.testNodes(batch) }
                 delay(DELAY_TEST_BATCH_MS)
@@ -765,7 +830,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 mutableChainState.value = mutableChainState.value.copy(
                     nodes = partial?.nodes ?: mutableChainState.value.nodes,
-                    selected = partial?.selected ?: mutableChainState.value.selected,
+                    selected = partial?.selected?.takeUnless { testOnly } ?: mutableChainState.value.selected,
+                    automaticPick = partial?.automaticPick?.takeUnless { testOnly } ?: mutableChainState.value.automaticPick,
                     testProgress = done to names.size,
                 )
             }
@@ -773,7 +839,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             mutableChainState.value = ChainState(
                 available = chain.isAvailable,
                 nodes = reported.nodes,
-                selected = reported.selected,
+                // A test-only engine has not had the saved choice applied.
+                selected = if (testOnly) mutableChainState.value.selected else reported.selected,
+                automaticPick = if (testOnly) null else reported.automaticPick,
             )
         }
     }

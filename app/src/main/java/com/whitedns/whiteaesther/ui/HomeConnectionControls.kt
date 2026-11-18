@@ -45,6 +45,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.whitedns.whiteaesther.R
+import com.whitedns.whiteaesther.data.AdvancedGroup
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.EngineMode
@@ -87,6 +88,9 @@ internal fun HomeConnectionControls(
     onOpenMethodPage: () -> Unit,
     onGoToAdvanced: () -> Unit,
     onGoToChain: () -> Unit,
+    chainSelection: String? = null,
+    chainAutomaticPick: String? = null,
+    onOpenAdvancedGroup: (AdvancedGroup) -> Unit = {},
 ) {
     val colors = AetherTheme.colors
     val editable = status.stage == EngineStage.IDLE || status.stage == EngineStage.ERROR
@@ -150,15 +154,21 @@ internal fun HomeConnectionControls(
             HomeSelectionRow(stringResource(R.string.worker_setup_title), summary, "home-worker-settings", editable) {
                 context.startActivity(Intent(context, WorkerSetupActivity::class.java))
             }
-        } else if ((profiles || settings.chain.enabled) && settings.mode == EngineMode.TUN) {
+        } else if (profiles || settings.chain.enabled) {
             Divider()
-            val node = when {
-                settings.chain.node == ChainConfig.AUTOMATIC_GROUP -> stringResource(R.string.chain_automatic)
-                settings.chain.node != null -> settings.chain.node
-                else -> stringResource(R.string.home_choose_node)
+            // The running chain's answer while connected, the saved choice otherwise.
+            // Nothing saved is automatic, which is what a connect then uses.
+            val connected = status.stage == EngineStage.CONNECTED
+            val chosen = chainSelection.takeIf { connected } ?: settings.chain.node
+            val node = if (chosen == null || chosen == ChainConfig.AUTOMATIC_GROUP) {
+                val automatic = stringResource(R.string.chain_automatic)
+                chainAutomaticPick?.takeIf { connected }?.let { "$automatic · $it" } ?: automatic
+            } else {
+                chosen
             }
             HomeSelectionRow(stringResource(if (profiles) R.string.carrier_proxy else R.string.home_exit_node),
-                node, "home-exit-node", editable, onClick = onGoToChain)
+                // Open while connected too: picking, testing and updating nodes work live.
+                node, "home-exit-node", onClick = onGoToChain)
         }
     }
     if (!editable) {
@@ -181,11 +191,10 @@ internal fun HomeConnectionControls(
                 Text(stringResource(R.string.method_sheet_title), style = AetherTheme.type.PageTitle, color = colors.text)
                 Spacer(Modifier.height(12.dp))
                 SimpleMethodChoices(settings, support, onChange = onSettingsChange, onDone = { onChooseMethod(false) })
-                Spacer(Modifier.height(8.dp))
-                OutlineButton(
-                    text = stringResource(R.string.home_method_settings),
-                    modifier = Modifier.fillMaxWidth().testTag("method-more-settings"),
-                    onClick = { onChooseMethod(false); onGoToAdvanced() },
+                MoreConnectionSettings(
+                    settings,
+                    onOpen = { group -> onChooseMethod(false); onOpenAdvancedGroup(group) },
+                    onAll = { onChooseMethod(false); onGoToAdvanced() },
                 )
             }
         }
@@ -583,16 +592,43 @@ internal fun MethodScreen(
     onSettingsChange: (AppSettings) -> Unit,
     onGoToAdvanced: () -> Unit,
     onBack: () -> Unit,
+    onOpenAdvancedGroup: (AdvancedGroup) -> Unit = {},
 ) {
     ScreenColumn {
         CrumbBar(stringResource(R.string.home_tab_connect), onBack = onBack)
         PageTitle(stringResource(R.string.method_sheet_title))
         SimpleMethodChoices(settings, support, onChange = onSettingsChange, onDone = onBack)
-        Spacer(Modifier.height(8.dp))
-        OutlineButton(
-            text = stringResource(R.string.home_method_settings),
-            modifier = Modifier.fillMaxWidth().testTag("method-more-settings"),
-            onClick = onGoToAdvanced,
+        MoreConnectionSettings(settings, onOpen = onOpenAdvancedGroup, onAll = onGoToAdvanced)
+    }
+}
+
+/**
+ * The settings people ask after, named where the method is chosen.
+ *
+ * Was one outline button at the foot of the sheet, and "where did the exit
+ * chain go" was the question it failed to answer. The two most asked for get
+ * their own rows with their state; everything else stays one row away.
+ */
+@Composable
+private fun MoreConnectionSettings(
+    settings: AppSettings,
+    onOpen: (AdvancedGroup) -> Unit,
+    onAll: () -> Unit,
+) {
+    Spacer(Modifier.height(20.dp))
+    SectionLabel(stringResource(R.string.home_method_settings), Modifier.padding(start = 4.dp, bottom = 6.dp))
+    AetherCard {
+        listOf(AdvancedGroup.NODES, AdvancedGroup.TWO_HOP).forEach { group ->
+            val (icon, title, subtitle) = group.presentation(settings)
+            RowCard(icon, title, subtitle, Modifier.testTag("method-more-${group.name.lowercase()}"), onClick = { onOpen(group) })
+            Divider()
+        }
+        RowCard(
+            AetherIcons.Sliders,
+            stringResource(R.string.method_all_advanced),
+            stringResource(R.string.method_all_advanced_detail),
+            Modifier.testTag("method-more-settings"),
+            onClick = onAll,
         )
     }
 }

@@ -9,7 +9,9 @@
     <string name="worker_add_deployment">راه‌اندازی ورکر یا Pages جدید</string>
     <string name="worker_exit_managed">ترافیک از ورکر انتخاب‌شده خارج می‌شود. برای تنظیم نود خروجی، روش اتصال دیگری را انتخاب کنید.</string>
     <string name="proxy_profiles_summary">اشتراک یا کانفیگ‌هایی مثل VLESS، ‏VMess، ‏Trojan و Shadowsocks را وارد کنید. پیش از اتصال، پروتکل را فیلتر کنید و نود واردشده یا ذخیره‌شده را انتخاب کنید.</string>
-    <string name="proxy_preview_empty">برای انتخاب نود، کانفیگ را وارد کنید. برای دریافت اولیهٔ یک اشتراک جدید، یک بار متصل شوید.</string>
+    <string name="proxy_preview_empty">هنوز نودی نیست. برای دریافت، «به‌روزرسانی اشتراک‌ها» را بزنید یا کانفیگ را وارد کنید.</string>
+    <string name="update_subscriptions">به‌روزرسانی اشتراک‌ها</string>
+    <string name="update_fetches_outside_tunnel">وقتی قطع هستید، به‌روزرسانی و تست پینگ مستقیم از همین دستگاه و بیرون از تونل به اشتراک و نودها وصل می‌شوند. وقتی وصل هستید از داخل تونل انجام می‌شوند.</string>
     <string name="proxy_protocol">پروتکل</string>
     <string name="proxy_all_protocols">همهٔ پروتکل‌ها</string>
     <string name="carrier_worker">ورکر کلادفلر</string>

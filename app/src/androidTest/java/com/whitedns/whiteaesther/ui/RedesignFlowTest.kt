@@ -167,18 +167,14 @@ class RedesignFlowTest {
     }
 
     @Test
-    fun advancedPreferenceOpensTheFoldedTlsValues() {
+    fun foldedTlsValuesOpenFromTheirOwnToggle() {
         setApp()
         compose.onNodeWithTag("tab-settings").performClick()
         compose.onNodeWithTag("settings-advanced").performScrollTo().performClick()
         compose.onNodeWithTag("advanced-aether").performScrollTo().performClick()
         compose.onNodeWithTag("aether-stealth").performScrollTo().performClick()
         compose.onNodeWithTag("tls-groups-field").assertDoesNotExist()
-        compose.onNodeWithTag("tab-settings").performClick()
-        compose.onNodeWithTag("show-advanced-switch").performScrollTo().performClick()
-        compose.onNodeWithTag("settings-advanced").performScrollTo().performClick()
-        compose.onNodeWithTag("advanced-aether").performScrollTo().performClick()
-        compose.onNodeWithTag("aether-stealth").performScrollTo().performClick()
+        compose.onNodeWithTag("tls-expert-toggle").performScrollTo().performClick()
         compose.onNodeWithTag("tls-groups-field").assertExists()
     }
 

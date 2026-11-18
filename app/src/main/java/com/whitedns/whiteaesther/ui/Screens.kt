@@ -273,6 +273,7 @@ fun HomeScreen(
     addresses: AddressPair,
     traffic: TrafficSample,
     chainSelection: String?,
+    chainAutomaticPick: String? = null,
     update: UpdateChecker.Available?,
     updateDownload: UpdateDownload,
     canInstallUpdate: Boolean,
@@ -290,6 +291,7 @@ fun HomeScreen(
     methodSupport: MethodSheetSupport = MethodSheetSupport(),
     onGoToTraffic: () -> Unit,
     onGoToChain: () -> Unit = {},
+    onOpenAdvancedGroup: (com.whitedns.whiteaesther.data.AdvancedGroup) -> Unit = {},
     onSettingsChange: (AppSettings) -> Unit = {},
     onGoToApps: () -> Unit = {},
     onGoToDiagnostics: () -> Unit = {},
@@ -411,6 +413,8 @@ fun HomeScreen(
             chooseMethod = chooseMethod, onChooseMethod = { chooseMethod = it },
             onSettingsChange = onSettingsChange, support = methodSupport, onOpenMethodPage = onGoToRoutes,
             onGoToAdvanced = onGoToAdvanced, onGoToChain = onGoToChain,
+            chainSelection = chainSelection, chainAutomaticPick = chainAutomaticPick,
+            onOpenAdvancedGroup = onOpenAdvancedGroup,
         )
 
         val attention = homeAttention(settings, status)
@@ -500,17 +504,14 @@ fun HomeScreen(
                         mono = addresses.real != null,
                     )
                     Divider()
-                    val viaChain = settings.chainForService().enabled && settings.mode == EngineMode.TUN
+                    val viaChain = settings.chainForService().enabled
                     FactRow(
                         stringResource(R.string.seen_by_websites),
                         when {
                             status.stage != EngineStage.CONNECTED -> stringResource(R.string.not_connected_3)
-                            // The chain's exit cannot be measured from here: this
-                            // process is kept off its own interface while mihomo
-                            // runs, so a probe leaves by the physical network and
-                            // would report the address the tunnel hides.
-                            viaChain -> chainSelection ?: stringResource(R.string.your_exit_chain_node)
+                            // Measured through mihomo's probe listener when a chain runs.
                             addresses.tunnel != null -> addresses.tunnel
+                            viaChain -> chainSelection ?: stringResource(R.string.your_exit_chain_node)
                             else -> stringResource(R.string.fact_checking)
                         },
                         mono = !viaChain && addresses.tunnel != null,
@@ -542,31 +543,10 @@ fun HomeScreen(
                             modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
                         )
                     } else {
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 15.dp, vertical = 11.dp),
-                            horizontalArrangement = Arrangement.spacedBy(15.dp),
-                        ) {
-                            RateColumn(
-                                label = stringResource(R.string.download),
-                                rate = formatRate(traffic.downloadPerSecond),
-                                total = formatBytes(traffic.received),
-                                tint = colors.signalLive,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("traffic-download"),
-                            )
-                            RateColumn(
-                                label = stringResource(R.string.upload),
-                                rate = formatRate(traffic.uploadPerSecond),
-                                total = formatBytes(traffic.sent),
-                                tint = colors.cyan,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("traffic-upload"),
-                            )
-                        }
+                        // Totals only: the live rates are already under the connect button.
+                        FactRow(stringResource(R.string.download), formatBytes(traffic.received), mono = true)
+                        Divider()
+                        FactRow(stringResource(R.string.upload), formatBytes(traffic.sent), mono = true)
                         Divider()
                         Text(
                             stringResource(R.string.measured_on_the_encrypted_side_which_is),
@@ -579,36 +559,39 @@ fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
             }
 
-            AetherCard(
-                modifier = Modifier.testTag("home-connection-details"),
-                tvFocusable = true,
-            ) {
-                if (status.stage == EngineStage.CONNECTED) {
-                    FactRow(stringResource(R.string.home_requested_transport), stringResource(settings.transport.label))
-                    Divider()
-                    FactRow(stringResource(R.string.fact_gateway), status.peer ?: stringResource(R.string.fact_negotiating), mono = true)
-                    Divider()
-                    FactRow(stringResource(R.string.fact_coverage), settings.coverageSummary())
-                    Divider()
-                    FactRow(stringResource(R.string.fact_addresses), stringResource(settings.addresses.label))
-                    if (settings.mode == EngineMode.PROXY) {
+            // Transport, gateway, profile and endpoint describe Aether; under Psiphon,
+            // Tor or a standalone method they would be stale values that look live.
+            val engineFacts = settings.engineSettingsApply
+            val connected = status.stage == EngineStage.CONNECTED
+            if (connected || engineFacts) {
+                AetherCard(
+                    modifier = Modifier.testTag("home-connection-details"),
+                    tvFocusable = true,
+                ) {
+                    if (connected) {
+                        // No coverage or proxy address here: the VPN/Proxy switch and the
+                        // proxy card on this screen already show both.
+                        if (engineFacts) {
+                            FactRow(stringResource(R.string.home_requested_transport), stringResource(settings.transport.label))
+                            Divider()
+                            FactRow(stringResource(R.string.fact_gateway), status.peer ?: stringResource(R.string.fact_negotiating), mono = true)
+                            Divider()
+                        }
+                        FactRow(stringResource(R.string.fact_addresses), stringResource(settings.addresses.label))
+                    } else {
+                        FactRow(stringResource(R.string.profile), stringResource(settings.activeProfile().label))
                         Divider()
-                        FactRow(stringResource(R.string.local_proxy), settings.proxyBindLabel(), mono = true)
+                        FactRow(
+                            stringResource(R.string.endpoint),
+                            settings.endpointSummary(),
+                            mono = settings.endpointMode != EndpointMode.AUTOMATIC,
+                        )
                     }
-                } else {
-                    FactRow(stringResource(R.string.profile), stringResource(settings.activeProfile().label))
-                    Divider()
-                    FactRow(
-                        stringResource(R.string.endpoint),
-                        settings.endpointSummary(),
-                        mono = settings.endpointMode != EndpointMode.AUTOMATIC,
-                    )
-                    Divider()
-                    FactRow(stringResource(R.string.fact_coverage), settings.coverageSummary())
                 }
+                if (engineFacts) Note(stringResource(R.string.home_details_note))
             }
-            Note(stringResource(R.string.home_details_note))
-            if (status.message.isNotBlank()) {
+            // Connected, the method row and the status under the button already say this.
+            if (status.message.isNotBlank() && !connected) {
                 AetherCard {
                     CardHead(stringResource(R.string.home_engine_message))
                     Text(status.message, style = AetherTheme.type.Small, color = colors.text2,
@@ -1995,48 +1978,6 @@ private fun LanCredentialField(
     )
 }
 
-/**
- * One direction of the live traffic readout.
- *
- * Rate above total, because the rate is what changes and the eye goes to the
- * top of a column. Both use tabular figures so the numbers do not jitter
- * sideways as they tick.
- */
-@Composable
-private fun RateColumn(
-    label: String,
-    rate: String,
-    total: String,
-    tint: Color,
-    modifier: Modifier = Modifier,
-) {
-    val colors = AetherTheme.colors
-    // Centred inside its half rather than left-aligned. Two left-aligned
-    // columns put both readings in the left two thirds of the card and leave
-    // the right third empty, which reads as a layout that has come apart.
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        SectionLabel(label)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            rate,
-            style = AetherTheme.type.DataLarge,
-            color = tint,
-            // One line, always. Two columns share the width, and a rate that
-            // wrapped would push the total below the card's own edge.
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.height(3.dp))
-        Text(
-            total,
-            style = AetherTheme.type.Small,
-            color = colors.text2,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
 /** Keep typing synchronous while DataStore acknowledges earlier saves asynchronously. */
 @Composable
 private fun SettingsPlainField(
@@ -2111,7 +2052,7 @@ fun RoutingRulesScreen(
     var directText by remember(settings.routeDirect) { mutableStateOf(settings.routeDirect) }
 
     ScreenColumn {
-        CrumbBar(stringResource(R.string.routes_rules), onBack = onBack)
+        CrumbBar(stringResource(R.string.advanced), onBack = onBack)
         PageTitle(
             stringResource(R.string.routing_rules),
             stringResource(R.string.everything_not_named_here_goes_through_the),
@@ -2309,14 +2250,9 @@ fun SettingsScreen(
                 selected = settings.language,
                 onSelect = { onSettingsChange(settings.copy(language = it)) },
             )
-            Divider()
-            ToggleSettingRow(
-                title = stringResource(R.string.show_advanced_controls),
-                subtitle = stringResource(R.string.opens_every_advanced_section_by_default_across),
-                checked = settings.showAdvanced,
-                onCheckedChange = { onSettingsChange(settings.copy(showAdvanced = it)) },
-                modifier = Modifier.testTag("show-advanced-switch"),
-            )
+            // "Show advanced controls" was here. Since Advanced became its own
+            // pages it opened one folded TLS section and nothing else, and that
+            // section has its own toggle.
         }
 
         // Only where the platform can ask. Before Android 13 the tile is still
@@ -2520,7 +2456,7 @@ fun IdentityScreen(
 ) {
     val colors = AetherTheme.colors
     ScreenColumn {
-        CrumbBar(stringResource(R.string.settings_identity), onBack = onBack)
+        CrumbBar(stringResource(R.string.advanced), onBack = onBack)
         PageTitle(
             stringResource(R.string.identity_access),
             stringResource(R.string.whiteaesther_issues_this_device_its_own_identity),

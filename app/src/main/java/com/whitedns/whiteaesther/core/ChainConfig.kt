@@ -67,6 +67,8 @@ object ChainConfig {
         socksPort: Int?,
         proxyName: String = TUNNEL_PROXY,
         auth: SocksAuth? = null,
+        probe: Pair<Int, SocksAuth>? = null,
+        inbound: ProxyInbound? = null,
     ): String = buildString {
         // No external-controller. The desktop needs one because mihomo is a
         // separate process there; in-process we drive it through the action
@@ -95,7 +97,11 @@ object ChainConfig {
             ""
         }
 
-        val names = appendProviders(settings, through)
+        // The route mihomo fetches a subscription over. Left unset the fetch goes
+        // through the rules, hits MATCH,exit while the exit group is still empty
+        // (this very fetch fills it), and is refused: no subscription ever loads.
+        val fetch = if (socksPort != null) proxyName else "DIRECT"
+        val names = appendProviders(settings, through, fetch)
 
         // A group with nothing in it is a config mihomo rejects, and the reason
         // it gives names YAML rather than the empty subscription behind it.
@@ -120,6 +126,38 @@ object ChainConfig {
         append("    proxies: [$AUTOMATIC_GROUP]\n    empty-fallback: REJECT\n")
 
         appendRules(settings)
+
+        // This process is excluded from the tun, so the app can only see the
+        // exit the way websites do by asking through mihomo. Its own users
+        // list means the loopback skip-auth default never applies to it.
+        if (probe != null || inbound != null) append("listeners:\n")
+        probe?.let { (port, credentials) ->
+            append(
+                "  - {name: $PROBE_LISTENER, type: socks, listen: 127.0.0.1, port: $port, udp: false, " +
+                    "users: [{username: ${credentials.user}, password: ${credentials.password}}]}\n",
+            )
+        }
+        // Proxy coverage: the port the user points apps at, now in front of the
+        // chain, with the same reach and credentials the engine would have had.
+        inbound?.let {
+            val users = if (it.user.isNotEmpty()) {
+                ", users: [{username: ${quote(it.user)}, password: ${quote(it.password)}}]"
+            } else {
+                ""
+            }
+            append(
+                "  - {name: $PROXY_LISTENER, type: mixed, listen: ${if (it.lan) "0.0.0.0" else "127.0.0.1"}, " +
+                    "port: ${it.port}, udp: true$users}\n",
+            )
+        }
+    }
+
+    const val PROBE_LISTENER = "whiteaesther-probe"
+    const val PROXY_LISTENER = "whiteaesther-proxy"
+
+    /** The user-facing proxy port, when the chain runs without the interface. */
+    data class ProxyInbound(val port: Int, val lan: Boolean, val user: String, val password: String) {
+        override fun toString(): String = "ProxyInbound(port=$port, lan=$lan)"
     }
 
     /** The SOCKS5 proxy standing in for a carrier that is not the engine. */
@@ -326,6 +364,7 @@ object ChainConfig {
     private fun StringBuilder.appendProviders(
         settings: ChainSettings,
         through: String,
+        fetch: String,
     ): List<String> {
         val names = mutableListOf<String>()
         val sources = settings.sources.filter { it.enabled && it.url.isNotBlank() }
@@ -340,6 +379,7 @@ object ChainConfig {
             append("    type: http\n")
             append("    url: ${quote(source.url)}\n")
             append("    interval: 3600\n")
+            append("    proxy: $fetch\n")
             append("    path: ./providers/$key.yaml$through\n")
             append(healthCheck())
         }

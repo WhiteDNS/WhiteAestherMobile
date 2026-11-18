@@ -693,7 +693,8 @@ data class AppSettings(
     fun standaloneError(): String? = when {
         automaticCarrier || !carrier.isStandalone -> null
         secondCarrier != null -> "Select Worker or proxy profiles as an independent connection"
-        mode != EngineMode.TUN -> "Worker and proxy profiles require whole-device VPN mode"
+        // Proxy profiles run through the chain, which now serves proxy coverage too.
+        carrier == Carrier.WORKER && mode != EngineMode.TUN -> "The Worker requires whole-device VPN mode"
         carrier == Carrier.WORKER && worker?.ready != true -> "Deploy or select a Cloudflare Worker first"
         carrier == Carrier.PROXY && !chainForService().hasNodes -> "Add a subscription or import a proxy profile first"
         else -> null

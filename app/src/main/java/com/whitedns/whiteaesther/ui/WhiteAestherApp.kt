@@ -121,7 +121,7 @@ fun WhiteAestherApp(
     bridgesMessage: BridgeMessage? = null,
     detectedCountry: String = "",
     psiphonRegions: List<String> = emptyList(),
-    onRefreshChainNodes: () -> Unit = {},
+    onRefreshChainNodes: (Boolean) -> Unit = {},
     onSelectChainNode: (String) -> Unit = {},
     onTestChainNodes: () -> Unit = {},
     onTestChainNodesSelected: (List<String>) -> Unit = {},
@@ -247,6 +247,7 @@ fun WhiteAestherApp(
                         addresses = addresses,
                         traffic = traffic,
                         chainSelection = chainState.selected,
+                        chainAutomaticPick = chainState.automaticPick,
                         update = update,
                         updateDownload = updateDownload,
                         canInstallUpdate = canInstallUpdate,
@@ -272,6 +273,7 @@ fun WhiteAestherApp(
                         onGoToAdvanced = { openDetail(Destination.ADVANCED) },
                         methodSupport = methodSupport,
                         onGoToChain = { openDetail(Destination.CHAIN) },
+                        onOpenAdvancedGroup = { openDetail(it.destination) },
                         onGoToEndpoint = { openDetail(Destination.ENDPOINT) },
                         onGoToTraffic = { openTab(Tab.APPS) },
                         onSettingsChange = onSettingsChange,
@@ -316,6 +318,7 @@ fun WhiteAestherApp(
                         onSettingsChange = onSettingsChange,
                         onGoToAdvanced = { openDetail(Destination.ADVANCED) },
                         onBack = { goBack() },
+                        onOpenAdvancedGroup = { openDetail(it.destination) },
                     )
                     Destination.PROTOCOL -> ProtocolScreen(
                         settings = settings,

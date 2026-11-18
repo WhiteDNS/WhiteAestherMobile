@@ -54,6 +54,44 @@ class ChainConfigTest {
     }
 
     @Test
+    fun subscriptionIsFetchedOutsideTheExitItFills() {
+        // Unset, the fetch went through MATCH,exit while the exit group was
+        // still empty and was refused (`exit[REJECT]`), so no subscription loaded.
+        val tunnel = ChainConfig.render(settings, socksPort = 1819)
+        assertTrue(tunnel.contains("    proxy: ${ChainConfig.TUNNEL_PROXY}\n"))
+        assertTrue(tunnel.contains("dialer-proxy: ${ChainConfig.TUNNEL_PROXY}"))
+
+        val direct = ChainConfig.render(settings.copy(manual = "vless://pasted"), socksPort = null)
+        assertTrue(direct.contains("    proxy: DIRECT\n"))
+        // The pasted block is a file: nothing to fetch, so no route.
+        val manual = direct.substringAfter("  ${ChainConfig.MANUAL_PROVIDER}:").substringBefore("health-check")
+        assertFalse(manual.contains("proxy:"))
+    }
+
+    @Test
+    fun probeListenerIsLoopbackOnlyAndAuthenticated() {
+        val auth = SocksAuth("u0", "p0")
+        val config = ChainConfig.render(settings, socksPort = 1819, probe = 4321 to auth)
+        assertTrue(
+            config.contains(
+                "  - {name: ${ChainConfig.PROBE_LISTENER}, type: socks, listen: 127.0.0.1, port: 4321, " +
+                    "udp: false, users: [{username: u0, password: p0}]}\n",
+            ),
+        )
+        assertFalse(ChainConfig.render(settings, socksPort = 1819).contains("listeners:"))
+    }
+
+    @Test
+    fun proxyCoverageHandsTheUserPortToTheChain() {
+        val local = ChainConfig.render(settings, socksPort = 4000, inbound = ChainConfig.ProxyInbound(1819, false, "", ""))
+        assertTrue(local.contains("  - {name: ${ChainConfig.PROXY_LISTENER}, type: mixed, listen: 127.0.0.1, port: 1819, udp: true}\n"))
+
+        val shared = ChainConfig.render(settings, socksPort = 4000, inbound = ChainConfig.ProxyInbound(1819, true, "me", "p\"w"))
+        assertTrue(shared.contains("listen: 0.0.0.0, port: 1819, udp: true, users: [{username: \"me\", password: \"p\\\"w\"}]}"))
+        assertEquals(1, shared.lines().count { it == "listeners:" })
+    }
+
+    @Test
     fun managedWorkerIsASeparateFileProviderAndSurvivesStorage() {
         val worker = ChainSettings(enabled = true, worker = "{\"proxies\":[]}")
         assertTrue(worker.hasNodes)

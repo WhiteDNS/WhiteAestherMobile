@@ -337,7 +337,7 @@ class MainActivity : ComponentActivity() {
                     psiphonRegions = viewModel.psiphonRegions.collectAsStateWithLifecycle().value,
                     detectedCountry = remember { viewModel.detectedCountry() },
                     onCancelEndpointScan = viewModel::cancelEndpointScan,
-                    onRefreshChainNodes = { viewModel.refreshChainNodes(settings) },
+                    onRefreshChainNodes = { update -> viewModel.refreshChainNodes(settings, update) },
                     onSelectChainNode = { node -> viewModel.selectChainNode(settings, node) },
                     onTestChainNodes = { viewModel.testChainNodes() },
                     onTestChainNodesSelected = { viewModel.testChainNodes(it) },

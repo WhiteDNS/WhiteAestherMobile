@@ -736,6 +736,27 @@ class AetherVpnService : VpnService() {
                 configJson
             }
         var engineConfig = if (useChain) withEngineMode(resolved, EngineMode.PROXY) else resolved
+        // Proxy coverage with a chain: mihomo takes the user's port, so apps reach
+        // the exit node, and the engine moves to a private loopback port behind it.
+        val inbound = if (useChain && mode == EngineMode.PROXY) {
+            val user = JSONObject(resolved)
+            ChainConfig.ProxyInbound(
+                port = user.optInt("listenPort", DEFAULT_SOCKS_PORT),
+                lan = user.optBoolean("lanSharing"),
+                user = user.optString("lanUsername"),
+                password = user.optString("lanPassword"),
+            ).also {
+                val private = java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress()).use { s -> s.localPort }
+                engineConfig = JSONObject(engineConfig)
+                    .put("listenPort", private)
+                    .put("lanSharing", false)
+                    .put("lanUsername", "")
+                    .put("lanPassword", "")
+                    .toString()
+            }
+        } else {
+            null
+        }
 
         // Record what this attempt is actually configured with. Without it a
         // diagnostics report cannot answer the question it was collected for --
@@ -911,6 +932,8 @@ class AetherVpnService : VpnService() {
             tunnelUp = tunnelUp,
             mode = mode,
             sessionGeneration = sessionGeneration,
+            inbound = inbound,
+            userConfig = resolved,
         )
     }
 
@@ -2241,6 +2264,8 @@ class AetherVpnService : VpnService() {
         tunnelUp: CompletableDeferred<Unit>,
         mode: EngineMode,
         sessionGeneration: Long,
+        inbound: ChainConfig.ProxyInbound? = null,
+        userConfig: String = engineConfig,
     ) {
         val handoff = tun?.let(::trackTunnel)
         val socksPort = runCatching {
@@ -2305,7 +2330,8 @@ class AetherVpnService : VpnService() {
             chain.start(
                 settings = chainSettings,
                 socksPort = if (engine != null) socksPort else null,
-                tun = requireNotNull(handoff),
+                tun = handoff,
+                inbound = inbound,
             )
         }
         if (failure != null) {
@@ -2354,7 +2380,10 @@ class AetherVpnService : VpnService() {
         reportConnected(
             mode,
             peer,
-            if (engine != null) {
+            // Proxy coverage says which port to point apps at, as it does without a chain.
+            if (mode == EngineMode.PROXY) {
+                connectedMessage(mode, userConfig)
+            } else if (engine != null) {
                 sayNow(R.string.status_chain_carries)
             } else {
                 sayNow(R.string.status_chain_direct)
@@ -2463,7 +2492,6 @@ class AetherVpnService : VpnService() {
     ): Boolean {
         val refusal = when {
             !chain.isAvailable -> sayNow(R.string.err_chain_unavailable)
-            mode != EngineMode.TUN -> sayNow(R.string.err_chain_needs_tun)
             else -> settings.startupError()
         } ?: return true
 
