@@ -1,6 +1,7 @@
 package com.whitedns.whiteaesther.core
 
 import com.whitedns.whiteaesther.data.ChainSettings
+import com.whitedns.whiteaesther.data.RouteRule
 
 /**
  * Renders the mihomo configuration for the exit chain.
@@ -82,6 +83,7 @@ object ChainConfig {
         append("find-process-mode: off\n")
 
         appendDns(socksPort, proxyName, settings.remoteDns)
+        appendSniffer(settings)
 
         val through = if (socksPort != null) {
             append("proxies:\n")
@@ -198,6 +200,7 @@ object ChainConfig {
             append("find-process-mode: off\n")
 
             appendDns(socksPort, CARRIER_PROXY, settings.remoteDns)
+            appendSniffer(settings)
 
             append("proxies:\n")
             append(
@@ -279,32 +282,18 @@ object ChainConfig {
      * was written to prevent.
      */
     internal fun mihomoRules(pattern: String, action: String): List<String> {
-        val entry = pattern.trim()
-        if (entry.isEmpty() || entry.startsWith("#")) return emptyList()
-
-        val split = entry.split(":", limit = 2)
-        val hasKind = split.size == 2 &&
-            !split[0].contains('.') &&
-            !split[0].contains('/')
-        val kind = if (hasKind) split[0].trim().lowercase() else ""
-        val value = if (hasKind) split[1].trim() else entry
-        if (value.isEmpty()) return emptyList()
-
-        return when (kind) {
-            "domain", "suffix" -> listOf("DOMAIN-SUFFIX,$value,$action")
-            "full", "exact" -> listOf("DOMAIN,$value,$action")
+        // Through the shared grammar, so `*.name`, a bare address and a pasted
+        // URL mean here what they mean to the engine and to the lookup.
+        val canonical = RouteRule.canonical(pattern) ?: return emptyList()
+        if (canonical == "private") return privateRules(action)
+        val value = canonical.substringAfter(':')
+        return when (canonical.substringBefore(':')) {
+            "domain" -> listOf("DOMAIN-SUFFIX,$value,$action")
+            "full" -> listOf("DOMAIN,$value,$action")
             "keyword" -> listOf("DOMAIN-KEYWORD,$value,$action")
-            "regexp", "regex" -> listOf("DOMAIN-REGEX,$value,$action")
-            "ip", "cidr" -> listOf("IP-CIDR,$value,$action,no-resolve")
+            "regexp" -> listOf("DOMAIN-REGEX,$value,$action")
+            "cidr" -> listOf("${if (':' in value) "IP-CIDR6" else "IP-CIDR"},$value,$action,no-resolve")
             "port" -> listOf("DST-PORT,$value,$action")
-            "geoip", "geosite" ->
-                if (value.equals("private", ignoreCase = true)) privateRules(action)
-                else emptyList()
-            "" -> when {
-                value.equals("private", ignoreCase = true) -> privateRules(action)
-                value.contains('/') -> listOf("IP-CIDR,$value,$action,no-resolve")
-                else -> listOf("DOMAIN-SUFFIX,$value,$action")
-            }
             else -> emptyList()
         }
     }
@@ -341,6 +330,28 @@ object ChainConfig {
      * question. The `#$TUNNEL_PROXY` fragment is mihomo's syntax for dialling a
      * resolver through a named proxy, which is what keeps that from happening.
      */
+    /**
+     * Domain rules for connections that arrive as a bare address.
+     *
+     * fake-ip only recovers a name the phone looked up through us. Private DNS
+     * set to a hostname, or a browser with its own DoH, resolves around it, and
+     * without this every domain rule missed and the traffic went to the exit.
+     * override-destination stays off: the name is used to pick a rule, and the
+     * connection still goes to the address the app asked for.
+     */
+    private fun StringBuilder.appendSniffer(settings: ChainSettings) {
+        if (!settings.sniff) return
+        append("sniffer:\n")
+        append("  enable: true\n")
+        append("  override-destination: false\n")
+        append("  force-dns-mapping: true\n")
+        append("  parse-pure-ip: true\n")
+        append("  sniff:\n")
+        append("    TLS: {ports: [443, 8443]}\n")
+        append("    HTTP: {ports: [80, 8080-8880]}\n")
+        append("    QUIC: {ports: [443, 8443]}\n")
+    }
+
     private fun StringBuilder.appendDns(socksPort: Int?, proxyName: String = TUNNEL_PROXY, remoteDns: String = "") {
         val via = if (socksPort != null) "#$proxyName" else ""
         append("dns:\n")

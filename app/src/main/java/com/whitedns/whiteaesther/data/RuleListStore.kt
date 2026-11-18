@@ -159,35 +159,28 @@ object RuleMatcher {
      * they never match here.
      */
     fun match(destination: String, block: String, direct: String): RuleMatch {
-        val target = destination.trim().lowercase().trimEnd('.')
-        if (target.isEmpty()) return RuleMatch(null, null)
+        val target = RouteRule.hostOfDestination(destination) ?: return RuleMatch(null, null)
         lines(block).firstOrNull { matches(it, target) }?.let { return RuleMatch(RuleAction.BLOCK, it) }
         lines(direct).firstOrNull { matches(it, target) }?.let { return RuleMatch(RuleAction.DIRECT, it) }
         return RuleMatch(null, null)
     }
 
-    private fun lines(raw: String) = raw.split('\n', ',', ';').map(String::trim).filter { it.isNotEmpty() && !it.startsWith("#") }
+    private fun lines(raw: String) = RouteRule.entries(raw)
 
+    /** [rule] as the user wrote it, matched through its canonical form so the answer is the engines' answer. */
     private fun matches(rule: String, target: String): Boolean {
-        val split = rule.split(":", limit = 2)
-        val hasKind = split.size == 2 && !split[0].contains('.') && !split[0].contains('/')
-        val kind = if (hasKind) split[0].trim().lowercase() else ""
-        val value = (if (hasKind) split[1] else rule).trim().lowercase()
+        val canonical = RouteRule.canonical(rule) ?: return false
+        if (canonical == "private") return isPrivate(target, IpCidr.ipv4(target) ?: IpCidr.ipv6(target))
+        val kind = canonical.substringBefore(':')
+        val value = canonical.substringAfter(':')
         val address = IpCidr.ipv4(target) ?: IpCidr.ipv6(target)
         return when (kind) {
-            "domain", "suffix" -> address == null && suffix(value, target)
-            "full", "exact" -> address == null && target == value
-            "keyword" -> address == null && value.isNotEmpty() && target.contains(value)
-            "regexp", "regex" -> address == null && runCatching { Regex(split[1].trim()).containsMatchIn(target) }.getOrDefault(false)
-            "ip", "cidr" -> address != null && inNet(value, address)
-            "geoip", "geosite" -> value == "private" && isPrivate(target, address)
-            "port" -> false
-            "" -> when {
-                value == "private" -> isPrivate(target, address)
-                value.contains('/') -> address != null && inNet(value, address)
-                else -> address == null && suffix(value, target)
-            }
-            else -> false
+            "domain" -> address == null && suffix(value, target)
+            "full" -> address == null && target == value
+            "keyword" -> address == null && target.contains(value)
+            "regexp" -> address == null && runCatching { Regex(value).containsMatchIn(target) }.getOrDefault(false)
+            "cidr" -> address != null && inNet(value, address)
+            else -> false // port: a name alone has no port
         }
     }
 

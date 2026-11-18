@@ -41,6 +41,8 @@ object RuleImport {
     private val ESSENTIAL_PORTS = setOf(53, 80, 443)
     private val SAFE_REGEX = Regex("^[A-Za-z0-9.^$*+?()\\[\\]|\\\\-]+$")
 
+    fun isDomain(host: String): Boolean = DOMAIN.matches(host)
+
     fun parse(text: String): RuleImportReport {
         val accepted = LinkedHashSet<String>()
         val ignored = sortedMapOf<IgnoredBecause, Int>()

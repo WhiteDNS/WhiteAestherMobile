@@ -173,7 +173,8 @@
     <string name="skip_the_tunnel">Skip the tunnel</string>
     <string name="reached_with_this_device_s_real_address">Reached with this device\'s real address. For a bank or a domestic service that refuses foreign ones.</string>
     <string name="bank_example_ir_nprivate_ncidr_10_0" translatable="false">bank.example.ir\nprivate\ncidr:10.0.0.0/8</string>
-    <string name="a_plain_name_matches_it_and_everything">A plain name matches it and everything under it. Prefixes narrow that: full: exactly, keyword: anywhere in the name, regexp: a pattern, cidr: an address block, port: a number or range, private: the local network. A line starting with # is a note.</string>
+    <string name="a_plain_name_matches_it_and_everything">A plain name matches it and everything under it. Prefixes narrow that: full: exactly, keyword: anywhere in the name, regexp: a pattern, cidr: an address block, port: a number or range, private: the local network. A pasted web address or an IP address works too. A line starting with # is a note.</string>
+    <string name="rule_lines_not_understood">Not understood, so ignored: %1$s</string>
     <string name="anything_under_skip_the_tunnel_leaves_with">Anything under Skip the tunnel leaves with your real address. That is what it is for, and it is also what makes it worth keeping short.</string>
     <string name="language">Language</string>
     <string name="the_app_s_language_whatever_your_phone">The app\'s language, whatever your phone is set to.</string>

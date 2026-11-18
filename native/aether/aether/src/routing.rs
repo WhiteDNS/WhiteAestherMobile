@@ -493,6 +493,24 @@ mod tests {
     }
 
     #[test]
+    fn the_canonical_forms_the_app_sends_are_understood() {
+        let set = rules(
+            "",
+            "domain:sanjesh.org
+full:exact.example
+cidr:2001:db8::/32
+cidr:1.2.3.4/32
+port:3000-3010",
+        );
+        assert_eq!(set.decide(Host::Domain("www.sanjesh.org"), 443), Action::Direct);
+        assert_eq!(set.decide(Host::Domain("exact.example"), 443), Action::Direct);
+        assert_eq!(set.decide(Host::Ip("2001:db8::1".parse().unwrap()), 443), Action::Direct);
+        assert_eq!(set.decide(Host::Ip("1.2.3.4".parse().unwrap()), 443), Action::Direct);
+        assert_eq!(set.decide(Host::Domain("other.example"), 3005), Action::Direct);
+        assert_eq!(set.decide(Host::Domain("other.example"), 443), Action::Proxy);
+    }
+
+    #[test]
     fn malformed_entries_are_dropped_without_panicking() {
         let set = rules("regexp:[unclosed, port:abc, ip:not-an-ip, geoip:cn, :", "");
         assert!(set.is_empty() || set.decide(Host::Domain("example.com"), 443) == Action::Proxy);

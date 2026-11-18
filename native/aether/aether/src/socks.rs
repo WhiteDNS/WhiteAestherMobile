@@ -150,10 +150,24 @@ pub fn set_gateway_proxy(address: &str) {
     }
 }
 
-static ROUTES: std::sync::OnceLock<RuleSet> = std::sync::OnceLock::new();
+// Not a OnceLock: on Android the engine lives in the app's process across
+// sessions, and rules read once there stayed whatever the first connect had.
+static ROUTES: std::sync::RwLock<Option<std::sync::Arc<RuleSet>>> = std::sync::RwLock::new(None);
 
-fn routes() -> &'static RuleSet {
-    ROUTES.get_or_init(RuleSet::from_env)
+fn routes() -> std::sync::Arc<RuleSet> {
+    if let Some(set) = ROUTES.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        return set.clone();
+    }
+    ROUTES
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(|| std::sync::Arc::new(RuleSet::from_env()))
+        .clone()
+}
+
+/// Rereads the routing rules from the environment, for a new session.
+pub(crate) fn reload_routes() {
+    *ROUTES.write().unwrap_or_else(|e| e.into_inner()) = Some(std::sync::Arc::new(RuleSet::from_env()));
 }
 
 fn host_of(target: &Target) -> Host<'_> {
@@ -1039,7 +1053,7 @@ async fn handle_connect(
         }
     }
 
-    match decide_route(routes(), &target, named.as_deref(), port) {
+    match decide_route(&routes(), &target, named.as_deref(), port) {
         Action::Block => {
             log::debug!("[route] block tcp {target}:{port}");
             if !replied {

@@ -80,16 +80,21 @@ data class ChainSettings(
      */
     val hiddenNodes: List<String> = emptyList(),
     val remoteDns: String = "",
+    /**
+     * Read the name from a connection's first bytes, so domain rules still
+     * match a phone using Private DNS or a browser with its own DoH, whose
+     * connections arrive at mihomo as bare addresses. Follows AppSettings.routeSniff.
+     */
+    val sniff: Boolean = true,
 ) {
     /** Rule lines, with blanks and notes dropped as the engine drops them. */
-    fun blockRules(): List<String> = ruleLines(routeBlock)
+    fun blockRules(): List<String> = RouteRule.entries(routeBlock)
 
-    fun directRules(): List<String> = ruleLines(routeDirect)
+    fun directRules(): List<String> = RouteRule.entries(routeDirect)
 
-    private fun ruleLines(raw: String): List<String> =
-        raw.split('\n', ',', ';')
-            .map(String::trim)
-            .filter { it.isNotEmpty() && !it.startsWith("#") }
+    /** True when any rule would change where a connection goes. */
+    val hasRules: Boolean
+        get() = RouteRule.count(routeBlock) + RouteRule.count(routeDirect) > 0
 
     /** True when there is anything for mihomo to route through. */
     val hasNodes: Boolean
@@ -138,6 +143,7 @@ data class ChainSettings(
         // mihomo went on routing by the previous set.
         append('|').append(routeBlock.trim())
         append('|').append(routeDirect.trim())
+        append('|').append(sniff)
     }
 
     fun encode(): String = JSONObject()
@@ -150,6 +156,7 @@ data class ChainSettings(
         .put("routeDirect", routeDirect)
         .put("hiddenNodes", JSONArray().apply { hiddenNodes.forEach { put(it) } })
         .put("remoteDns", remoteDns)
+        .put("sniff", sniff)
         .apply { node?.let { put("node", it) } }
         .toString()
 
@@ -172,6 +179,7 @@ data class ChainSettings(
                     remoteDns = json.optString("remoteDns"),
                     routeBlock = json.optString("routeBlock"),
                     routeDirect = json.optString("routeDirect"),
+                    sniff = json.optBoolean("sniff", true),
                     hiddenNodes = json.optJSONArray("hiddenNodes")?.let { array ->
                         buildList {
                             for (index in 0 until array.length()) {
