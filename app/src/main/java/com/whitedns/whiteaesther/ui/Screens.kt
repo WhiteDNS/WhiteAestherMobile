@@ -2111,6 +2111,7 @@ fun RoutingRulesScreen(
                     },
                 )
             }
+            NotUnderstood(blockText, "route-block-invalid")
         }
 
         Spacer(Modifier.height(12.dp))
@@ -2130,6 +2131,7 @@ fun RoutingRulesScreen(
                     },
                 )
             }
+            NotUnderstood(directText, "route-direct-invalid")
         }
 
         Note(
@@ -2145,6 +2147,22 @@ fun RoutingRulesScreen(
             )
         }
     }
+}
+
+/**
+ * The lines of a rule list that will be ignored, said where they were typed.
+ * They used to be dropped silently while the count still included them.
+ */
+@Composable
+private fun NotUnderstood(text: String, tag: String) {
+    val invalid = remember(text) { com.whitedns.whiteaesther.data.RouteRule.invalid(text) }
+    if (invalid.isEmpty()) return
+    Text(
+        stringResource(R.string.rule_lines_not_understood, invalid.joinToString("  ·  ")),
+        style = AetherTheme.type.Small,
+        color = AetherTheme.colors.signalFailed,
+        modifier = Modifier.padding(horizontal = 11.dp).padding(bottom = 11.dp).testTag(tag),
+    )
 }
 
 /** A multi-line rule list. Monospaced, because these are patterns, not prose. */

@@ -536,24 +536,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val chainState = mutableChainState.asStateFlow()
     private var chainJob: Job? = null
 
+    private var pendingRestart: Job? = null
+
     fun save(settings: AppSettings) {
         viewModelScope.launch {
             val previous = repository.settings.first()
             repository.save(settings)
-            if (settings.connectionChoiceChanged(previous) &&
-                EngineStatusStore.status.value.stage in setOf(EngineStage.PREPARING, EngineStage.CONNECTING, EngineStage.CONNECTED) &&
-                settings.endpointValidationError() == null &&
-                settings.tlsOptions.validationError(settings.fragmentTls, settings.encryptedHello) == null
-            ) {
-                val context = getApplication<Application>()
-                AetherVpnService.start(
-                    context, settings.toNativeJson(context), settings.chainForService().encode(),
-                    settings.splitTunnel.encode(), settings.killSwitch, settings.strictKillSwitch,
-                    settings.carrier, settings.secondCarrier, settings.torBridge, settings.torBridges,
-                    settings.psiphonRegion, settings.automaticCarrier,
-                )
+            if (!settings.connectionChoiceChanged(previous) || !sessionRunning()) return@launch
+            // The rule fields save on every keystroke. A reconnect per letter
+            // would drop the connection over and over while someone types, so a
+            // change to the rules alone waits for the typing to stop.
+            val rulesOnly = !previous.copy(
+                routeBlock = settings.routeBlock, routeDirect = settings.routeDirect, routeSniff = settings.routeSniff,
+            ).connectionChoiceChanged(settings)
+            pendingRestart?.cancel()
+            pendingRestart = viewModelScope.launch {
+                if (rulesOnly) delay(RULE_EDIT_SETTLE_MS)
+                val latest = repository.settings.first()
+                if (sessionRunning()) restartWith(latest)
             }
         }
+    }
+
+    private fun sessionRunning(): Boolean =
+        EngineStatusStore.status.value.stage in setOf(EngineStage.PREPARING, EngineStage.CONNECTING, EngineStage.CONNECTED)
+
+    private fun restartWith(settings: AppSettings) {
+        if (settings.endpointValidationError() != null ||
+            settings.tlsOptions.validationError(settings.fragmentTls, settings.encryptedHello) != null
+        ) return
+        val context = getApplication<Application>()
+        AetherVpnService.start(
+            context, settings.toNativeJson(context), settings.chainForService().encode(),
+            settings.splitTunnel.encode(), settings.killSwitch, settings.strictKillSwitch,
+            settings.carrier, settings.secondCarrier, settings.torBridge, settings.torBridges,
+            settings.psiphonRegion, settings.automaticCarrier,
+        )
     }
 
     /**
@@ -1096,5 +1114,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         /** One second: fast enough to read as live, slow enough to be free. */
         const val TRAFFIC_SAMPLE_MS = 1_000L
+        const val RULE_EDIT_SETTLE_MS = 1_500L
     }
 }

@@ -715,6 +715,15 @@ class AetherVpnService : VpnService() {
         val useChain =
             chainSettings.enabled && resolveChainUsage(chainSettings, mode, sessionGeneration)
         if (chainSettings.enabled && !useChain) return
+        // Rules need something that sees each connection. Owning the interface,
+        // the engine hands whole packets to the tunnel and never looks at a
+        // destination, so every rule was ignored in the mode most people use.
+        // With any rule set, mihomo takes the interface and applies them, and
+        // the engine drops to the SOCKS5 listener behind it -- the arrangement
+        // the chain and the other carriers already run on.
+        val routed = !useChain && mode == EngineMode.TUN && chain.isAvailable &&
+            com.whitedns.whiteaesther.data.RuleListStore.of(this).withImported(chainSettings).hasRules
+        val viaMihomo = useChain || routed
         // Behind the chain the engine stops owning the interface and becomes the
         // SOCKS5 listener mihomo dials its nodes through. Rewritten here rather
         // than stored, so a reconnect still starts from what the user asked for.
@@ -735,7 +744,13 @@ class AetherVpnService : VpnService() {
             } else {
                 configJson
             }
-        var engineConfig = if (useChain) withEngineMode(resolved, EngineMode.PROXY) else resolved
+        var engineConfig = if (viaMihomo) withEngineMode(resolved, EngineMode.PROXY) else resolved
+        // mihomo dials the listener without credentials, and nobody else is
+        // meant to reach it: it is loopback-only behind the interface.
+        if (routed) {
+            engineConfig = JSONObject(engineConfig)
+                .put("lanSharing", false).put("lanUsername", "").put("lanPassword", "").toString()
+        }
         // Proxy coverage with a chain: mihomo takes the user's port, so apps reach
         // the exit node, and the engine moves to a private loopback port behind it.
         val inbound = if (useChain && mode == EngineMode.PROXY) {
@@ -766,6 +781,8 @@ class AetherVpnService : VpnService() {
         startEngineLogPump(sessionGeneration)
         if (useChain) {
             EngineLog.record(LogLevel.INFO, "chain", "exit chain on, engine dropped to SOCKS")
+        } else if (routed) {
+            EngineLog.record(LogLevel.INFO, "route", "routing rules set, mihomo applies them in front of the engine")
         }
         publish(
             EngineStatus(EngineStage.PREPARING, mode, message = preparingMessage(engineConfig)),
@@ -846,7 +863,7 @@ class AetherVpnService : VpnService() {
             tun = establishTun(
                 prepared?.ipv4.orEmpty(),
                 prepared?.ipv6.orEmpty(),
-                useChain,
+                viaMihomo,
                 transportOf(engineConfig),
                 splitTunnel,
                 dnsServersOf(engineConfig),
@@ -887,21 +904,23 @@ class AetherVpnService : VpnService() {
                 "up on ${transportOf(engineConfig).uppercase()}",
             )
             rememberWorkingTransport(engineConfig)
-            if (useChain) {
+            if (viaMihomo) {
                 tunnelUp.complete(Unit)
             } else {
                 reportConnected(mode, peer, connectedMessage(mode, engineConfig))
             }
         }
 
-        if (!useChain) {
+        if (!viaMihomo) {
             // Detached at the handoff and not a line earlier. From here the
             // engine owns the descriptor and closes it when it stops; before
             // here it is ours, and a path that gives up without closing it
             // leaves the interface registered with the system after the session
             // it belonged to has ended.
             val result = withContext(Dispatchers.IO) {
-                // The engine routes this session itself, so it takes the imported lists here.
+                // Only reached in proxy coverage with rules, or with no rules at
+                // all: whole-device with rules goes through mihomo above. The
+                // engine applies them to its SOCKS5 clients, imported lists included.
                 NativeAetherBridge.run(
                     com.whitedns.whiteaesther.data.RuleListStore.of(this@AetherVpnService).mergeInto(engineConfig),
                     peer.orEmpty(),
@@ -934,6 +953,7 @@ class AetherVpnService : VpnService() {
             sessionGeneration = sessionGeneration,
             inbound = inbound,
             userConfig = resolved,
+            rulesOnly = routed,
         )
     }
 
@@ -2266,13 +2286,16 @@ class AetherVpnService : VpnService() {
         sessionGeneration: Long,
         inbound: ChainConfig.ProxyInbound? = null,
         userConfig: String = engineConfig,
+        // No exit chain: mihomo is here only to apply the routing rules, and
+        // routes everything else into the engine.
+        rulesOnly: Boolean = false,
     ) {
         val handoff = tun?.let(::trackTunnel)
         val socksPort = runCatching {
             JSONObject(engineConfig).optInt("listenPort", DEFAULT_SOCKS_PORT)
         }.getOrDefault(DEFAULT_SOCKS_PORT)
 
-        val engine = if (chainSettings.throughTunnel && peer != null) {
+        val engine = if ((rulesOnly || chainSettings.throughTunnel) && peer != null) {
             serviceScope.launch(Dispatchers.IO) {
                 NativeAetherBridge.run(engineConfig, peer, -1, listener)
             }
@@ -2291,7 +2314,10 @@ class AetherVpnService : VpnService() {
         }
 
         if (engine != null) {
-            updateNotification(mode, sayNow(R.string.status_connecting_for_chain, peer.orEmpty()))
+            updateNotification(
+                mode,
+                sayNow(if (rulesOnly) R.string.status_connecting_to else R.string.status_connecting_for_chain, peer.orEmpty()),
+            )
             val reached = withTimeoutOrNull(TUNNEL_WAIT_MS) {
                 // Either outcome ends the wait: the route opened, or the engine
                 // stopped and there will never be one.
@@ -2322,17 +2348,20 @@ class AetherVpnService : VpnService() {
             return
         }
 
-        publish(
-            EngineStatus(EngineStage.CONNECTING, mode, peer, sayNow(R.string.status_starting_chain)),
-        )
-        updateNotification(mode, sayNow(R.string.status_starting_chain))
+        val starting = sayNow(if (rulesOnly) R.string.status_validating_route else R.string.status_starting_chain)
+        publish(EngineStatus(EngineStage.CONNECTING, mode, peer, starting))
+        updateNotification(mode, starting)
         val failure = withContext(Dispatchers.IO) {
-            chain.start(
-                settings = chainSettings,
-                socksPort = if (engine != null) socksPort else null,
-                tun = handoff,
-                inbound = inbound,
-            )
+            if (rulesOnly && engine != null && handoff != null) {
+                chain.startCarrier(settings = chainSettings, socksPort = socksPort, udp = true, tun = handoff)
+            } else {
+                chain.start(
+                    settings = chainSettings,
+                    socksPort = if (engine != null) socksPort else null,
+                    tun = handoff,
+                    inbound = inbound,
+                )
+            }
         }
         if (failure != null) {
             EngineLog.record(LogLevel.ERROR, "chain", failure)
@@ -2360,8 +2389,12 @@ class AetherVpnService : VpnService() {
         // subscription from disk -- on a large list most of a second, landing
         // on the main thread at the exact moment the tunnel comes up. That is
         // the freeze people saw on connect.
-        val nodeCount = withContext(Dispatchers.IO) { chain.nodes().nodes.size }
-        EngineLog.record(LogLevel.INFO, "chain", "exit chain up on $nodeCount nodes")
+        if (rulesOnly) {
+            EngineLog.record(LogLevel.INFO, "route", "routing rules applied by mihomo")
+        } else {
+            val nodeCount = withContext(Dispatchers.IO) { chain.nodes().nodes.size }
+            EngineLog.record(LogLevel.INFO, "chain", "exit chain up on $nodeCount nodes")
+        }
         // Dialling directly nothing else has tested the route: without this a node
         // the network blocks shows as connected while every page hangs.
         if (engine == null) {
@@ -2381,13 +2414,16 @@ class AetherVpnService : VpnService() {
             mode,
             peer,
             // Proxy coverage says which port to point apps at, as it does without a chain.
-            if (mode == EngineMode.PROXY) {
+            if (mode == EngineMode.PROXY || rulesOnly) {
                 connectedMessage(mode, userConfig)
             } else if (engine != null) {
                 sayNow(R.string.status_chain_carries)
             } else {
                 sayNow(R.string.status_chain_direct)
             },
+            // This process is outside the interface here, so the exit address
+            // is asked through the engine's listener, or it reports the real one.
+            carrierSocksPort = if (rulesOnly) socksPort else null,
         )
 
         // The chain lives exactly as long as the route underneath it. When that

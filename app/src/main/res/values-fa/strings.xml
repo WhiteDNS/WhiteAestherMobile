@@ -169,7 +169,8 @@
     <string name="refused_before_anything_is_dialled_one_rule">پیش از برقراری هر اتصالی رد می‌شود. هر خط یک قاعده.</string>
     <string name="skip_the_tunnel">تونل را رد کن</string>
     <string name="reached_with_this_device_s_real_address">با آدرس واقعی این دستگاه وصل می‌شود. برای بانک یا سرویس داخلی‌ای که آدرس خارجی را نمی‌پذیرد.</string>
-    <string name="a_plain_name_matches_it_and_everything">یک نام ساده، خودش و هر چه زیرش است را در بر می‌گیرد. پیشوندها محدودش می‌کنند: ‏full: دقیقاً همان، ‏keyword: هر جای نام، ‏regexp: یک الگو، ‏cidr: یک بازهٔ آدرس، ‏port: یک عدد یا بازه، ‏private: شبکهٔ محلی. خطی که با # شروع شود یادداشت است.</string>
+    <string name="a_plain_name_matches_it_and_everything">یک نام ساده، خودش و هر چه زیرش است را در بر می‌گیرد. پیشوندها محدودش می‌کنند: ‏full: دقیقاً همان، ‏keyword: هر جای نام، ‏regexp: یک الگو، ‏cidr: یک بازهٔ آدرس، ‏port: یک عدد یا بازه، ‏private: شبکهٔ محلی. آدرس کامل یک وب‌سایت یا یک آدرس IP هم پذیرفته می‌شود. خطی که با # شروع شود یادداشت است.</string>
+    <string name="rule_lines_not_understood">قابل فهم نیست و نادیده گرفته می‌شود: %1$s</string>
     <string name="anything_under_skip_the_tunnel_leaves_with">هر چه زیر «تونل را رد کن» بیاید با آدرس واقعی شما بیرون می‌رود. کارش همین است، و دقیقاً به همین دلیل بهتر است کوتاه بماند.</string>
     <string name="language">زبان</string>
     <string name="the_app_s_language_whatever_your_phone">زبان برنامه، مستقل از زبان گوشی شما.</string>

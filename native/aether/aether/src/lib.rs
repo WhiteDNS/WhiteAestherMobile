@@ -1324,6 +1324,8 @@ pub async fn run_embedded(
     // Before any listener is bound. Every tunnel below reaches socks::serve by
     // its own path, and none of them carries this.
     socks::configure_access(config.access.clone());
+    // The bridge sets this session's rules in the environment just before.
+    socks::reload_routes();
 
     let endpoint = hold_embedded_listener(endpoint, config.listen).await?;
 

@@ -298,7 +298,6 @@ object EndpointAddress {
     }
 }
 
-private const val NEWLINE = '\n'
 
 data class AppSettings(
     val mode: EngineMode = EngineMode.TUN,
@@ -588,10 +587,7 @@ data class AppSettings(
 
     fun routingCounts(): RuleCounts = RuleCounts(ruleCount(effectiveRouteBlock()), ruleCount(effectiveRouteDirect()))
 
-    private fun ruleCount(raw: String): Int =
-        raw.split(NEWLINE, ',', ';')
-            .map(String::trim)
-            .count { it.isNotEmpty() && !it.startsWith("#") }
+    private fun ruleCount(raw: String): Int = RouteRule.count(raw)
 
     /**
      * What is actually carried, in one line.
@@ -688,7 +684,8 @@ data class AppSettings(
             },
             throughTunnel = if (!automaticCarrier && carrier == Carrier.PROXY) false else chain.throughTunnel,
             worker = if (!automaticCarrier && carrier == Carrier.PROXY) "" else chain.worker,
-            remoteDns = if (!automaticCarrier && carrier == Carrier.WORKER) worker?.options?.remoteDns.orEmpty() else "")
+            remoteDns = if (!automaticCarrier && carrier == Carrier.WORKER) worker?.options?.remoteDns.orEmpty() else "",
+            sniff = routeSniff)
 
     fun standaloneError(): String? = when {
         automaticCarrier || !carrier.isStandalone -> null
@@ -706,7 +703,18 @@ data class AppSettings(
             scanStrategy != previous.scanStrategy || addresses != previous.addresses ||
             chain.enabled != previous.chain.enabled ||
             routingPresets != previous.routingPresets || worker != previous.worker ||
-            importedRulesVersion != previous.importedRulesVersion
+            importedRulesVersion != previous.importedRulesVersion || routingChanged(previous)
+
+    /**
+     * Whether the rules the running session was started with are out of date.
+     *
+     * Separate from the rest because the rule fields save on every keystroke,
+     * so the caller waits for typing to stop before reconnecting on this alone.
+     */
+    fun routingChanged(previous: AppSettings): Boolean =
+        RouteRule.normalize(effectiveRouteBlock()) != RouteRule.normalize(previous.effectiveRouteBlock()) ||
+            RouteRule.normalize(effectiveRouteDirect()) != RouteRule.normalize(previous.effectiveRouteDirect()) ||
+            routeSniff != previous.routeSniff
 
     fun toNativeJson(context: Context): String {
         val json = JSONObject()
@@ -720,8 +728,9 @@ data class AppSettings(
             .put("upstreamProxy", upstreamProxy.trim())
             .put("dnsServers", dnsServers.trim())
             .put("routeSniff", routeSniff)
-            .put("routeBlock", effectiveRouteBlock().trim())
-            .put("routeDirect", effectiveRouteDirect().trim())
+            // Canonical, so the engine reads `*.name`, URLs and bare IPv6 the way mihomo and the lookup do.
+            .put("routeBlock", RouteRule.normalize(effectiveRouteBlock()))
+            .put("routeDirect", RouteRule.normalize(effectiveRouteDirect()))
             .put("autoReprovision", autoReprovision)
             .put("logLevel", engineLogLevel)
             .put("tlsGroups", tlsGroups.trim())
