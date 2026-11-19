@@ -17,6 +17,13 @@ on:
           The update check reads /releases/latest, which skips prereleases.
         type: boolean
         default: false
+      draft:
+        description: >-
+          Build from the branch this runs on and attach everything to a draft
+          release. Nobody is offered a draft; the tag is created when the draft
+          is published by hand.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -30,8 +37,35 @@ env:
   ANDROID_BUILD_TOOLS: "36.0.0"
 
 jobs:
+  # Publishing a draft creates its tag, and that tag push starts this workflow
+  # again. The draft's assets are the ones that were checked before publishing;
+  # rebuilding would replace them, so a tag that already has a release with
+  # assets skips the build and lets the run succeed for the F-Droid workflow.
+  check:
+    name: Decide whether to build
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.existing.outputs.build }}
+    steps:
+      - id: existing
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          assets=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets | length' 2>/dev/null || echo 0)
+          if [[ "${{ github.event_name }}" == "push" && "$assets" -gt 0 ]]; then
+            echo "Release $tag already has its assets; not rebuilding."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
   publish:
     name: Build signed APKs and publish the release
+    needs: check
+    if: needs.check.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -39,7 +73,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          # A draft has no tag yet: it builds the branch it was started on.
+          ref: ${{ inputs.draft && github.sha || inputs.tag || github.ref }}
 
       - uses: ./.github/actions/android-toolchain
 
@@ -265,7 +300,12 @@ jobs:
           if [[ "${{ inputs.quiet }}" == "true" || "$tag" == preview-* || "${{ steps.version.outputs.name }}" == *-* ]]; then
             quiet="--prerelease --latest=false"
           fi
-          if gh release view "$tag" >/dev/null 2>&1; then
+          if [[ "${{ inputs.draft }}" == "true" ]]; then
+            # --target rather than --verify-tag: the tag does not exist until
+            # the draft is published, which is what keeps it from being offered.
+            gh release create "$tag" release-assets/* --draft --target "$GITHUB_SHA" \
+              --generate-notes --title "WhiteAestherMobile $tag" $quiet
+          elif gh release view "$tag" >/dev/null 2>&1; then
             if [[ -n "$quiet" ]]; then
               gh release edit "$tag" $quiet
             fi
