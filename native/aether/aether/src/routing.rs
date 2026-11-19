@@ -502,12 +502,30 @@ cidr:2001:db8::/32
 cidr:1.2.3.4/32
 port:3000-3010",
         );
-        assert_eq!(set.decide(Host::Domain("www.sanjesh.org"), 443), Action::Direct);
-        assert_eq!(set.decide(Host::Domain("exact.example"), 443), Action::Direct);
-        assert_eq!(set.decide(Host::Ip("2001:db8::1".parse().unwrap()), 443), Action::Direct);
-        assert_eq!(set.decide(Host::Ip("1.2.3.4".parse().unwrap()), 443), Action::Direct);
-        assert_eq!(set.decide(Host::Domain("other.example"), 3005), Action::Direct);
-        assert_eq!(set.decide(Host::Domain("other.example"), 443), Action::Proxy);
+        assert_eq!(
+            set.decide(Host::Domain("www.sanjesh.org"), 443),
+            Action::Direct
+        );
+        assert_eq!(
+            set.decide(Host::Domain("exact.example"), 443),
+            Action::Direct
+        );
+        assert_eq!(
+            set.decide(Host::Ip("2001:db8::1".parse().unwrap()), 443),
+            Action::Direct
+        );
+        assert_eq!(
+            set.decide(Host::Ip("1.2.3.4".parse().unwrap()), 443),
+            Action::Direct
+        );
+        assert_eq!(
+            set.decide(Host::Domain("other.example"), 3005),
+            Action::Direct
+        );
+        assert_eq!(
+            set.decide(Host::Domain("other.example"), 443),
+            Action::Proxy
+        );
     }
 
     #[test]

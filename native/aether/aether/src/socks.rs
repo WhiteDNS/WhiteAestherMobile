@@ -167,13 +167,18 @@ fn routes() -> std::sync::Arc<RuleSet> {
 
 /// Rereads the routing rules from the environment, for a new session.
 pub(crate) fn reload_routes() {
-    *ROUTES.write().unwrap_or_else(|e| e.into_inner()) = Some(std::sync::Arc::new(RuleSet::from_env()));
+    *ROUTES.write().unwrap_or_else(|e| e.into_inner()) =
+        Some(std::sync::Arc::new(RuleSet::from_env()));
 }
 
 /// A SOCKS5 name that is really an address, as Java and many apps send one,
 /// is an address: otherwise address rules never match it and no name is sniffed.
 fn target_of_name(name: String) -> Target {
-    match name.trim_start_matches('[').trim_end_matches(']').parse::<IpAddr>() {
+    match name
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+    {
         Ok(ip) => Target::Ip(ip),
         Err(_) => Target::Domain(name),
     }
@@ -3408,9 +3413,18 @@ mod sniff_route_tests {
     #[test]
     fn a_domain_target_is_decided_on_its_own_name() {
         let set = RuleSet::parse("ads.example", "");
-        assert!(matches!(target_of_name("52.77.159.47".into()), Target::Ip(_)));
-        assert!(matches!(target_of_name("[2001:db8::1]".into()), Target::Ip(_)));
-        assert!(matches!(target_of_name("ads.example".into()), Target::Domain(_)));
+        assert!(matches!(
+            target_of_name("52.77.159.47".into()),
+            Target::Ip(_)
+        ));
+        assert!(matches!(
+            target_of_name("[2001:db8::1]".into()),
+            Target::Ip(_)
+        ));
+        assert!(matches!(
+            target_of_name("ads.example".into()),
+            Target::Domain(_)
+        ));
         let target = Target::Domain("ads.example".to_string());
         assert_eq!(decide_route(&set, &target, None, 443), Action::Block);
     }
