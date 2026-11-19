@@ -362,6 +362,12 @@ object ChainConfig {
         // real lookup happens at the far end where it cannot leak.
         append("  enhanced-mode: fake-ip\n")
         append("  fake-ip-range: 198.19.0.1/16\n")
+        // A name the user sends around the tunnel is looked up by their own
+        // network, as it would be without the app: a domestic site may resolve
+        // differently, or not at all, from a resolver abroad. ChainController
+        // hands mihomo those servers; "system" means nothing until it does.
+        append("  direct-nameserver:\n")
+        append("    - system\n")
         append("  nameserver:\n")
         if (remoteDns.isNotBlank()) {
             require(remoteDns.startsWith("https://") || remoteDns.startsWith("tcp://")) { "Invalid remote DNS" }

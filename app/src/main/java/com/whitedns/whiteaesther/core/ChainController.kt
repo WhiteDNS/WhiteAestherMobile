@@ -405,7 +405,28 @@ class ChainController(private val context: Context) {
                 .put("selected-map", JSONObject())
                 .put("test-url", "http://www.gstatic.com/generate_204"),
         )
-        return reply.failureText()?.let { "The chain rejected its configuration: $it" }
+        reply.failureText()?.let { return "The chain rejected its configuration: $it" }
+        pushSystemDns()
+        return null
+    }
+
+    /**
+     * The real network's resolvers, for `direct-nameserver: system`.
+     *
+     * On Android mihomo cannot find them itself and falls back to public
+     * resolvers. This process is excluded from the VPN, so its active network
+     * is the real one, not the tunnel.
+     * shortcut: read once per start, a network change mid-session keeps the old servers until the next reconnect.
+     */
+    private fun pushSystemDns() {
+        val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java) ?: return
+        val servers = connectivity.getLinkProperties(connectivity.activeNetwork)?.dnsServers.orEmpty()
+            .joinToString(",") { address ->
+                if (address is java.net.Inet6Address) "[${address.hostAddress}]:53" else "${address.hostAddress}:53"
+            }
+        if (servers.isEmpty()) return
+        NativeChainBridge.invoke("updateDns", servers)
+        EngineLog.record(LogLevel.INFO, "route", "direct names resolve through $servers")
     }
 
     /**

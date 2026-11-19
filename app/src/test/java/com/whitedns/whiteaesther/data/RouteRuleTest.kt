@@ -99,6 +99,8 @@ class RouteRuleTest {
         val off = AppSettings(routeDirect = "x.ir", routeSniff = false).chainForService()
         assertTrue(ChainConfig.renderCarrier(on, 1080).contains("sniffer:\n  enable: true"))
         assertFalse(ChainConfig.renderCarrier(off, 1080).contains("sniffer:"))
+        // Names sent around the tunnel are looked up by the user's own network.
+        assertTrue(ChainConfig.renderCarrier(on, 1080).contains("  direct-nameserver:\n    - system\n"))
         assertEquals(false, ChainSettings.decode(off.encode()).sniff)
         assertTrue(on.hasRules)
         assertFalse(AppSettings(routeDirect = "junk here").chainForService().hasRules)
