@@ -331,6 +331,7 @@ fun WhiteAestherApp(
                     )
                     Destination.TWO_HOP -> TwoHopScreen(
                         settings = settings,
+                        psiphonRegions = psiphonRegions,
                         onSettingsChange = onSettingsChange,
                         onBack = ::goBack,
                     )

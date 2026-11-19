@@ -561,6 +561,9 @@
     <string name="psiphon_region_detail">A preference, not a guarantee. Psiphon keeps trying rather than substituting another country.</string>
     <string name="psiphon_region_unknown">Psiphon has not listed its countries yet. It does that once it has run, so until then Best available is the only choice here.</string>
     <string name="psiphon_region_unlisted_detail">Psiphon has not listed this country. It will still be asked for, and the session will fail rather than exit somewhere else.</string>
+    <string name="psiphon_region_search">Search countries</string>
+    <string name="psiphon_region_show_all">Show all countries (%1$d)</string>
+    <string name="psiphon_region_show_fewer">Show fewer</string>
     <string name="off_traffic_leaves_from_carrier">Off. Traffic leaves from %1$s</string>
     <string name="on_dialled_through_carrier">On, dialled through %1$s</string>
     <string name="nodes_dialled_through_carrier">Your nodes are dialled through %1$s. It has one way out and they take it, so there is nothing to choose here.</string>

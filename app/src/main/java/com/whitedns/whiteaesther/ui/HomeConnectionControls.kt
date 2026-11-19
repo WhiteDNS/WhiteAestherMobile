@@ -25,6 +25,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -427,33 +429,85 @@ private fun AetherProfiles(settings: AppSettings, onChange: (AppSettings) -> Uni
     Text(stringResource(active.description), style = AetherTheme.type.Small, color = colors.text2)
 }
 
-/** Psiphon's exit countries as chips: every choice in view at once. */
+/**
+ * Psiphon's exit countries: searchable, and collapsed to a short preview until
+ * asked for.
+ *
+ * Every country as a chip at once was honest but unusable -- Psiphon lists
+ * thirty-odd, and on a phone that is a wall to scroll before the one you want
+ * appears, with the chosen one buried somewhere inside it. So the list is
+ * filtered by a search box and shown a handful at a time, the whole list one
+ * tap away. "Best available" and any already-chosen country stay pinned above
+ * both, because they are states a user is in and must always be able to leave.
+ */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun PsiphonCountries(settings: AppSettings, regions: List<String>, onChange: (AppSettings) -> Unit) {
+internal fun PsiphonCountries(settings: AppSettings, regions: List<String>, onChange: (AppSettings) -> Unit) {
     val colors = AetherTheme.colors
     val locale = LocalConfiguration.current.locales[0]
+    var query by rememberSaveable { mutableStateOf("") }
+    var expanded by rememberSaveable { mutableStateOf(false) }
+
     Text(stringResource(R.string.psiphon_region), style = AetherTheme.type.Small, color = colors.text2)
     if (regions.isEmpty()) Note(stringResource(R.string.psiphon_region_unknown))
-    // A country already chosen stays listed even if Psiphon no longer names it:
-    // it is what the next attempt asks for, and a hidden choice cannot be undone.
+
     val chosen = settings.psiphonRegion
-    val offered = listOf("") + regions + listOfNotNull(chosen.takeIf { it.isNotEmpty() && it !in regions })
+    // "Best available" first, then a country that was chosen but is no longer on
+    // the list: a hidden choice cannot be undone, so it stays visible.
+    val pinned = listOf("") + listOfNotNull(chosen.takeIf { it.isNotEmpty() && it !in regions })
+    val named = regions.filter { region ->
+        query.isBlank() || region.contains(query, ignoreCase = true) ||
+            countryName(region, locale).contains(query, ignoreCase = true)
+    }
+    // Typing is a search, so it shows every match; with no query the list is
+    // capped until the user asks for the rest.
+    val preview = 8
+    val showAll = expanded || query.isNotBlank()
+    val visible = if (showAll) named else named.take(preview)
+
+    if (regions.isNotEmpty()) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).testTag("psiphon-region-search"),
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            placeholder = { Text(stringResource(R.string.psiphon_region_search), style = AetherTheme.type.Data, color = colors.text3) },
+            textStyle = AetherTheme.type.Data.copy(color = colors.text),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = colors.ink1,
+                unfocusedContainerColor = colors.ink1,
+                errorContainerColor = colors.ink1,
+            ),
+        )
+    }
+
     androidx.compose.foundation.layout.FlowRow(
-        Modifier.fillMaxWidth().padding(vertical = 6.dp).testTag("psiphon-countries"),
+        Modifier.fillMaxWidth().padding(top = 6.dp).testTag("psiphon-countries"),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        offered.forEach { region ->
+        (pinned + visible).forEach { region ->
             val label = if (region.isEmpty()) {
                 stringResource(R.string.psiphon_region_best)
             } else {
-                listOfNotNull(countryFlag(region), countryName(region, locale)).joinToString(" ")
+                countryName(region, locale)
             }
-            Chip(label, selected = chosen == region, tag = "psiphon-country-${region.ifEmpty { "best" }}") {
+            CountryChip(region, label, selected = chosen == region, tag = "psiphon-country-${region.ifEmpty { "best" }}") {
                 onChange(settings.copy(psiphonRegion = region))
             }
         }
+    }
+
+    // The rest of the list is one tap away, but only when there is more than the
+    // preview and no search is narrowing it -- a search already shows every match.
+    if (query.isBlank() && named.size > preview) {
+        OutlineButton(
+            text = if (expanded) stringResource(R.string.psiphon_region_show_fewer)
+            else stringResource(R.string.psiphon_region_show_all, named.size),
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp).testTag("psiphon-region-toggle"),
+            onClick = { expanded = !expanded },
+        )
     }
 }
 
@@ -480,6 +534,42 @@ private fun Chip(label: String, selected: Boolean, tag: String, onClick: () -> U
             style = AetherTheme.type.Small,
             color = if (selected) colors.brand else colors.text,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun CountryChip(
+    region: String,
+    label: String,
+    selected: Boolean,
+    tag: String,
+    onClick: () -> Unit,
+) {
+    val colors = AetherTheme.colors
+    val interaction = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(12.dp)
+    // Same skin as the profile chips, with a flag drawn ahead of the name. The
+    // flag is only for a real country; "Best available" is the no-preference
+    // option and has nothing to show, so it stays text alone.
+    Row(
+        Modifier.heightIn(min = 40.dp).clip(shape)
+            .background(if (selected) colors.brand.copy(alpha = 0.12f) else colors.ink2)
+            .border(if (selected) 1.5.dp else 1.dp, if (selected) colors.brand else colors.line, shape)
+            .tvControllerActivation(onClick = onClick)
+            .selectable(selected = selected, role = Role.RadioButton, interactionSource = interaction,
+                indication = LocalIndication.current, onClick = onClick)
+            .controllerFocus(interaction, shape).testTag(tag)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (region.isNotEmpty()) FlagIcon(region)
+        Text(
+            label,
+            style = AetherTheme.type.Small,
+            color = if (selected) colors.brand else colors.text,
+            maxLines = 1,
         )
     }
 }

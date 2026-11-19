@@ -555,6 +555,9 @@
     <string name="psiphon_region_detail">یک ترجیح است نه تضمین. سایفون به‌جای جایگزین‌کردن کشور دیگر، به تلاش ادامه می‌دهد.</string>
     <string name="psiphon_region_unknown">سایفون هنوز فهرست کشورهایش را نداده است. این فهرست پس از نخستین اجرا می‌آید و تا آن زمان تنها گزینه، «بهترین گزینهٔ موجود» است.</string>
     <string name="psiphon_region_unlisted_detail">سایفون این کشور را فهرست نکرده است. باز هم همین کشور خواسته می‌شود و اگر در دسترس نباشد، نشست شکست می‌خورد و از جای دیگری خارج نمی‌شود.</string>
+    <string name="psiphon_region_search">جستجوی کشور</string>
+    <string name="psiphon_region_show_all">نمایش همه کشورها (%1$d)</string>
+    <string name="psiphon_region_show_fewer">نمایش کمتر</string>
     <string name="off_traffic_leaves_from_carrier">خاموش. ترافیک از %1$s خارج می‌شود</string>
     <string name="on_dialled_through_carrier">روشن، اتصال به نودها از داخل %1$s</string>
     <string name="nodes_dialled_through_carrier">اتصال به نودهای شما از داخل %1$s برقرار می‌شود. یک راه خروج دارد و نودها از همان می‌روند، پس اینجا چیزی برای انتخاب نیست.</string>

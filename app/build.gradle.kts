@@ -266,6 +266,14 @@ dependencies {
     implementation("androidx.compose.foundation:foundation:1.11.4")
     implementation("androidx.compose.material3:material3:1.4.0")
 
+    // Flag icons, drawn from the SVGs in assets/flags rather than the flag
+    // emoji. Emoji flags are a font feature: they render only where the system
+    // ships the regional-indicator glyphs, look different on every device, and
+    // are missing entirely on some. A vector we draw ourselves is the same
+    // picture everywhere. Pinned and vendored like the other binaries -- it is
+    // pure Kotlin/Java with no transitive pull and no network at runtime.
+    implementation("com.caverock:androidsvg-aar:1.4")
+
     debugImplementation("androidx.compose.ui:ui-tooling:1.11.4")
     debugImplementation("androidx.compose.ui:ui-test-manifest:1.11.4")
 
