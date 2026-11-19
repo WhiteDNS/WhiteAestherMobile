@@ -63,6 +63,7 @@ jobs:
           FDROID_KEYSTORE_BASE64: ${{ secrets.FDROID_KEYSTORE_BASE64 }}
           FDROID_KEYSTORE_PASSWORD: ${{ secrets.FDROID_KEYSTORE_PASSWORD }}
           FDROID_KEY_ALIAS: ${{ secrets.FDROID_KEY_ALIAS }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           missing=""
@@ -74,6 +75,14 @@ jobs:
             echo "::notice title=F-Droid repository not published::No repository was \
             published because these secrets are not set:$missing. See docs/FDROID.md \
             to turn this on; nothing else about the release is affected."
+            exit 0
+          fi
+          # A draft is not released yet, and its run of Release is on a branch,
+          # not a tag. Its turn comes when it is published.
+          tag="${{ inputs.tag || github.event.workflow_run.head_branch }}"
+          if [[ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>/dev/null || echo missing)" != "false" ]]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=F-Droid repository not published::$tag is not a published release."
             exit 0
           fi
           echo "ready=true" >> "$GITHUB_OUTPUT"
