@@ -1008,6 +1008,7 @@ internal fun TorBridgeSettings(
 fun TwoHopScreen(
     settings: AppSettings,
     onSettingsChange: (AppSettings) -> Unit,
+    psiphonRegions: List<String> = emptyList(),
     onBack: (() -> Unit)? = null,
 ) {
     ScreenColumn {
@@ -1081,6 +1082,14 @@ fun TwoHopScreen(
                     stringResource(R.string.carrier_chain_snowflake_note),
                     Modifier.padding(horizontal = 13.dp),
                 )
+            }
+            // The method sheet offers the country only for Psiphon alone, yet
+            // the region applies on either hop, so it is set here in a chain.
+            if (second != null && Carrier.PSIPHON in settings.carrierPath) {
+                Divider()
+                Column(Modifier.padding(13.dp).testTag("two-hop-psiphon-countries")) {
+                    PsiphonCountries(settings, psiphonRegions, onSettingsChange)
+                }
             }
         }
     }

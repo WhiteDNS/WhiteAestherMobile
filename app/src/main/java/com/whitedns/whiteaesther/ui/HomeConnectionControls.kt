@@ -430,7 +430,7 @@ private fun AetherProfiles(settings: AppSettings, onChange: (AppSettings) -> Uni
 /** Psiphon's exit countries as chips: every choice in view at once. */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun PsiphonCountries(settings: AppSettings, regions: List<String>, onChange: (AppSettings) -> Unit) {
+internal fun PsiphonCountries(settings: AppSettings, regions: List<String>, onChange: (AppSettings) -> Unit) {
     val colors = AetherTheme.colors
     val locale = LocalConfiguration.current.locales[0]
     Text(stringResource(R.string.psiphon_region), style = AetherTheme.type.Small, color = colors.text2)
