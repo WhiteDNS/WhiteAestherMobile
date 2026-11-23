@@ -10,6 +10,13 @@ Finds a working path out of restrictive networks and carries your traffic throug
 [![Licence](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Android](https://img.shields.io/badge/Android-8.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)](#requirements)
 
+<p>
+  <a href="https://whitedns.github.io/WhiteDNS-F-Droid/">
+    <img src="https://f-droid.org/assets/fdroid-logo.svg" alt="" width="40" align="middle">
+    <strong>Add the WhiteDNS repository to F-Droid</strong>
+  </a>
+</p>
+
 </div>
 
 <!-- SCREENSHOTS -->
