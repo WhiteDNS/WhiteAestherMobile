@@ -116,9 +116,8 @@ jobs:
           echo "Publishing $tag"
           echo "TAG=$tag" >> "$GITHUB_ENV"
           mkdir -p fdroid/repo
-          # The universal APK only. The split APKs share a version code, and an
-          # F-Droid repository keys on that -- three files claiming to be the
-          # same version is an index that picks one arbitrarily.
+          # This optional single-app repo uses the universal APK. The shared
+          # WhiteDNS F-Droid repo publishes the architecture-specific APKs.
           gh release download "$tag" --pattern '*-universal.apk' --dir fdroid/repo
           ls -l fdroid/repo
 

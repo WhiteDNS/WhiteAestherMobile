@@ -78,6 +78,13 @@ jobs:
 
       - uses: ./.github/actions/android-toolchain
 
+      - name: Require an unexpired MASQUE certificate pin
+        run: |
+          rustc --test native/aether/aether/src/consts.rs -o "$RUNNER_TEMP/masque-pins"
+          if ! "$RUNNER_TEMP/masque-pins" --ignored --exact tests::release_requires_unexpired_masque_pin; then
+            python3 .github/scripts/check-masque-certificates.py "$RUNNER_TEMP/masque-pins" 0
+          fi
+
       - name: Restore the signing key
         shell: bash
         env:
@@ -212,11 +219,17 @@ jobs:
           base="WhiteAestherMobile-${{ steps.version.outputs.name }}"
           apk_dir="app/build/outputs/apk/stable/release"
           signer="${ANDROID_HOME}/build-tools/${ANDROID_BUILD_TOOLS}/apksigner"
+          aapt="${ANDROID_HOME}/build-tools/${ANDROID_BUILD_TOOLS}/aapt"
+          universal_code=$((${{ steps.version.outputs.code }} * 10))
+          declare -A abi_codes=([armeabi-v7a]=1 [arm64-v8a]=2 [x86_64]=4)
 
           for abi in armeabi-v7a arm64-v8a x86_64; do
             apk="${apk_dir}/app-stable-${abi}-release.apk"
             test -f "$apk"
             "$signer" verify --verbose "$apk"
+            badging="$("$aapt" dump badging "$apk")"
+            grep -Fq "versionCode='$((universal_code + abi_codes[$abi]))'" <<< "$badging"
+            grep -Eq "^native-code: '$abi'[[:space:]]*$" <<< "$badging"
             python3 tools/verify_native_dependencies.py \
               --ndk "${ANDROID_HOME}/ndk/29.0.14206865" "$apk"
             jar tf "$apk" | grep -F "lib/${abi}/libwhiteaesther_core.so"
@@ -241,6 +254,8 @@ jobs:
           universal="${apk_dir}/app-stable-universal-release.apk"
           test -f "$universal"
           "$signer" verify --verbose "$universal"
+          badging="$("$aapt" dump badging "$universal")"
+          grep -Fq "versionCode='$universal_code'" <<< "$badging"
           python3 tools/verify_native_dependencies.py \
             --ndk "${ANDROID_HOME}/ndk/29.0.14206865" "$universal"
           # Every engine, once per ABI. The per-ABI loop above checks the

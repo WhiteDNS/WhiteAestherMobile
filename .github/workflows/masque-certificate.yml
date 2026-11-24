@@ -1,0 +1,25 @@
+name: MASQUE certificate health
+
+on:
+  schedule:
+    - cron: '31 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/scripts
+            native/aether/aether/src
+
+      - name: Check live pins and alert 100 days before renewal
+        run: |
+          rustc --test native/aether/aether/src/consts.rs -o "$RUNNER_TEMP/masque-pins"
+          python3 .github/scripts/check-masque-certificates.py "$RUNNER_TEMP/masque-pins" 100
