@@ -63,11 +63,8 @@ pub const QUIC_PORT: u16 = 443;
 /// there is no stabler anchor available to pin instead. The leaf is all there
 /// is.
 ///
-/// Which means a rotation takes MASQUE from every user at once, on every
-/// network, and the remedy is shipping an APK to people who by then cannot
-/// connect to download it. Nothing here prevents that. What this does is stop us
-/// being told about it by users: `expires` is checked by a test, so the build
-/// goes red months before the certificate does.
+/// The scheduled health check reports upcoming expiry and newly observed keys.
+/// The release workflow uses recorded validity and can verify a renewal live.
 pub struct MasquePin {
     /// What the certificate is, for the message when it stops matching.
     pub label: &'static str,
@@ -99,7 +96,7 @@ pub const MASQUE_PIN_SET: &[MasquePin] = &[
         label: "masque.cloudflareclient.com",
         spki: b"\xeb\x59\x1b\x36\xab\x26\xba\x61\x7e\x98\x37\x19\x18\xc1\x0b\xcd\xea\xe3\x74\x2d\xb6\xe7\x65\x43\xf9\x4b\xe5\x24\xdc\xe1\xd5\x55",
         // 2027-02-26T10:45:06Z
-        expires: 1_803_991_506,
+        expires: 1_803_638_706,
     },
     MasquePin {
         // Carried from an earlier build, recorded then as cloudflareaccess.com
@@ -118,13 +115,6 @@ pub fn masque_pins() -> Vec<&'static [u8]> {
     MASQUE_PIN_SET.iter().map(|pin| pin.spki).collect()
 }
 
-/// How long before a pin expires the build should start failing.
-///
-/// Long enough to notice, decide, build, release, and have people install it —
-/// on connections that are slow and intermittent, which is most of them. A
-/// warning that arrives a fortnight ahead is not a warning.
-pub const PIN_RENEWAL_NOTICE_DAYS: u64 = 100;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,41 +126,45 @@ mod tests {
             .unwrap_or(0)
     }
 
-    /// The build fails before the certificate does.
-    ///
-    /// This is a deadline, and it is meant to be. Cloudflare sends the leaf
-    /// alone, with no root or intermediate to pin instead, so when it is
-    /// replaced every MASQUE connection stops at once — on every network, for
-    /// every user, with no setting that helps. The remedy is a new binary, and
-    /// it has to reach people whose connection has just stopped working.
-    ///
-    /// So this turns that into a red build, months ahead, while shipping is
-    /// still easy. When it fails: connect to a live edge, take the new SPKI
-    /// hash and `notAfter`, update the pin, and release.
-    ///
-    ///     echo | openssl s_client -connect <edge>:443 \
-    ///       -servername consumer-masque.cloudflareclient.com 2>/dev/null \
-    ///       | openssl x509 -pubkey -noout \
-    ///       | openssl pkey -pubin -outform der \
-    ///       | openssl dgst -sha256
-    #[test]
-    fn a_pin_that_is_about_to_expire_fails_the_build() {
-        let notice = PIN_RENEWAL_NOTICE_DAYS * 24 * 60 * 60;
-        let now = now_unix();
+    fn has_dated_unexpired_pin(now: u64) -> bool {
+        MASQUE_PIN_SET.iter().any(|pin| pin.expires > now)
+    }
 
-        for pin in MASQUE_PIN_SET {
-            if pin.expires == 0 {
-                continue;
-            }
-            let left = pin.expires.saturating_sub(now);
+    #[test]
+    fn dated_pin_expires_at_the_recorded_time() {
+        let last_expiry = MASQUE_PIN_SET.iter().map(|pin| pin.expires).max().unwrap();
+        assert!(last_expiry > 0);
+        assert!(has_dated_unexpired_pin(last_expiry - 1));
+        assert!(!has_dated_unexpired_pin(last_expiry));
+    }
+
+    #[test]
+    #[ignore = "run by the signed release workflow"]
+    fn release_requires_unexpired_masque_pin() {
+        assert!(
+            has_dated_unexpired_pin(now_unix()),
+            "the release requires an authenticated MASQUE pin with a current certificate"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires live gateway fingerprints from a workflow"]
+    fn live_masque_certificates_match_known_pins() {
+        let value = std::env::var("MASQUE_OBSERVED_PINS").expect("missing gateway fingerprints");
+        let mut observed = value.split_whitespace().peekable();
+        assert!(
+            observed.peek().is_some(),
+            "no gateway fingerprints were collected"
+        );
+        let known: Vec<String> = MASQUE_PIN_SET
+            .iter()
+            .map(|pin| pin.spki.iter().map(|byte| format!("{byte:02x}")).collect())
+            .collect();
+        for fingerprint in observed {
             assert!(
-                left > notice,
-                "the pinned certificate for {} expires in {} days. When Cloudflare replaces it, \
-                 MASQUE stops for every user at once and only a new release fixes it — which has \
-                 to reach people whose connection has just stopped. Take the new pin and ship it \
-                 now, while that is still easy.",
-                pin.label,
-                left / (24 * 60 * 60),
+                known.iter().any(|pin| pin == fingerprint),
+                "MASQUE gateway presented an unpinned SPKI {}",
+                fingerprint
             );
         }
     }

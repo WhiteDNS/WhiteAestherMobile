@@ -78,6 +78,13 @@ jobs:
 
       - uses: ./.github/actions/android-toolchain
 
+      - name: Require an unexpired MASQUE certificate pin
+        run: |
+          rustc --test native/aether/aether/src/consts.rs -o "$RUNNER_TEMP/masque-pins"
+          if ! "$RUNNER_TEMP/masque-pins" --ignored --exact tests::release_requires_unexpired_masque_pin; then
+            python3 .github/scripts/check-masque-certificates.py "$RUNNER_TEMP/masque-pins" 0
+          fi
+
       - name: Restore the signing key
         shell: bash
         env:

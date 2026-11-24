@@ -90,3 +90,14 @@ on H2, the outer WOM tunnel and WARP registration; see `AETHER_2_3_MERGE.md`.
 The ECH cache is keyed by the configured policy so a profile change takes effect
 without waiting for cache expiration. Preferences retain custom text when its
 switch is disabled, and disabled overrides are omitted from active configuration.
+
+## MASQUE certificate renewal
+
+The daily MASQUE certificate health workflow checks two Cloudflare gateways
+against the app's SPKI pins. It reports a changed key or a certificate within
+the 100-day renewal window in GitHub Actions.
+
+The signed release workflow checks recorded certificate validity. Once all
+recorded dates expire, it verifies live validity for the existing pinned keys
+before signing. A new key requires independent verification of its Cloudflare
+provenance before updating the embedded pins and publishing a release.
