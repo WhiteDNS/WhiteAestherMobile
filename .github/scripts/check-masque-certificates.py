@@ -12,7 +12,16 @@ def openssl(data, *args):
     return subprocess.check_output(["openssl", *args], input=data, timeout=10)
 
 
-def main(pin_tests, minimum_days):
+def check_validity(edge, start, end, now, warning_days):
+    if start > now or end <= now:
+        print(f"::error::Gateway {edge} presented a pinned certificate outside its validity period")
+        return False
+    if end <= now + timedelta(days=warning_days):
+        print(f"::warning::Gateway {edge} pinned certificate expires on {end:%Y-%m-%d %H:%M} UTC")
+    return True
+
+
+def main(pin_tests, warning_days):
     # The gateways use a private issuer. The Rust test checks the app's pinned
     # SPKI after TLS proves possession of the key.
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -41,9 +50,7 @@ def main(pin_tests, minimum_days):
             datetime.strptime(line.partition("=")[2], "%b %d %H:%M:%S %Y GMT").replace(tzinfo=timezone.utc)
             for line in dates.splitlines()
         )
-        now = datetime.now(timezone.utc)
-        if start > now or end <= now + timedelta(days=minimum_days):
-            print(f"::error::Gateway {edge} lacks a valid pinned certificate with more than {minimum_days} days remaining")
+        if not check_validity(edge, start, end, datetime.now(timezone.utc), warning_days):
             status = 1
     return status
 

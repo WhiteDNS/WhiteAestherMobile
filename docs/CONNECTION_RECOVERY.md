@@ -94,8 +94,9 @@ switch is disabled, and disabled overrides are omitted from active configuration
 ## MASQUE certificate renewal
 
 The daily MASQUE certificate health workflow checks two Cloudflare gateways
-against the app's SPKI pins. It reports a changed key or a certificate within
-the 100-day renewal window in GitHub Actions.
+against the app's SPKI pins. A valid certificate within the 100-day renewal
+window produces a warning in GitHub Actions. An unknown pin or a certificate
+outside its validity period fails the check.
 
 The signed release workflow checks recorded certificate validity. Once all
 recorded dates expire, it verifies live validity for the existing pinned keys

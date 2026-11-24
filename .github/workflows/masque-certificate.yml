@@ -21,5 +21,6 @@ jobs:
 
       - name: Check live pins and alert 100 days before renewal
         run: |
+          python3 .github/scripts/test-masque-certificates.py
           rustc --test native/aether/aether/src/consts.rs -o "$RUNNER_TEMP/masque-pins"
           python3 .github/scripts/check-masque-certificates.py "$RUNNER_TEMP/masque-pins" 100
