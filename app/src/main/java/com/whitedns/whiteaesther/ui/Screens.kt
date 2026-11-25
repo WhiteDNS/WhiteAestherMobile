@@ -1007,6 +1007,7 @@ internal fun TorBridgeSettings(
 @Composable
 fun TwoHopScreen(
     settings: AppSettings,
+    psiphonRegions: List<String> = emptyList(),
     onSettingsChange: (AppSettings) -> Unit,
     psiphonRegions: List<String> = emptyList(),
     onBack: (() -> Unit)? = null,
@@ -1048,6 +1049,16 @@ fun TwoHopScreen(
                         tag = "carrier-second-${carrier.wireName}",
                         onClick = { onSettingsChange(settings.copy(secondCarrier = carrier)) },
                     )
+                }
+            }
+
+            // The second hop's Psiphon exits from the same country setting the
+            // single-carrier sheet uses: the service reads psiphonRegion for
+            // Psiphon at any position in the path, so the picker belongs here
+            // too rather than only beside the first choice.
+            if (settings.secondCarrier == Carrier.PSIPHON) {
+                Column(Modifier.padding(horizontal = 11.dp)) {
+                    PsiphonCountries(settings, psiphonRegions, onSettingsChange)
                 }
             }
 

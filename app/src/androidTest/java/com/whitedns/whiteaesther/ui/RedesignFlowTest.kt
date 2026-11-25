@@ -244,6 +244,19 @@ class RedesignFlowTest {
     }
 
     @Test
+    fun twoHopsOfferThePsiphonCountryPickerWhenTheSecondHopIsPsiphon() {
+        setApp(AppSettings(automaticCarrier = false, carrier = Carrier.AETHER))
+        compose.openAdvanced("two_hop")
+        compose.onNodeWithTag("psiphon-countries").assertDoesNotExist()
+        compose.onNodeWithTag("carrier-second-psiphon").performScrollTo().performClick()
+        compose.onNodeWithTag("psiphon-countries").assertExists()
+        compose.runOnIdle {
+            assertEquals(Carrier.AETHER, saved.carrier)
+            assertEquals(Carrier.PSIPHON, saved.secondCarrier)
+        }
+    }
+
+    @Test
     fun theHubMarksAChangedPageAndResetPutsItBack() {
         setApp(AppSettings(fragmentTls = true, routeBlock = "ads.example.com"))
         compose.onNodeWithTag("tab-settings").performClick()
